@@ -15,3 +15,66 @@
  */
 
 #pragma once
+
+#include <string.h>
+
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+
+namespace dbgroup::index::bw_tree
+{
+/*##################################################################################################
+ * Utility enum and classes
+ *################################################################################################*/
+
+/**
+ * @brief Return codes for APIs of a Bw-tree.
+ *
+ */
+enum ReturnCode
+{
+  kSuccess = 0,
+  kKeyNotExist,
+  kKeyExist
+};
+
+/**
+ * @brief Compare binary keys as CString. The end of every key must be '\\0'.
+ *
+ */
+struct CompareAsCString {
+  constexpr bool
+  operator()(const void *a, const void *b) const noexcept
+  {
+    if (a == nullptr) {
+      return false;
+    } else if (b == nullptr) {
+      return true;
+    } else {
+      return strcmp(static_cast<const char *>(a), static_cast<const char *>(b)) < 0;
+    }
+  }
+};
+
+/*##################################################################################################
+ * Tuning parameters for Bw-tree
+ *################################################################################################*/
+
+/// Assumes that one word is represented by 8 bytes
+constexpr size_t kWordLength = 8;
+
+/// Assumes that one word is represented by 8 bytes
+constexpr size_t kCacheLineSize = 64;
+
+#ifdef BW_TREE_PAGE_SIZE
+/// The page size of each node
+constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
+#else
+constexpr size_t kPageSize = 8192;
+#endif
+
+/// check whether the specified page size is valid
+static_assert(kPageSize % kWordLength == 0);
+
+}  // namespace dbgroup::index::bw_tree
