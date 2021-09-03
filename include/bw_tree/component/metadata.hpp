@@ -35,10 +35,10 @@ class Metadata
   uint16_t offset_;
 
   /// the length of a key in a corresponding record.
-  const uint16_t key_length_;
+  uint16_t key_length_;
 
   /// the total length of a corresponding record.
-  const uint16_t total_length_;
+  uint16_t total_length_;
 
  public:
   /*################################################################################################
@@ -59,7 +59,9 @@ class Metadata
       const size_t offset,
       const size_t key_length,
       const size_t total_length)
-      : offset_{offset}, key_length_{key_length}, total_length_{total_length}
+      : offset_{static_cast<uint16_t>(offset)},
+        key_length_{static_cast<uint16_t>(key_length)},
+        total_length_{static_cast<uint16_t>(total_length)}
   {
   }
 

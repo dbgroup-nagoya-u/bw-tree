@@ -68,3 +68,4 @@ function(ADD_BW_TREE_TEST BW_TREE_TEST_TARGET)
 endfunction()
 
 # add unit tests to build targets
+ADD_BW_TREE_TEST(metadata_test)
