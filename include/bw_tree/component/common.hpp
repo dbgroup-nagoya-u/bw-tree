@@ -39,6 +39,29 @@ enum NodeReturnCode
   kKeyExist
 };
 
+/**
+ * @brief A flag to distinguish leaf/internal nodes.
+ *
+ */
+enum NodeType : uint16_t
+{
+  kLeaf = 0,
+  kInternal
+};
+
+/**
+ * @brief A flag to represent the types of delta nodes
+ *
+ */
+enum DeltaNodeType : uint16_t
+{
+  kNotDelta = 0,
+  kInsert,
+  kDelete,
+  kSplit,
+  kMerge
+}
+
 /*##################################################################################################
  * Internal constants
  *################################################################################################*/
