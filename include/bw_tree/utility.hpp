@@ -74,6 +74,13 @@ constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
 constexpr size_t kPageSize = 8192;
 #endif
 
+#ifdef BW_TREE_DEFAULT_MAPPING_TABLE_CAPACITY
+/// The page size of each node
+constexpr size_t kDefaultMappingTableCapacity = BW_TREE_DEFAULT_MAPPING_TABLE_CAPACITY;
+#else
+constexpr size_t kDefaultMappingTableCapacity = 8192;
+#endif
+
 /// check whether the specified page size is valid
 static_assert(kPageSize % kWordLength == 0);
 

@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <functional>
-
 #include "common.hpp"
 
 namespace dbgroup::index::bw_tree::component
@@ -140,6 +138,6 @@ class Node
   {
     return record_count_;
   }
-}
+};
 
 }  // namespace dbgroup::index::bw_tree::component

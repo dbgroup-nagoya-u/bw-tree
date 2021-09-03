@@ -24,7 +24,7 @@ namespace dbgroup::index::bw_tree::component
  * @brief A class to represent record metadata.
  *
  */
-class alignas(sizeof(uint16_t)) Metadata
+class Metadata
 {
  private:
   /*################################################################################################
@@ -129,6 +129,6 @@ class alignas(sizeof(uint16_t)) Metadata
     updated_meta.offset_ = offset;
     return updated_meta;
   }
-}
+};
 
 }  // namespace dbgroup::index::bw_tree::component

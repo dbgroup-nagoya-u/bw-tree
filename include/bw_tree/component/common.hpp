@@ -60,7 +60,7 @@ enum DeltaNodeType : uint16_t
   kDelete,
   kSplit,
   kMerge
-}
+};
 
 /*##################################################################################################
  * Internal constants
