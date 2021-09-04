@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "bw_tree/utility.hpp"
 
 #ifdef BW_TREE_TEST_THREAD_NUM
@@ -23,3 +25,9 @@ static constexpr size_t kThreadNum = BW_TREE_TEST_THREAD_NUM;
 #else
 static constexpr size_t kThreadNum = 8;
 #endif
+
+// aliases for typed tests
+using UInt32Comp = std::less<uint32_t>;
+using UInt64Comp = std::less<uint64_t>;
+using CStrComp = dbgroup::index::bw_tree::CompareAsCString;
+using PtrComp = std::less<uint64_t *>;
