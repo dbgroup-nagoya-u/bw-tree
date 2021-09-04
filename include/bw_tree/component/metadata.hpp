@@ -116,20 +116,13 @@ class Metadata
     return GetTotalLength() - GetKeyLength();
   }
 
-  /*################################################################################################
-   * Public utility functions
-   *##############################################################################################*/
-
   /**
-   * @param offset a new offset to be set.
-   * @return Metadata: a new metadata object.
+   * @param offset the offset to a corresponding record to be set.
    */
-  constexpr Metadata
-  UpdateOffset(const size_t offset) const
+  constexpr void
+  SetOffset(const size_t offset)
   {
-    auto updated_meta = *this;
-    updated_meta.offset_ = offset;
-    return updated_meta;
+    offset_ = offset;
   }
 };
 

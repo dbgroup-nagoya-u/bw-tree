@@ -61,7 +61,7 @@ TEST_F(MetadataFixture, Construct_DefaultMetadata_CorrectlyInitialized)
 }
 
 /*--------------------------------------------------------------------------------------------------
- * Getter tests
+ * Getter/setter tests
  *------------------------------------------------------------------------------------------------*/
 
 TEST_F(MetadataFixture, GetPayloadLength_DefaultMetadata_ReturnCorrectPayloadLength)
@@ -69,15 +69,11 @@ TEST_F(MetadataFixture, GetPayloadLength_DefaultMetadata_ReturnCorrectPayloadLen
   EXPECT_EQ(kExpectedTotalLength - kExpectedKeyLength, meta.GetPayloadLength());
 }
 
-/*--------------------------------------------------------------------------------------------------
- * Utility tests
- *------------------------------------------------------------------------------------------------*/
-
-TEST_F(MetadataFixture, UpdateOffset_DefaultMetadata_GetUpdatedOffset)
+TEST_F(MetadataFixture, SetOffset_DefaultMetadata_GetUpdatedOffset)
 {
   const size_t updated_offset = kExpectedOffset / 2;
 
-  meta = meta.UpdateOffset(updated_offset);
+  meta.SetOffset(updated_offset);
 
   EXPECT_EQ(updated_offset, meta.GetOffset());
 }
