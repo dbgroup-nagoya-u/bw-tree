@@ -31,3 +31,60 @@ using UInt32Comp = std::less<uint32_t>;
 using UInt64Comp = std::less<uint64_t>;
 using CStrComp = dbgroup::index::bw_tree::CompareAsCString;
 using PtrComp = std::less<uint64_t *>;
+
+namespace dbgroup::index::bw_tree
+{
+/**
+ * @brief Use CString as variable-length data in tests.
+ *
+ */
+template <>
+constexpr bool
+IsVariableLengthData<char *>()
+{
+  return true;
+}
+
+}  // namespace dbgroup::index::bw_tree
+
+template <class T>
+void
+PrepareTestData(  //
+    T *data_array,
+    const size_t data_num,
+    [[maybe_unused]] const size_t data_length)
+{
+  if constexpr (::dbgroup::index::bw_tree::IsVariableLengthData<T>()) {
+    // variable-length data
+    for (size_t i = 0; i < data_num; ++i) {
+      auto data = reinterpret_cast<char *>(malloc(data_length));
+      snprintf(data, data_length, "%06lu", i);
+      data_array[i] = reinterpret_cast<T>(data);
+    }
+  } else if constexpr (std::is_same_v<T, uint64_t *>) {
+    // pointer data
+    for (size_t i = 0; i < data_num; ++i) {
+      auto data = reinterpret_cast<uint64_t *>(malloc(data_length));
+      *data = i;
+      data_array[i] = data;
+    }
+  } else {
+    // static-length data
+    for (size_t i = 0; i < data_num; ++i) {
+      data_array[i] = i;
+    }
+  }
+}
+
+template <class T>
+void
+ReleaseTestData(  //
+    [[maybe_unused]] T *data_array,
+    const size_t data_num)
+{
+  if constexpr (std::is_pointer_v<T>) {
+    for (size_t i = 0; i < data_num; ++i) {
+      free(data_array[i]);
+    }
+  }
+}

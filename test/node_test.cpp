@@ -50,17 +50,27 @@ class NodeFixture : public testing::Test
    * Internal constants
    *##############################################################################################*/
 
-  static constexpr size_t kRecordLength = sizeof(Key) + sizeof(Payload);
-  static constexpr size_t kMaxRecordNum =
-      (kPageSize - kHeaderLength) / (kRecordLength + sizeof(Metadata));
+  static constexpr size_t kKeyNumForTest = 1024;
+  static constexpr size_t kKeyLength = kWordLength;
+  static constexpr size_t kPayloadLength = kWordLength;
 
   /*################################################################################################
    * Internal member variables
    *##############################################################################################*/
 
-  std::vector<Metadata> meta_vec;
+  // actual keys and payloads
+  size_t key_length;
+  size_t payload_length;
+  Key keys[kKeyNumForTest];
+  Payload payloads[kKeyNumForTest];
 
+  // the length of a record and its maximum number
+  size_t record_length;
+  size_t max_record_num;
+
+  // a target node and its expected metadata
   std::unique_ptr<Node_t> node;
+  std::vector<Metadata> meta_vec;
 
   /*################################################################################################
    * Setup/Teardown
@@ -69,11 +79,25 @@ class NodeFixture : public testing::Test
   void
   SetUp() override
   {
+    // prepare keys
+    key_length = (IsVariableLengthData<Key>()) ? 7 : sizeof(Key);
+    PrepareTestData(keys, kKeyNumForTest, key_length);
+
+    // prepare payloads
+    payload_length = (IsVariableLengthData<Payload>()) ? 7 : sizeof(Payload);
+    PrepareTestData(payloads, kKeyNumForTest, payload_length);
+
+    // set a record length and its maximum number
+    record_length = key_length + payload_length;
+    max_record_num = (kPageSize - kHeaderLength) / (record_length + sizeof(Metadata));
+    if (max_record_num > kKeyNumForTest) max_record_num = kKeyNumForTest;
   }
 
   void
   TearDown() override
   {
+    ReleaseTestData(keys, kKeyNumForTest);
+    ReleaseTestData(payloads, kKeyNumForTest);
   }
 
   /*################################################################################################
@@ -99,6 +123,58 @@ class NodeFixture : public testing::Test
     }
     EXPECT_FALSE(is_leaf ^ node->IsLeaf());
     EXPECT_EQ(nullptr, node->GetNextNode());
+  }
+
+  void
+  VerifySetterGetter()
+  {
+    meta_vec.reserve(max_record_num);
+
+    // creat an empty node
+    node.reset(new (malloc(kPageSize)) Node_t{NodeType::kLeaf, max_record_num, nullptr});
+
+    // set records and keep their metadata
+    size_t offset = kPageSize;
+    for (size_t i = 0; i < max_record_num; ++i) {
+      // set a record
+      node->SetPayload(offset, payloads[i], payload_length);
+      node->SetKey(offset, keys[i], key_length);
+      node->SetMetadata(i, offset, key_length, record_length);
+
+      // keep metadata for verification
+      meta_vec.emplace_back(offset, key_length, record_length);
+    }
+
+    // verify records and their metadata
+    for (size_t i = 0; i < max_record_num; ++i) {
+      const auto meta = node->GetMetadata(i);
+      EXPECT_EQ(meta_vec.at(i), meta);
+      VerifyKey(i, meta);
+      VerifyPayload(i, meta);
+    }
+  }
+
+  void
+  VerifyKey(  //
+      const size_t idx,
+      const Metadata meta)
+  {
+    auto key = node->GetKey(meta);
+    EXPECT_TRUE(IsEqual<KeyComp>(key, keys[idx]));
+  }
+
+  void
+  VerifyPayload(  //
+      const size_t idx,
+      const Metadata meta)
+  {
+    Payload payload{};
+    node->CopyPayload(meta, payload);
+    EXPECT_TRUE(IsEqual<PayloadComp>(payload, payloads[idx]));
+
+    if constexpr (IsVariableLengthData<Payload>()) {
+      ::dbgroup::memory::Delete(payload);
+    }
   }
 };
 
@@ -146,5 +222,10 @@ TYPED_TEST(NodeFixture, Construct_InternalDeltaNode_CorrectlyInitialized)
 /*--------------------------------------------------------------------------------------------------
  * Getter/setter tests
  *------------------------------------------------------------------------------------------------*/
+
+TYPED_TEST(NodeFixture, SetterGetter_EmptyNode_CorrectlySetAndGet)
+{
+  TestFixture::VerifySetterGetter();
+}
 
 }  // namespace dbgroup::index::bw_tree::component::test

@@ -56,8 +56,8 @@ class Node
   /// the pointer to the next node.
   Node *next_node_;
 
-  /// an actual data block.
-  std::byte *data_block_;
+  /// an actual data block (it starts with record metadata).
+  Metadata meta_array_[0];
 
  public:
   /*################################################################################################
@@ -153,8 +153,7 @@ class Node
   constexpr Metadata
   GetMetadata(const size_t position) const
   {
-    const auto meta_arr = reinterpret_cast<Metadata *>(data_block_);
-    return meta_arr[position];
+    return meta_array_[position];
   }
 
   /**
@@ -164,7 +163,11 @@ class Node
   constexpr Key
   GetKey(const Metadata meta) const
   {
-    return *reinterpret_cast<Key *>(ShiftAddress(this, meta.GetOffset));
+    if constexpr (IsVariableLengthData<Key>()) {
+      return reinterpret_cast<Key>(ShiftAddress(this, meta.GetOffset()));
+    } else {
+      return *reinterpret_cast<Key *>(ShiftAddress(this, meta.GetOffset()));
+    }
   }
 
   /**
@@ -178,12 +181,13 @@ class Node
       const Metadata meta,
       Payload &out_payload) const
   {
+    const auto offset = meta.GetOffset() + meta.GetKeyLength();
     if constexpr (IsVariableLengthData<Payload>()) {
       const auto payload_length = meta.GetPayloadLength();
       out_payload = ::dbgroup::memory::MallocNew<std::remove_pointer_t<Payload>>(payload_length);
-      memcpy(out_payload, this->GetPayloadAddr(meta), payload_length);
+      memcpy(out_payload, ShiftAddress(this, offset), payload_length);
     } else {
-      memcpy(&out_payload, this->GetPayloadAddr(meta), sizeof(Payload));
+      memcpy(&out_payload, ShiftAddress(this, offset), sizeof(Payload));
     }
   }
 
@@ -196,10 +200,11 @@ class Node
   constexpr void
   SetMetadata(  //
       const size_t position,
-      const Metadata new_meta)
+      const size_t offset,
+      const size_t key_length,
+      const size_t total_length)
   {
-    auto meta_arr = reinterpret_cast<Metadata *>(data_block_);
-    meta_arr[position] = new_meta;
+    meta_array_[position] = Metadata{offset, key_length, total_length};
   }
 
   /**
