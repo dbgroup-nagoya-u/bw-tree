@@ -16,6 +16,7 @@
 
 #include "bw_tree/component/metadata.hpp"
 
+#include "common.hpp"
 #include "gtest/gtest.h"
 
 namespace dbgroup::index::bw_tree::component::test

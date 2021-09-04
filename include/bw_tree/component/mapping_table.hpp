@@ -36,7 +36,15 @@ template <class Key, class Payload, class Compare>
 class MappingTable
 {
   using Node_t = Node<Key, Payload, Compare>;
-  using Mapping_t = std::atomic<Node_t*>;
+  using Mapping_t = std::atomic<Node_t *>;
+
+ public:
+  /*################################################################################################
+   * Public constants
+   *##############################################################################################*/
+
+  static constexpr size_t kDefaultTableCapacity =
+      (kPageSize - sizeof(std::atomic_size_t)) / sizeof(Mapping_t);
 
  private:
   /*################################################################################################
@@ -50,16 +58,16 @@ class MappingTable
      * Internal member variables
      *############################################################################################*/
 
-    std::array<Mapping_t, kDefaultMappingTableCapacity> logical_ids_;
-
     std::atomic_size_t head_id_;
+
+    std::array<Mapping_t, kDefaultTableCapacity> logical_ids_;
 
    public:
     /*##############################################################################################
      * Public constructors/destructors
      *############################################################################################*/
 
-    BufferedMap() : head_id_{0} {}
+    BufferedMap() { static_assert(sizeof(BufferedMap) == kPageSize); }
 
     ~BufferedMap()
     {
@@ -74,13 +82,13 @@ class MappingTable
      * Public getters/setters
      *############################################################################################*/
 
-    Mapping_t*
+    Mapping_t *
     ReserveNewID()
     {
       auto current_id = head_id_.load(mo_relax);
       do {
         // if the buffer is full, return NULL
-        if (current_id >= kDefaultMappingTableCapacity) return nullptr;
+        if (current_id >= kDefaultTableCapacity) return nullptr;
       } while (!head_id_.compare_exchange_weak(current_id, current_id + 1, mo_relax));
 
       return &logical_ids_[current_id];
@@ -91,48 +99,63 @@ class MappingTable
    * Internal variables
    *##############################################################################################*/
 
-  std::atomic<BufferedMap*> table_;
+  std::atomic<BufferedMap *> table_;
 
-  std::vector<BufferedMap*> old_tables;
+  std::vector<BufferedMap *> old_tables_;
 
   std::mutex mtx_;
+
+  /*################################################################################################
+   * Internal utility functions
+   *##############################################################################################*/
+
+  static BufferedMap *
+  CreateNewTable()
+  {
+    return ::dbgroup::memory::CallocNew<BufferedMap>(kPageSize);
+  }
 
  public:
   /*################################################################################################
    * Public constructors/destructors
    *##############################################################################################*/
 
-  MappingTable() : table_{::dbgroup::memory::New<BufferedMap>()} {}
+  MappingTable() : table_{CreateNewTable()} {}
 
   ~MappingTable()
   {
-    for (auto&& table : old_tables_) {
+    for (auto &&table : old_tables_) {
       ::dbgroup::memory::Delete(table);
     }
   }
+
+  MappingTable(const MappingTable &) = delete;
+  MappingTable &operator=(const MappingTable &) = delete;
+  MappingTable(MappingTable &&) = delete;
+  MappingTable &operator=(MappingTable &&) = delete;
 
   /*################################################################################################
    * Public getters/setters
    *##############################################################################################*/
 
-  Mapping_t*
+  Mapping_t *
   GetNewLogicalID()
   {
     auto current_table = table_.load(mo_relax);
     auto new_id = current_table->ReserveNewID();
     while (new_id == nullptr) {
-      auto new_table = ::dbgroup::memory::New<BufferedMap>();
-      if (table_->compare_exchange_weak(current_table, new_table, mo_relax)) {
+      auto new_table = CreateNewTable();
+      if (table_.compare_exchange_weak(current_table, new_table, mo_relax)) {
         // since install succeeds, get new ID from the new table
-        new_table->ReserveNewID();
+        new_id = new_table->ReserveNewID();
 
         // retain the old table to release nodes in it
         const auto guard = std::unique_lock<std::mutex>(mtx_);  // use lock for simplicity
-        old_tables.emplace_back(current_table);
+        old_tables_.emplace_back(current_table);
       } else {
         // since another thread may install a new mapping table, recheck a current table
         ::dbgroup::memory::Delete(new_table);
-        current_table->ReserveNewID();
+        new_id = current_table->ReserveNewID();
       }
     }
     return new_id;
