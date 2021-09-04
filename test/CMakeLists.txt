@@ -69,3 +69,5 @@ endfunction()
 
 # add unit tests to build targets
 ADD_BW_TREE_TEST(metadata_test)
+ADD_BW_TREE_TEST(node_test)
+ADD_BW_TREE_TEST(mapping_table_test)
