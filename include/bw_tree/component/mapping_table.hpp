@@ -43,6 +43,7 @@ class MappingTable
    * Public constants
    *##############################################################################################*/
 
+  /// capacity of mapping information that can be maintained in each table.
   static constexpr size_t kDefaultTableCapacity =
       (kPageSize - sizeof(std::atomic_size_t)) / sizeof(Mapping_t);
 
@@ -51,6 +52,10 @@ class MappingTable
    * Internal classes
    *##############################################################################################*/
 
+  /**
+   * @brief An internal class to represent a certain mapping table.
+   *
+   */
   class BufferedMap
   {
    private:
@@ -58,8 +63,10 @@ class MappingTable
      * Internal member variables
      *############################################################################################*/
 
+    /// the current head ID of this table (the total number of reserved IDs).
     std::atomic_size_t head_id_;
 
+    /// an actual mapping table.
     std::array<Mapping_t, kDefaultTableCapacity> logical_ids_;
 
    public:
@@ -67,8 +74,17 @@ class MappingTable
      * Public constructors/destructors
      *############################################################################################*/
 
+    /**
+     * @brief Construct a new mapping buffer instance.
+     *
+     */
     BufferedMap() { static_assert(sizeof(BufferedMap) == kPageSize); }
 
+    /**
+     * @brief Destroy the object.
+     *
+     * This dectructor will delete all the nodes in this table.
+     */
     ~BufferedMap()
     {
       const size_t size = head_id_.load(mo_relax);
@@ -82,6 +98,13 @@ class MappingTable
      * Public getters/setters
      *############################################################################################*/
 
+    /**
+     * @brief Reserve a new logical ID (i.e., the pointer to a mapping record).
+     *
+     * If this function returns nullptr, it means that this table is full.
+     *
+     * @return Mapping_t*: a reserved logical ID.
+     */
     Mapping_t *
     ReserveNewID()
     {
@@ -99,16 +122,26 @@ class MappingTable
    * Internal variables
    *##############################################################################################*/
 
+  /// a current mapping table.
   std::atomic<BufferedMap *> table_;
 
-  std::vector<BufferedMap *> old_tables_;
+  /// full mapping tables.
+  std::vector<BufferedMap *> full_tables_;
 
-  std::mutex mtx_;
+  /// a mutex object to modify full_tables_.
+  std::mutex full_tables_mtx_;
 
   /*################################################################################################
    * Internal utility functions
    *##############################################################################################*/
 
+  /**
+   * @brief Create a new mapping table object.
+   *
+   * Note that a created table is initialized with zero-filling.
+   *
+   * @return BufferedMap*: a new mapping table.
+   */
   static BufferedMap *
   CreateNewTable()
   {
@@ -120,11 +153,20 @@ class MappingTable
    * Public constructors/destructors
    *##############################################################################################*/
 
+  /**
+   * @brief Construct a new MappingTable object.
+   *
+   */
   MappingTable() : table_{CreateNewTable()} {}
 
+  /**
+   * @brief Destroy the MappingTable object.
+   *
+   * This destructor will deletes all the actual pages of a Bw-tree.
+   */
   ~MappingTable()
   {
-    for (auto &&table : old_tables_) {
+    for (auto &&table : full_tables_) {
       ::dbgroup::memory::Delete(table);
     }
   }
@@ -138,6 +180,11 @@ class MappingTable
    * Public getters/setters
    *##############################################################################################*/
 
+  /**
+   * @brief Get a new logical ID (i.e., an address to mapping information).
+   *
+   * @return Mapping_t*: a reserved logical ID.
+   */
   Mapping_t *
   GetNewLogicalID()
   {
@@ -150,8 +197,8 @@ class MappingTable
         new_id = new_table->ReserveNewID();
 
         // retain the old table to release nodes in it
-        const auto guard = std::unique_lock<std::mutex>(mtx_);  // use lock for simplicity
-        old_tables_.emplace_back(current_table);
+        const auto guard = std::unique_lock<std::mutex>(full_tables_mtx_);
+        full_tables_.emplace_back(current_table);
       } else {
         // since another thread may install a new mapping table, recheck a current table
         ::dbgroup::memory::Delete(new_table);
