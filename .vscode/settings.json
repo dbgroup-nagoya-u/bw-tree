@@ -21,8 +21,6 @@
     "**/.git/subtree-cache/**": true,
     "**/node_modules/*/**": true,
     "**/.hg/store/**": true,
-    "**/third_party/**": true,
-    "**/pmwcas/**": true
   },
   "testMate.cpp.test.runtimeLimit": 60,
   "testMate.cpp.test.executables": "build/**/test/*_test",
@@ -143,6 +141,7 @@
     "typeinfo": "cpp",
     "bit": "cpp",
     "any": "cpp",
-    "variant": "cpp"
+    "variant": "cpp",
+    "complex": "cpp"
   }
 }
