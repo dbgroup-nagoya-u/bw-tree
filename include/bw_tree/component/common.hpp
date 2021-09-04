@@ -45,8 +45,8 @@ enum NodeReturnCode
  */
 enum NodeType : uint16_t
 {
-  kLeaf = 0,
-  kInternal
+  kInternal = 0,
+  kLeaf
 };
 
 /**
@@ -56,8 +56,9 @@ enum NodeType : uint16_t
 enum DeltaNodeType : uint16_t
 {
   kNotDelta = 0,
-  kInsert,
-  kDelete,
+  kInsert,  // an insert/modify delta in the paper.
+  kDeleteRecord,
+  kDeleteNode,
   kSplit,
   kMerge
 };

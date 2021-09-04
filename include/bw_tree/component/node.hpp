@@ -17,6 +17,7 @@
 #pragma once
 
 #include "common.hpp"
+#include "metadata.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {
@@ -38,16 +39,16 @@ class Node
    *##############################################################################################*/
 
   /// a flag to indicate whether this node is a leaf or internal node.
-  const uint16_t node_type_ : 1;
+  uint16_t node_type_ : 1;
 
   /// a flag to indicate the types of a delta node.
-  const uint16_t delta_type_ : 3;
+  uint16_t delta_type_ : 3;
 
   /// a blank block for alignment.
   uint16_t : 0;
 
   /// the number of records in this node.
-  const uint16_t record_count_;
+  uint16_t record_count_;
 
   /// a blank block for alignment.
   uint64_t : 0;
@@ -76,8 +77,8 @@ class Node
       const Node *next_node)
       : node_type_{node_type},
         delta_type_{DeltaNodeType::kNotDelta},
-        record_count_{record_count},
-        next_node_{next_node}
+        record_count_{static_cast<uint16_t>(record_count)},
+        next_node_{const_cast<Node *>(next_node)}
   {
   }
 
@@ -92,7 +93,7 @@ class Node
       const NodeType node_type,
       const DeltaNodeType delta_type,
       const Node *next_node)
-      : node_type_{node_type}, delta_type_{delta_type}, next_node_{next_node}
+      : node_type_{node_type}, delta_type_{delta_type}, next_node_{const_cast<Node *>(next_node)}
   {
   }
 
@@ -127,7 +128,7 @@ class Node
   constexpr DeltaNodeType
   GetDeltaNodeType() const
   {
-    return delta_type_;
+    return static_cast<DeltaNodeType>(delta_type_);
   }
 
   /**
@@ -137,6 +138,114 @@ class Node
   GetRecordCount() const
   {
     return record_count_;
+  }
+
+  constexpr Node *
+  GetNextNode() const
+  {
+    return next_node_;
+  }
+
+  /**
+   * @param position the position of record metadata to be get.
+   * @return Metadata: record metadata.
+   */
+  constexpr Metadata
+  GetMetadata(const size_t position) const
+  {
+    const auto meta_arr = reinterpret_cast<Metadata *>(data_block_);
+    return meta_arr[position];
+  }
+
+  /**
+   * @param meta metadata of a corresponding record.
+   * @return Key: a target key.
+   */
+  constexpr Key
+  GetKey(const Metadata meta) const
+  {
+    return *reinterpret_cast<Key *>(ShiftAddress(this, meta.GetOffset));
+  }
+
+  /**
+   * @brief Copy a target payload to a specified reference.
+   *
+   * @param meta metadata of a corresponding record.
+   * @param out_payload a reference to be copied a target payload.
+   */
+  void
+  CopyPayload(  //
+      const Metadata meta,
+      Payload &out_payload) const
+  {
+    if constexpr (IsVariableLengthData<Payload>()) {
+      const auto payload_length = meta.GetPayloadLength();
+      out_payload = ::dbgroup::memory::MallocNew<std::remove_pointer_t<Payload>>(payload_length);
+      memcpy(out_payload, this->GetPayloadAddr(meta), payload_length);
+    } else {
+      memcpy(&out_payload, this->GetPayloadAddr(meta), sizeof(Payload));
+    }
+  }
+
+  /**
+   * @brief Set record metadata.
+   *
+   * @param position the position of metadata to be set.
+   * @param new_meta metadata to be set.
+   */
+  constexpr void
+  SetMetadata(  //
+      const size_t position,
+      const Metadata new_meta)
+  {
+    auto meta_arr = reinterpret_cast<Metadata *>(data_block_);
+    meta_arr[position] = new_meta;
+  }
+
+  /**
+   * @brief Set a target key.
+   *
+   * @param offset an offset to set a target key.
+   * @param key a target key to be set.
+   * @param key_length the length of a target key.
+   */
+  void
+  SetKey(  //
+      size_t &offset,
+      const Key &key,
+      const size_t key_length)
+  {
+    if constexpr (IsVariableLengthData<Key>()) {
+      offset -= key_length;
+      memcpy(ShiftAddress(this, offset), key, key_length);
+    } else {
+      offset -= sizeof(Key);
+      memcpy(ShiftAddress(this, offset), &key, sizeof(Key));
+    }
+  }
+
+  /**
+   * @brief Set a target payload.
+   *
+   * @tparam T a class of a target payload.
+   * @param offset an offset to set a target payload.
+   * @param payload a target payload to be set.
+   * @param payload_length the length of a target payload.
+   */
+  template <class T>
+  void
+  SetPayload(  //
+      size_t &offset,
+      const T &payload,
+      const size_t payload_length)
+  {
+    if constexpr (IsVariableLengthData<T>()) {
+      offset -= payload_length;
+      memcpy(ShiftAddress(this, offset), payload, payload_length);
+    } else {
+      offset -= sizeof(T);
+      memcpy(ShiftAddress(this, offset), &payload, sizeof(T));
+    }
   }
 };
 

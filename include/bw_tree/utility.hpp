@@ -57,6 +57,19 @@ struct CompareAsCString {
   }
 };
 
+/**
+ * @tparam T a target class.
+ * @retval true if a target class is variable-length data.
+ * @retval false if a target class is static-length data.
+ */
+template <class T>
+constexpr bool
+IsVariableLengthData()
+{
+  static_assert(std::is_trivially_copyable_v<T>);
+  return false;
+}
+
 /*##################################################################################################
  * Tuning parameters for Bw-tree
  *################################################################################################*/
