@@ -112,7 +112,7 @@ class NodeFixture : public testing::Test
     const auto node_type = (is_leaf) ? NodeType::kLeaf : NodeType::kInternal;
 
     if (is_delta) {
-      node = std::make_unique<Node_t>(node_type, DeltaNodeType::kInsert, nullptr);
+      node = std::make_unique<Node_t>(node_type, DeltaNodeType::kInsert);
 
       EXPECT_EQ(DeltaNodeType::kInsert, node->GetDeltaNodeType());
     } else {
@@ -120,9 +120,10 @@ class NodeFixture : public testing::Test
 
       EXPECT_EQ(DeltaNodeType::kNotDelta, node->GetDeltaNodeType());
       EXPECT_EQ(0, node->GetRecordCount());
+      EXPECT_EQ(nullptr, node->GetNextNode());
     }
+
     EXPECT_FALSE(is_leaf ^ node->IsLeaf());
-    EXPECT_EQ(nullptr, node->GetNextNode());
   }
 
   void
