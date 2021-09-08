@@ -87,6 +87,13 @@ constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
 constexpr size_t kPageSize = 8192;
 #endif
 
+#ifdef BW_TREE_MAX_DELTA_NODE_NUM
+/// The page size of each node
+constexpr size_t kMaxDeltaNodeNum = BW_TREE_MAX_DELTA_NODE_NUM;
+#else
+constexpr size_t kMaxDeltaNodeNum = 16;
+#endif
+
 /// check whether the specified page size is valid
 static_assert(kPageSize % kWordLength == 0);
 
