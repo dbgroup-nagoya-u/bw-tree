@@ -153,11 +153,50 @@ class BwTree
     }
   }
 
+  void
+  ValidateNode(  //
+      const Key &key,
+      const bool range_is_closed,
+      Mapping_t *&page_id,
+      Node_t *&current_head,
+      const Node_t *previous_head,
+      NodeStack_t &stack,
+      Node_t *&consolidate_node)
+  {
+    // check whether there are incomplete SMOs
+    auto delta_type = current_head->GetDeltaNodeType();
+    if (delta_type == DeltaNodeType::kSplit) {
+      /* code */
+    } else if (delta_type == DeltaNodeType::kRemoveNode) {
+      // this thread may encounter incomplete merging
+    }
+
+    do {
+      delta_type = current_head->GetDeltaNodeType();
+      if (delta_type == DeltaNodeType::kNotDelta) {
+        break;
+      } else if (delta_type == DeltaNodeType::kSplit) {
+        /* code */
+      }
+
+      current_head = current_head->GetNextNode();
+    } while (current_head != previous_head);
+  }
+
   /*################################################################################################
    * Internal structure modification functoins
    *##############################################################################################*/
 
   void
+  Consolidate(  //
+      Mapping_t *page_id,
+      Node_t *current_head)
+  {
+    // not implemented yet
+
+    return;
+  }
+
  public:
   /*################################################################################################
    * Public constructor/destructor
