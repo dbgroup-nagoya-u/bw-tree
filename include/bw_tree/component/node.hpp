@@ -91,9 +91,8 @@ class Node
    */
   Node(  //
       const NodeType node_type,
-      const DeltaNodeType delta_type,
-      const Node *next_node)
-      : node_type_{node_type}, delta_type_{delta_type}, next_node_{const_cast<Node *>(next_node)}
+      const DeltaNodeType delta_type)
+      : node_type_{node_type}, delta_type_{delta_type}
   {
   }
 
@@ -269,6 +268,13 @@ class Node
       memcpy(ShiftAddress(this, offset), &payload, sizeof(T));
     }
   }
+
+  void
+  SetNextNode(const Node *next_node)
+  {
+    next_node_ = next_node;
+  }
+
   /*################################################################################################
    * Public utility functions
    *##############################################################################################*/
@@ -315,6 +321,30 @@ class Node
   }
 
   /*################################################################################################
+   * Public delta node builders
+   *##############################################################################################*/
+
+  template <class T>
+  static Node *
+  CreateDeltaNode(  //
+      const NodeType node_type,
+      const DeltaNodeType delta_type,
+      const Key &key,
+      const size_t key_length,
+      const T &payload,
+      const size_t payload_length)
+  {
+    const size_t total_length = key_length + payload_length;
+    size_t offset = kHeaderLength + sizeof(Metadata) + total_length;
+
+    auto delta = ::dbgroup::memory::MallocNew<Node>(offset, node_type, delta_type);
+
+    delta->SetPayload(offset, payload, payload_length);
+    delta->SetKey(offset, key, key_length);
+    delta->SetMetadata(0, offset, key_length, total_length);
+
+    return delta;
+  }
 };
 
 }  // namespace dbgroup::index::bw_tree::component
