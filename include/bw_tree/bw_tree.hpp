@@ -176,6 +176,146 @@ class BwTree
    * Public write APIs
    *##############################################################################################*/
 
+  /**
+   * @brief Write (i.e., upsert) a specified kay/payload pair.
+   *
+   * If a specified key does not exist in the index, this function performs an insert
+   * operation. If a specified key has been already inserted, this function perfroms an
+   * update operation. Thus, this function always returns kSuccess as a return code.
+   *
+   * Note that if a target key/payload is binary data, it is required to specify its
+   * length in bytes.
+   *
+   * @param key a target key to be written.
+   * @param payload a target payload to be written.
+   * @param key_length the length of a target key.
+   * @param payload_length the length of a target payload.
+   * @return ReturnCode: kSuccess.
+   */
+  ReturnCode
+  Write(  //
+      const Key &key,
+      const Payload &payload,
+      const size_t key_length = sizeof(Key),
+      const size_t payload_length = sizeof(Payload))
+  {
+    const auto guard = gc_.CreateEpochGuard();
+
+    // traverse to a target leaf node
+    NodeStack_t stack;
+    Mapping_t *consolidate_node = nullptr;
+    SearchLeafNode(key, true, root_, stack, consolidate_node);
+
+    // prepare variables to insert a new delta record
+    Mapping_t *page_id = stack.back();
+    Node_t *current_head = page_id->load(mo_relax);
+    Node_t *previous_head = nullptr;
+    Node_t *delta_node = Node_t::CreateDeltaNode(NodeType::kLeaf, DeltaNodeType::kInsert,  //
+                                                 key, key_length, payload, payload_length);
+
+    // insert the delta record
+    while (true) {
+      // check whether the target node is valid (containing a target key and no incomplete SMOs)
+      ValidateNode(page_id, current_head, previous_head);
+
+      // prepare nodes to perform CAS
+      delta_node->SetNextNode(current_head);
+      previous_head = current_head;
+
+      if (page_id->compare_exchange_weak(current_head, delta_node, mo_relax)) break;
+    }
+
+    if (consolidate_node != nullptr) {
+      // execute consolidation
+      Consolidate(consolidate_node, delta_node);
+    }
+
+    return ReturnCode::kSuccess;
+  }
+
+  /**
+   * @brief Insert a specified kay/payload pair.
+   *
+   * This function performs a uniqueness check in its processing. If a specified key
+   * does not exist, this function insert a target payload into the index. If a
+   * specified key exists in the index, this function does nothing and returns kKeyExist
+   * as a return code.
+   *
+   * Note that if a target key/payload is binary data, it is required to specify its
+   * length in bytes.
+   *
+   * @param key a target key to be written.
+   * @param payload a target payload to be written.
+   * @param key_length the length of a target key.
+   * @param payload_length the length of a target payload.
+   * @retval.kSuccess if inserted.
+   * @retval kKeyExist if a specified key exists.
+   */
+  ReturnCode
+  Insert(  //
+      const Key &key,
+      const Payload &payload,
+      const size_t key_length = sizeof(Key),
+      const size_t payload_length = sizeof(Payload))
+  {
+    // not implemented yet
+
+    return ReturnCode::kSuccess;
+  }
+
+  /**
+   * @brief Update a target kay with a specified payload.
+   *
+   * This function performs a uniqueness check in its processing. If a specified key
+   * exist, this function update a target payload. If a specified key does not exist in
+   * the index, this function does nothing and returns kKeyNotExist as a return code.
+   *
+   * Note that if a target key/payload is binary data, it is required to specify its
+   * length in bytes.
+   *
+   * @param key a target key to be written.
+   * @param payload a target payload to be written.
+   * @param key_length the length of a target key.
+   * @param payload_length the length of a target payload.
+   * @retval kSuccess if updated.
+   * @retval kKeyNotExist if a specified key does not exist.
+   */
+  ReturnCode
+  Update(  //
+      const Key &key,
+      const Payload &payload,
+      const size_t key_length = sizeof(Key),
+      const size_t payload_length = sizeof(Payload))
+  {
+    // not implemented yet
+
+    return ReturnCode::kSuccess;
+  }
+
+  /**
+   * @brief Delete a target kay from the index.
+   *
+   * This function performs a uniqueness check in its processing. If a specified key
+   * exist, this function deletes it. If a specified key does not exist in the index,
+   * this function does nothing and returns kKeyNotExist as a return code.
+   *
+   * Note that if a target key is binary data, it is required to specify its length in
+   * bytes.
+   *
+   * @param key a target key to be written.
+   * @param key_length the length of a target key.
+   * @retval kSuccess if deleted.
+   * @retval kKeyNotExist if a specified key does not exist.
+   */
+  ReturnCode
+  Delete(  //
+      const Key &key,
+      const size_t key_length = sizeof(Key))
+  {
+    // not implemented yet
+
+    return ReturnCode::kSuccess;
+  }
 };
 
 }  // namespace dbgroup::index::bw_tree
