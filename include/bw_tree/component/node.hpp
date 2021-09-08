@@ -171,6 +171,23 @@ class Node
   }
 
   /**
+   * @tparam T a class of a target payload.
+   * @param meta metadata of a corresponding record.
+   * @return T: a target payload.
+   */
+  template <class T>
+  constexpr T
+  GetPayload(const Metadata meta) const
+  {
+    const auto offset = meta.GetOffset() + meta.GetKeyLength();
+    if constexpr (IsVariableLengthData<T>()) {
+      return reinterpret_cast<T>(ShiftAddress(this, offset));
+    } else {
+      return *reinterpret_cast<T *>(ShiftAddress(this, offset));
+    }
+  }
+
+  /**
    * @brief Copy a target payload to a specified reference.
    *
    * @param meta metadata of a corresponding record.
