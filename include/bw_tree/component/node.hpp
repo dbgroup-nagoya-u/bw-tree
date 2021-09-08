@@ -269,6 +269,52 @@ class Node
       memcpy(ShiftAddress(this, offset), &payload, sizeof(T));
     }
   }
+  /*################################################################################################
+   * Public utility functions
+   *##############################################################################################*/
+
+  /**
+   * @brief Get the position of a specified key by using binary search. If there is no
+   * specified key, this returns the minimum metadata position that is greater than the
+   * specified key
+   *
+   * @param key a target key.
+   * @param range_is_closed a flag to indicate that a target key is included.
+   * @return size_t: the position of a specified key.
+   */
+  size_t
+  SearchRecord(  //
+      const Key &key,
+      const bool range_is_closed) const
+  {
+    int64_t begin_idx = 0;
+    int64_t end_idx = GetRecordCount() - 1;
+    int64_t idx = (begin_idx + end_idx) >> 1;
+
+    while (begin_idx <= end_idx) {
+      const auto meta = GetMetadata(idx);
+      const auto idx_key = GetKey(meta);
+
+      if (meta.GetKeyLength() == 0 || Compare{}(key, idx_key)) {
+        // a target key is in a left side
+        end_idx = idx - 1;
+      } else if (Compare{}(idx_key, key)) {
+        // a target key is in a right side
+        begin_idx = idx + 1;
+      } else {
+        // find an equivalent key
+        if (!range_is_closed) ++idx;
+        begin_idx = idx;
+        break;
+      }
+
+      idx = (begin_idx + end_idx) >> 1;
+    }
+
+    return begin_idx;
+  }
+
+  /*################################################################################################
 };
 
 }  // namespace dbgroup::index::bw_tree::component
