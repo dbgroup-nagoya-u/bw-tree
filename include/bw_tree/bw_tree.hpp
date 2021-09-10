@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "component/mapping_table.hpp"
 #include "component/node.hpp"
 #include "memory/epoch_based_gc.hpp"
 
@@ -42,6 +43,7 @@ class BwTree
   using NodeType = component::NodeType;
   using Node_t = component::Node<Key, Payload, Compare>;
   using Mapping_t = std::atomic<Node_t *>;
+  using MappingTable_t = component::MappingTable<Key, Payload, Compare>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
   using NodeStack_t = std::vector<Node_t *, ::dbgroup::memory::STLAlloc<Node_t *>>;
   using Binary_p = std::unique_ptr<std::remove_pointer_t<Payload>,
@@ -60,6 +62,9 @@ class BwTree
 
   /// a root node of Bw-tree
   Mapping_t *root_;
+
+  /// a mapping table
+  MappingTable_t mapping_table_;
 
   /// garbage collector
   NodeGC_t gc_;
@@ -239,6 +244,24 @@ class BwTree
   /*################################################################################################
    * Public constructor/destructor
    *##############################################################################################*/
+
+  /**
+   * @brief Construct a new BwTree object.
+   *
+   * @param gc_interval_microsec GC internal [us]
+   */
+  explicit BwTree(const size_t gc_interval_microsec = 100000)
+      : root_{nullptr}, mapping_table_{}, gc_{gc_interval_microsec}
+  {
+    root_ = mapping_table_.GetNewLogicalID();
+    gc_.StartGC();
+  }
+
+  /**
+   * @brief Destroy the BwTree object.
+   *
+   */
+  ~BwTree() {}
 
   BwTree(const BwTree &) = delete;
   BwTree &operator=(const BwTree &) = delete;
