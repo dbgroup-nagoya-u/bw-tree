@@ -156,31 +156,69 @@ class BwTree
   void
   ValidateNode(  //
       const Key &key,
-      const bool range_is_closed,
+      const bool range_closed,
       Mapping_t *&page_id,
-      Node_t *&current_head,
-      const Node_t *previous_head,
+      Node_t *&cur_head,
+      const Node_t *prev_head,
       NodeStack_t &stack,
-      Node_t *&consolidate_node)
+      Mapping_t *&consol_node)
   {
-    // check whether there are incomplete SMOs
-    auto delta_type = current_head->GetDeltaNodeType();
-    if (delta_type == DeltaNodeType::kSplit) {
-      /* code */
-    } else if (delta_type == DeltaNodeType::kRemoveNode) {
-      // this thread may encounter incomplete merging
-    }
+    Node_t *cur_node = cur_head;
+    size_t delta_chain_length = 0;
 
-    do {
-      delta_type = current_head->GetDeltaNodeType();
-      if (delta_type == DeltaNodeType::kNotDelta) {
-        break;
-      } else if (delta_type == DeltaNodeType::kSplit) {
-        /* code */
+    // check whether there are incomplete SMOs
+    while (cur_node != prev_head) {
+      switch (cur_node->GetDeltaNodeType()) {
+        case DeltaNodeType::kSplit:
+          auto meta = cur_node->GetMetadata(0);
+          auto sep_key = cur_node->GetKey(meta);
+          if (Compare{}(sep_key, key) || (!range_closed && !Compare{}(key, sep_key))) {
+            // there may be incomplete split
+            // CompleteSplit();
+
+            // traverse to a split right node
+            page_id = cur_node->template GetPayload<Mapping_t *>(meta);
+            cur_head = page_id->load(mo_relax);
+            return ValidateNode(key, range_closed, page_id, cur_head, nullptr, stack, consol_node);
+          }
+          // although this split may be incomplete, the other SMOs in this chain must be complete
+          ++delta_chain_length;
+          goto no_incomplete_smo;
+
+        case DeltaNodeType::kRemoveNode:
+          // there may be incomplete merging
+          // CompleteMerge();
+
+          // traverse to a merged node
+          const auto parent_node = stack.back();
+          stack.pop_back();
+          SearchLeafNode(key, range_closed, parent_node, stack, consol_node);
+          page_id = stack.back();
+          cur_head = page_id->load(mo_relax);
+          return ValidateNode(key, range_closed, page_id, cur_head, nullptr, stack, consol_node);
+
+        case DeltaNodeType::kMerge:
+          // there are no incomplete SMOs
+          ++delta_chain_length;
+          goto no_incomplete_smo;
+
+        case DeltaNodeType::kNotDelta:
+          // there are no incomplete SMOs
+          goto no_incomplete_smo;
+
+        default:
+          break;
       }
 
-      current_head = current_head->GetNextNode();
-    } while (current_head != previous_head);
+      // go to the next delta record or base node
+      cur_node = cur_node->GetNextNode();
+      ++delta_chain_length;
+    }
+
+  no_incomplete_smo:
+    if (delta_chain_length > kMaxDeltaNodeNum) {
+      consol_node = page_id;
+    }
   }
 
   /*################################################################################################
@@ -254,7 +292,7 @@ class BwTree
 
     while (true) {
       // check whether the target node is valid (containing a target key and no incomplete SMOs)
-      ValidateNode(page_id, cur_head, prev_head);
+      ValidateNode(key, true, page_id, cur_head, prev_head, stack, consol_node);
 
       // prepare nodes to perform CAS
       delta_node->SetNextNode(cur_head);
