@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <utility>
+
 #include "common.hpp"
 #include "metadata.hpp"
 
@@ -286,9 +288,10 @@ class Node
    *
    * @param key a target key.
    * @param range_is_closed a flag to indicate that a target key is included.
-   * @return size_t: the position of a specified key.
+   * @return std::pair<ReturnCode, size_t>: record's existence and the position of a
+   * specified key if exist.
    */
-  size_t
+  std::pair<ReturnCode, size_t>
   SearchRecord(  //
       const Key &key,
       const bool range_is_closed) const
@@ -296,6 +299,7 @@ class Node
     int64_t begin_idx = 0;
     int64_t end_idx = GetRecordCount() - 1;
     int64_t idx = (begin_idx + end_idx) >> 1;
+    ReturnCode rc = kKeyNotExist;
 
     while (begin_idx <= end_idx) {
       const auto meta = GetMetadata(idx);
@@ -311,13 +315,14 @@ class Node
         // find an equivalent key
         if (!range_is_closed) ++idx;
         begin_idx = idx;
+        rc = kKeyExist;
         break;
       }
 
       idx = (begin_idx + end_idx) >> 1;
     }
 
-    return begin_idx;
+    return {rc, begin_idx};
   }
 
   /*################################################################################################
