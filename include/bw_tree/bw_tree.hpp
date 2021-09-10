@@ -253,7 +253,22 @@ class BwTree
   explicit BwTree(const size_t gc_interval_microsec = 100000)
       : root_{nullptr}, mapping_table_{}, gc_{gc_interval_microsec}
   {
+    // create an empty leaf node
+    Mapping_t *child_page_id = mapping_table_.GetNewLogicalID();
+    Node_t *empty_leaf = ::dbgroup::memory::MallocNew<Node_t>(
+        component::kHeaderLength, component::NodeType::kLeaf, 0, nullptr);
+    child_page_id->store(empty_leaf, mo_relax);
+
+    // create an empty Bw-tree
     root_ = mapping_table_.GetNewLogicalID();
+    auto offset = component::kHeaderLength + sizeof(Metadata) + sizeof(Mapping_t *);
+    Node_t *initial_root =
+        ::dbgroup::memory::MallocNew<Node_t>(offset, component::NodeType::kInternal, 1, nullptr);
+    offset = initial_root->template SetPayload<Mapping_t *>(offset, root_, sizeof(Mapping_t *));
+    initial_root->SetMetadata(0, offset, 0, sizeof(Mapping_t *));
+    root_->store(initial_root, mo_relax);
+
+    // start garbage collector for removed nodes
     gc_.StartGC();
   }
 
