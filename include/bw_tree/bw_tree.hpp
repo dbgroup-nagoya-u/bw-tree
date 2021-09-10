@@ -41,9 +41,9 @@ class BwTree
   using Metadata = component::Metadata;
   using NodeReturnCode = component::NodeReturnCode;
   using NodeType = component::NodeType;
-  using Node_t = component::Node<Key, Payload, Compare>;
+  using Node_t = component::Node<Key, Compare>;
   using Mapping_t = std::atomic<Node_t *>;
-  using MappingTable_t = component::MappingTable<Key, Payload, Compare>;
+  using MappingTable_t = component::MappingTable<Key, Compare>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
   using NodeStack_t = std::vector<Node_t *, ::dbgroup::memory::STLAlloc<Node_t *>>;
   using Binary_p = std::unique_ptr<std::remove_pointer_t<Payload>,

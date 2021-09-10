@@ -27,10 +27,9 @@ namespace dbgroup::index::bw_tree::component
  * Note that this class represents both base nodes and delta nodes.
  *
  * @tparam Key a target key class.
- * @tparam Payload a target payload class.
  * @tparam Compare a comparetor class for keys.
  */
-template <class Key, class Payload, class Compare>
+template <class Key, class Compare>
 class Node
 {
  private:
@@ -192,6 +191,7 @@ class Node
    * @param meta metadata of a corresponding record.
    * @param out_payload a reference to be copied a target payload.
    */
+  template <class Payload>
   void
   CopyPayload(  //
       const Metadata meta,

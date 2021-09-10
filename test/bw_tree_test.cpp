@@ -44,7 +44,7 @@ class NodeFixture : public testing::Test
   using PayloadComp = typename KeyPayload::PayloadComp;
 
   // define type aliases for simplicity
-  using Node_t = component::Node<Key, Payload, std::less<Key>>;
+  using Node_t = component::Node<Key, std::less<Key>>;
   using Metadata = component::Metadata;
 
   /*################################################################################################
