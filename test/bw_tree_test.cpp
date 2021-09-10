@@ -46,6 +46,7 @@ class BwTreeFixture : public testing::Test
   // define type aliases for simplicity
   using Node_t = component::Node<Key, std::less<Key>>;
   using Metadata = component::Metadata;
+  using BwTree_t = BwTree<Key, Payload, KeyComp>;
 
   /*################################################################################################
    * Internal constants
@@ -70,7 +71,7 @@ class BwTreeFixture : public testing::Test
   size_t max_record_num;
 
   // a target node and its expected metadata
-  std::unique_ptr<Node_t> node;
+  std::unique_ptr<BwTree_t> bw_tree;
 
   /*################################################################################################
    * Setup/Teardown
@@ -91,6 +92,8 @@ class BwTreeFixture : public testing::Test
     record_length = key_length + payload_length;
     max_record_num = (kPageSize - component::kHeaderLength) / (record_length + sizeof(Metadata));
     if (max_record_num > kKeyNumForTest) max_record_num = kKeyNumForTest;
+
+    bw_tree = std::make_unique<BwTree_t>(1000);
   }
 
   void
@@ -105,25 +108,22 @@ class BwTreeFixture : public testing::Test
    *##############################################################################################*/
 
   void
-  VerifyKey(  //
-      const size_t idx,
-      const Metadata meta)
+  VerifyRead(  //
+      const size_t key_id,
+      const size_t expected_id,
+      const bool expect_fail = false)
   {
-    auto key = node->GetKey(meta);
-    EXPECT_TRUE(component::IsEqual<KeyComp>(key, keys[idx]));
-  }
+    const auto [rc, actual] = bw_tree->Read(keys[key_id]);
 
-  void
-  VerifyPayload(  //
-      const size_t idx,
-      const Metadata meta)
-  {
-    Payload payload{};
-    node->CopyPayload(meta, payload);
-    EXPECT_TRUE(component::IsEqual<PayloadComp>(payload, payloads[idx]));
-
-    if constexpr (IsVariableLengthData<Payload>()) {
-      ::dbgroup::memory::Delete(payload);
+    if (expect_fail) {
+      EXPECT_EQ(ReturnCode::kKeyNotExist, rc);
+    } else {
+      EXPECT_EQ(ReturnCode::kSuccess, rc);
+      if constexpr (IsVariableLengthData<Payload>()) {
+        EXPECT_TRUE(component::IsEqual<PayloadComp>(payloads[expected_id], actual.get()));
+      } else {
+        EXPECT_TRUE(component::IsEqual<PayloadComp>(payloads[expected_id], actual));
+      }
     }
   }
 };
@@ -149,10 +149,13 @@ TYPED_TEST_CASE(BwTreeFixture, KeyPayloadPairs);
  * Read operation tests
  *------------------------------------------------------------------------------------------------*/
 
+TYPED_TEST(BwTreeFixture, Read_EmptyIndex_ReadFail)
+{  //
+  TestFixture::VerifyRead(0, 0, true);
+}
+
 /*--------------------------------------------------------------------------------------------------
  * Write operation tests
  *------------------------------------------------------------------------------------------------*/
-
-TYPED_TEST(BwTreeFixture, Construct_LeafBaseNode_CorrectlyInitialized) {}
 
 }  // namespace dbgroup::index::bw_tree::test

@@ -299,7 +299,7 @@ class Node
     int64_t begin_idx = 0;
     int64_t end_idx = GetRecordCount() - 1;
     int64_t idx = (begin_idx + end_idx) >> 1;
-    ReturnCode rc = kKeyNotExist;
+    ReturnCode rc = ReturnCode::kKeyNotExist;
 
     while (begin_idx <= end_idx) {
       const auto meta = GetMetadata(idx);
@@ -315,7 +315,7 @@ class Node
         // find an equivalent key
         if (!range_is_closed) ++idx;
         begin_idx = idx;
-        rc = kKeyExist;
+        rc = ReturnCode::kKeyExist;
         break;
       }
 
