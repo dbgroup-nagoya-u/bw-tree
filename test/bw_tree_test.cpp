@@ -34,7 +34,7 @@ struct KeyPayload {
 };
 
 template <class KeyPayload>
-class NodeFixture : public testing::Test
+class BwTreeFixture : public testing::Test
 {
  protected:
   // extract key-payload types
@@ -139,10 +139,20 @@ using KeyPayloadPairs = ::testing::Types<KeyPayload<uint64_t, uint64_t, UInt64Co
                                          KeyPayload<uint32_t, uint64_t, UInt32Comp, UInt64Comp>,
                                          KeyPayload<uint32_t, uint32_t, UInt32Comp, UInt32Comp>,
                                          KeyPayload<uint64_t, uint64_t *, UInt64Comp, PtrComp>>;
-TYPED_TEST_CASE(NodeFixture, KeyPayloadPairs);
+TYPED_TEST_CASE(BwTreeFixture, KeyPayloadPairs);
 
 /*##################################################################################################
  * Unit test definitions
  *################################################################################################*/
+
+/*--------------------------------------------------------------------------------------------------
+ * Read operation tests
+ *------------------------------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------------------------------
+ * Write operation tests
+ *------------------------------------------------------------------------------------------------*/
+
+TYPED_TEST(BwTreeFixture, Construct_LeafBaseNode_CorrectlyInitialized) {}
 
 }  // namespace dbgroup::index::bw_tree::test

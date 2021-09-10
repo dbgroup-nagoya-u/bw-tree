@@ -264,7 +264,7 @@ class BwTree
     auto offset = component::kHeaderLength + sizeof(Metadata) + sizeof(Mapping_t *);
     Node_t *initial_root =
         ::dbgroup::memory::MallocNew<Node_t>(offset, component::NodeType::kInternal, 1, nullptr);
-    offset = initial_root->template SetPayload<Mapping_t *>(offset, root_, sizeof(Mapping_t *));
+    initial_root->template SetPayload<Mapping_t *>(offset, root_, sizeof(Mapping_t *));
     initial_root->SetMetadata(0, offset, 0, sizeof(Mapping_t *));
     root_->store(initial_root, mo_relax);
 
@@ -286,6 +286,43 @@ class BwTree
   /*################################################################################################
    * Public read APIs
    *##############################################################################################*/
+
+  /**
+   * @brief Read a payload of a specified key if it exists.
+   *
+   * This function returns two return codes: kSuccess and kKeyNotExist. If a return code
+   * is kSuccess, a returned pair contains a target payload. If a return code is
+   * kKeyNotExist, the value of a returned payload is undefined.
+   *
+   * @param key a target key.
+   * @return std::pair<ReturnCode, Payload>: a return code and payload pair.
+   */
+  auto
+  Read(const Key &key)
+  {
+    // not implemented yet
+  }
+
+  /**
+   * @brief Perform a range scan with specified keys.
+   *
+   * If a begin/end key is nullptr, it is treated as negative or positive infinite.
+   *
+   * @param begin_key the pointer of a begin key of a range scan.
+   * @param begin_closed a flag to indicate whether the begin side of a range is closed.
+   * @param end_key the pointer of an end key of a range scan.
+   * @param end_closed a flag to indicate whether the end side of a range is closed.
+   * @return RecordIterator_t: an iterator to access target records.
+   */
+  void
+  Scan(  //
+      const Key *begin_key = nullptr,
+      const bool begin_closed = false,
+      const Key *end_key = nullptr,
+      const bool end_closed = false)
+  {
+    // not implemented yet
+  }
 
   /*################################################################################################
    * Public write APIs
