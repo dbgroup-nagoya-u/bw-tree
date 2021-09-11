@@ -56,6 +56,8 @@ class BwTree
 
   static constexpr auto mo_relax = component::mo_relax;
 
+  static constexpr size_t kExpectedTreeHeight = 8;
+
   /*################################################################################################
    * Internal classes
    *##############################################################################################*/
@@ -311,6 +313,7 @@ class BwTree
 
     // traverse to a target leaf node
     NodeStack_t stack;
+    stack.reserve(kExpectedTreeHeight);
     Mapping_t *consol_node = nullptr;
     SearchLeafNode(key, true, root_, stack, consol_node);
 
@@ -386,7 +389,7 @@ class BwTree
           size_t idx;
           std::tie(existence, idx) = cur_head->SearchRecord(key, true);
           if (existence == kKeyExist) {
-            auto meta = cur_head->GetMetadata(idx);
+            const auto meta = cur_head->GetMetadata(idx);
             cur_head->CopyPayload(meta, payload);
           }
           goto found_record;
