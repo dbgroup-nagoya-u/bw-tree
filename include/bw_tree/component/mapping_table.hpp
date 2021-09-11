@@ -29,13 +29,12 @@ namespace dbgroup::index::bw_tree::component
  * @brief
  *
  * @tparam Key a target key class.
- * @tparam Payload a target payload class.
  * @tparam Compare a comparetor class for keys.
  */
-template <class Key, class Payload, class Compare>
+template <class Key, class Compare>
 class MappingTable
 {
-  using Node_t = Node<Key, Payload, Compare>;
+  using Node_t = Node<Key, Compare>;
   using Mapping_t = std::atomic<Node_t *>;
 
  public:
@@ -89,8 +88,18 @@ class MappingTable
     {
       const size_t size = head_id_.load(mo_relax);
       for (size_t i = 0; i < size; ++i) {
-        auto node = logical_ids_[i].load(mo_relax);
-        if (node != nullptr) ::dbgroup::memory::Delete(node);
+        Node_t *node = logical_ids_[i].load(mo_relax);
+        if (node == nullptr) continue;
+
+        // release all delta nodes in this chain
+        Node_t *prev_node;
+        while (node->GetDeltaNodeType() != DeltaNodeType::kNotDelta) {
+          prev_node = node;
+          node = node->GetNextNode();
+          ::dbgroup::memory::Delete(prev_node);
+        }
+        // release a base node
+        ::dbgroup::memory::Delete(node);
       }
     }
 

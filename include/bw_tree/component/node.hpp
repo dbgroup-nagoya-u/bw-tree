@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <utility>
+
 #include "common.hpp"
 #include "metadata.hpp"
 
@@ -27,10 +29,9 @@ namespace dbgroup::index::bw_tree::component
  * Note that this class represents both base nodes and delta nodes.
  *
  * @tparam Key a target key class.
- * @tparam Payload a target payload class.
  * @tparam Compare a comparetor class for keys.
  */
-template <class Key, class Payload, class Compare>
+template <class Key, class Compare>
 class Node
 {
  private:
@@ -91,9 +92,8 @@ class Node
    */
   Node(  //
       const NodeType node_type,
-      const DeltaNodeType delta_type,
-      const Node *next_node)
-      : node_type_{node_type}, delta_type_{delta_type}, next_node_{const_cast<Node *>(next_node)}
+      const DeltaNodeType delta_type)
+      : node_type_{node_type}, delta_type_{delta_type}
   {
   }
 
@@ -171,11 +171,29 @@ class Node
   }
 
   /**
+   * @tparam T a class of a target payload.
+   * @param meta metadata of a corresponding record.
+   * @return T: a target payload.
+   */
+  template <class T>
+  constexpr T
+  GetPayload(const Metadata meta) const
+  {
+    const auto offset = meta.GetOffset() + meta.GetKeyLength();
+    if constexpr (IsVariableLengthData<T>()) {
+      return reinterpret_cast<T>(ShiftAddress(this, offset));
+    } else {
+      return *reinterpret_cast<T *>(ShiftAddress(this, offset));
+    }
+  }
+
+  /**
    * @brief Copy a target payload to a specified reference.
    *
    * @param meta metadata of a corresponding record.
    * @param out_payload a reference to be copied a target payload.
    */
+  template <class Payload>
   void
   CopyPayload(  //
       const Metadata meta,
@@ -251,6 +269,95 @@ class Node
       offset -= sizeof(T);
       memcpy(ShiftAddress(this, offset), &payload, sizeof(T));
     }
+  }
+
+  void
+  SetNextNode(const Node *next_node)
+  {
+    next_node_ = const_cast<Node *>(next_node);
+  }
+
+  /*################################################################################################
+   * Public utility functions
+   *##############################################################################################*/
+
+  /**
+   * @brief Get the position of a specified key by using binary search. If there is no
+   * specified key, this returns the minimum metadata position that is greater than the
+   * specified key
+   *
+   * @param key a target key.
+   * @param range_is_closed a flag to indicate that a target key is included.
+   * @return std::pair<ReturnCode, size_t>: record's existence and the position of a
+   * specified key if exist.
+   */
+  std::pair<ReturnCode, size_t>
+  SearchRecord(  //
+      const Key &key,
+      const bool range_is_closed) const
+  {
+    int64_t begin_idx = 0;
+    int64_t end_idx = GetRecordCount() - 1;
+    int64_t idx = (begin_idx + end_idx) >> 1;
+    ReturnCode rc = ReturnCode::kKeyNotExist;
+
+    while (begin_idx <= end_idx) {
+      const auto meta = GetMetadata(idx);
+      const auto idx_key = GetKey(meta);
+
+      if (meta.GetKeyLength() == 0 || Compare{}(key, idx_key)) {
+        // a target key is in a left side
+        end_idx = idx - 1;
+      } else if (Compare{}(idx_key, key)) {
+        // a target key is in a right side
+        begin_idx = idx + 1;
+      } else {
+        // find an equivalent key
+        if (!range_is_closed) ++idx;
+        begin_idx = idx;
+        rc = ReturnCode::kKeyExist;
+        break;
+      }
+
+      idx = (begin_idx + end_idx) >> 1;
+    }
+
+    return {rc, begin_idx};
+  }
+
+  /*################################################################################################
+   * Public node builders
+   *##############################################################################################*/
+
+  static Node *
+  CreateEmptyNode()
+  {
+  }
+
+  /*################################################################################################
+   * Public delta node builders
+   *##############################################################################################*/
+
+  template <class T>
+  static Node *
+  CreateDeltaNode(  //
+      const NodeType node_type,
+      const DeltaNodeType delta_type,
+      const Key &key,
+      const size_t key_length,
+      const T &payload,
+      const size_t payload_length)
+  {
+    const size_t total_length = key_length + payload_length;
+    size_t offset = kHeaderLength + sizeof(Metadata) + total_length;
+
+    auto delta = ::dbgroup::memory::MallocNew<Node>(offset, node_type, delta_type);
+
+    delta->SetPayload(offset, payload, payload_length);
+    delta->SetKey(offset, key, key_length);
+    delta->SetMetadata(0, offset, key_length, total_length);
+
+    return delta;
   }
 };
 

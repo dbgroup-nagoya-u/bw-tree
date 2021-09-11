@@ -31,8 +31,8 @@ class MappingTableFixture : public testing::Test
  protected:
   using Key = uint64_t;
   using Payload = uint64_t;
-  using MappingTable_t = MappingTable<Key, Payload, std::less<Key>>;
-  using Mapping_t = std::atomic<Node<Key, Payload, std::less<Key>>*>;
+  using MappingTable_t = MappingTable<Key, std::less<Key>>;
+  using Mapping_t = std::atomic<Node<Key, std::less<Key>>*>;
 
   /*################################################################################################
    * Internal constants

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "bw_tree/component/node.hpp"
+#include "bw_tree/bw_tree.hpp"
 
 #include <memory>
 #include <vector>
@@ -22,7 +22,7 @@
 #include "common.hpp"
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::bw_tree::component::test
+namespace dbgroup::index::bw_tree::test
 {
 // use a supper template to define key-payload pair templates
 template <class KeyType, class PayloadType, class KeyComparator, class PayloadComparator>
@@ -34,7 +34,7 @@ struct KeyPayload {
 };
 
 template <class KeyPayload>
-class NodeFixture : public testing::Test
+class BwTreeFixture : public testing::Test
 {
  protected:
   // extract key-payload types
@@ -44,13 +44,17 @@ class NodeFixture : public testing::Test
   using PayloadComp = typename KeyPayload::PayloadComp;
 
   // define type aliases for simplicity
-  using Node_t = Node<Key, std::less<Key>>;
+  using Node_t = component::Node<Key, std::less<Key>>;
+  using Metadata = component::Metadata;
+  using BwTree_t = BwTree<Key, Payload, KeyComp>;
 
   /*################################################################################################
    * Internal constants
    *##############################################################################################*/
 
-  static constexpr size_t kKeyNumForTest = 1024;
+  static constexpr size_t kKeyNumForTest = 4096;
+  static constexpr size_t kSmallKeyNum = kMaxDeltaNodeNum;
+  static constexpr size_t kLargeKeyNum = kKeyNumForTest / 2;
   static constexpr size_t kKeyLength = kWordLength;
   static constexpr size_t kPayloadLength = kWordLength;
 
@@ -69,8 +73,7 @@ class NodeFixture : public testing::Test
   size_t max_record_num;
 
   // a target node and its expected metadata
-  std::unique_ptr<Node_t> node;
-  std::vector<Metadata> meta_vec;
+  std::unique_ptr<BwTree_t> bw_tree;
 
   /*################################################################################################
    * Setup/Teardown
@@ -89,8 +92,10 @@ class NodeFixture : public testing::Test
 
     // set a record length and its maximum number
     record_length = key_length + payload_length;
-    max_record_num = (kPageSize - kHeaderLength) / (record_length + sizeof(Metadata));
+    max_record_num = (kPageSize - component::kHeaderLength) / (record_length + sizeof(Metadata));
     if (max_record_num > kKeyNumForTest) max_record_num = kKeyNumForTest;
+
+    bw_tree = std::make_unique<BwTree_t>(1000);
   }
 
   void
@@ -105,77 +110,33 @@ class NodeFixture : public testing::Test
    *##############################################################################################*/
 
   void
-  VerifyConstructor(  //
-      const bool is_leaf,
-      const bool is_delta)
+  VerifyRead(  //
+      const size_t key_id,
+      const size_t expected_id,
+      const bool expect_fail = false)
   {
-    const auto node_type = (is_leaf) ? NodeType::kLeaf : NodeType::kInternal;
+    const auto [rc, actual] = bw_tree->Read(keys[key_id]);
 
-    if (is_delta) {
-      node = std::make_unique<Node_t>(node_type, DeltaNodeType::kInsert);
-
-      EXPECT_EQ(DeltaNodeType::kInsert, node->GetDeltaNodeType());
+    if (expect_fail) {
+      EXPECT_EQ(ReturnCode::kKeyNotExist, rc);
     } else {
-      node = std::make_unique<Node_t>(node_type, 0, nullptr);
-
-      EXPECT_EQ(DeltaNodeType::kNotDelta, node->GetDeltaNodeType());
-      EXPECT_EQ(0, node->GetRecordCount());
-      EXPECT_EQ(nullptr, node->GetNextNode());
-    }
-
-    EXPECT_FALSE(is_leaf ^ node->IsLeaf());
-  }
-
-  void
-  VerifySetterGetter()
-  {
-    meta_vec.reserve(max_record_num);
-
-    // creat an empty node
-    node.reset(new (malloc(kPageSize)) Node_t{NodeType::kLeaf, max_record_num, nullptr});
-
-    // set records and keep their metadata
-    size_t offset = kPageSize;
-    for (size_t i = 0; i < max_record_num; ++i) {
-      // set a record
-      node->SetPayload(offset, payloads[i], payload_length);
-      node->SetKey(offset, keys[i], key_length);
-      node->SetMetadata(i, offset, key_length, record_length);
-
-      // keep metadata for verification
-      meta_vec.emplace_back(offset, key_length, record_length);
-    }
-
-    // verify records and their metadata
-    for (size_t i = 0; i < max_record_num; ++i) {
-      const auto meta = node->GetMetadata(i);
-      EXPECT_EQ(meta_vec.at(i), meta);
-      VerifyKey(i, meta);
-      VerifyPayload(i, meta);
+      EXPECT_EQ(ReturnCode::kSuccess, rc);
+      if constexpr (IsVariableLengthData<Payload>()) {
+        EXPECT_TRUE(component::IsEqual<PayloadComp>(payloads[expected_id], actual.get()));
+      } else {
+        EXPECT_TRUE(component::IsEqual<PayloadComp>(payloads[expected_id], actual));
+      }
     }
   }
 
   void
-  VerifyKey(  //
-      const size_t idx,
-      const Metadata meta)
+  VerifyWrite(  //
+      const size_t key_id,
+      const size_t payload_id)
   {
-    auto key = node->GetKey(meta);
-    EXPECT_TRUE(IsEqual<KeyComp>(key, keys[idx]));
-  }
+    auto rc = bw_tree->Write(keys[key_id], payloads[payload_id], key_length, payload_length);
 
-  void
-  VerifyPayload(  //
-      const size_t idx,
-      const Metadata meta)
-  {
-    Payload payload{};
-    node->CopyPayload(meta, payload);
-    EXPECT_TRUE(IsEqual<PayloadComp>(payload, payloads[idx]));
-
-    if constexpr (IsVariableLengthData<Payload>()) {
-      ::dbgroup::memory::Delete(payload);
-    }
+    EXPECT_EQ(ReturnCode::kSuccess, rc);
   }
 };
 
@@ -190,43 +151,48 @@ using KeyPayloadPairs = ::testing::Types<KeyPayload<uint64_t, uint64_t, UInt64Co
                                          KeyPayload<uint32_t, uint64_t, UInt32Comp, UInt64Comp>,
                                          KeyPayload<uint32_t, uint32_t, UInt32Comp, UInt32Comp>,
                                          KeyPayload<uint64_t, uint64_t *, UInt64Comp, PtrComp>>;
-TYPED_TEST_CASE(NodeFixture, KeyPayloadPairs);
+TYPED_TEST_CASE(BwTreeFixture, KeyPayloadPairs);
 
 /*##################################################################################################
  * Unit test definitions
  *################################################################################################*/
 
 /*--------------------------------------------------------------------------------------------------
- * Constructor tests
+ * Read operation tests
  *------------------------------------------------------------------------------------------------*/
 
-TYPED_TEST(NodeFixture, Construct_LeafBaseNode_CorrectlyInitialized)
-{
-  TestFixture::VerifyConstructor(true, false);
-}
-
-TYPED_TEST(NodeFixture, Construct_InternalBaseNode_CorrectlyInitialized)
-{
-  TestFixture::VerifyConstructor(false, false);
-}
-
-TYPED_TEST(NodeFixture, Construct_LeafDeltaNode_CorrectlyInitialized)
-{
-  TestFixture::VerifyConstructor(true, true);
-}
-
-TYPED_TEST(NodeFixture, Construct_InternalDeltaNode_CorrectlyInitialized)
-{
-  TestFixture::VerifyConstructor(false, true);
+TYPED_TEST(BwTreeFixture, Read_EmptyIndex_ReadFail)
+{  //
+  TestFixture::VerifyRead(0, 0, true);
 }
 
 /*--------------------------------------------------------------------------------------------------
- * Getter/setter tests
+ * Write operation tests
  *------------------------------------------------------------------------------------------------*/
 
-TYPED_TEST(NodeFixture, SetterGetter_EmptyNode_CorrectlySetAndGet)
+TYPED_TEST(BwTreeFixture, Write_UniqueKeys_ReadWrittenValues)
 {
-  TestFixture::VerifySetterGetter();
+  for (size_t i = 0; i < TestFixture::kSmallKeyNum; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+  for (size_t i = 0; i < TestFixture::kSmallKeyNum; ++i) {
+    TestFixture::VerifyRead(i, i);
+  }
 }
 
-}  // namespace dbgroup::index::bw_tree::component::test
+TYPED_TEST(BwTreeFixture, Write_DuplicateKeys_ReadLatestValue)
+{
+  constexpr size_t kHalfKeyNum = TestFixture::kSmallKeyNum / 2;
+
+  for (size_t i = 0; i < kHalfKeyNum; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+  for (size_t i = 0; i < kHalfKeyNum; ++i) {
+    TestFixture::VerifyWrite(i, i + 1);
+  }
+  for (size_t i = 0; i < kHalfKeyNum; ++i) {
+    TestFixture::VerifyRead(i, i + 1);
+  }
+}
+
+}  // namespace dbgroup::index::bw_tree::test
