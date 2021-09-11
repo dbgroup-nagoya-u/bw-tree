@@ -57,6 +57,22 @@ class BwTree
   static constexpr auto mo_relax = component::mo_relax;
 
   /*################################################################################################
+   * Internal classes
+   *##############################################################################################*/
+
+  struct DeltaNodeComp {
+    constexpr bool
+    operator()(const Node_t *a, const Node_t *b) const noexcept
+    {
+      assert(a != nullptr && b != nullptr);
+
+      const auto meta_a = a->GetMetadata(0), meta_b = b->GetMetadata(0);
+      const auto key_a = a->GetKey(meta_a), key_b = b->GetKey(meta_b);
+      return Compare{}(key_a, key_b);
+    }
+  };
+
+  /*################################################################################################
    * Internal member variables
    *##############################################################################################*/
 
