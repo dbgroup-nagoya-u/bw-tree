@@ -46,6 +46,7 @@ class BwTree
   using MappingTable_t = component::MappingTable<Key, Compare>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
   using NodeStack_t = std::vector<Mapping_t *, ::dbgroup::memory::STLAlloc<Mapping_t *>>;
+  using NodeVec_t = std::vector<Node_t *, ::dbgroup::memory::STLAlloc<Node_t *>>;
   using Binary_p = std::unique_ptr<std::remove_pointer_t<Payload>,
                                    ::dbgroup::memory::Deleter<std::remove_pointer_t<Payload>>>;
 
@@ -245,9 +246,103 @@ class BwTree
     }
   }
 
+  Key
+  SortDeltaRecords(  //
+      Node_t *cur_node,
+      NodeVec_t &delta_nodes,
+      NodeVec_t &base_nodes,
+      size_t &page_size)
+  {
+    Node_t *last_smo_delta = nullptr;
+    Key high_key;
+
+    while (true) {
+      switch (cur_node->GetDeltaNodeType()) {
+        case DeltaNodeType::kInsert:
+        case DeltaNodeType::kDelete: {
+          // ...
+          break;
+        }
+        case DeltaNodeType::kSplit: {
+          if (last_smo_delta == nullptr) {
+            // keep this delta node to get a highest key
+            last_smo_delta = cur_node;
+          }
+        }
+        case DeltaNodeType::kMerge: {
+          // traverse a merged delta chain recursively
+          const auto meta = cur_node->GetMetadata(0);
+          auto merged_node = cur_node->template GetPayload<Node_t *>(meta);
+          SortDeltaRecords(merged_node, delta_nodes, base_nodes, page_size);
+
+          if (last_smo_delta == nullptr) {
+            // keep this delta node to get a highest key
+            last_smo_delta = cur_node;
+          }
+          break;
+        }
+        case DeltaNodeType::kNotDelta: {
+          base_nodes.emplace_back(cur_node);
+
+          // get a highest key and the offset at the end of its record
+          size_t high_idx;
+          if (last_smo_delta == nullptr) {
+            high_idx = cur_node->GetRecordCount() - 1;
+          } else {
+            const auto meta = last_smo_delta->GetMetadata(0);
+            const auto sep_key = last_smo_delta->GetKey(meta);
+            high_idx = cur_node->SearchRecord(sep_key, true);
+          }
+          const auto high_meta = cur_node->GetMetadata(high_idx);
+          high_key = cur_node->GetKey(high_meta);
+          const auto end_offset = high_meta.GetOffset() + high_meta.GetTotalLength();
+
+          // calculate a consolidated size
+          const auto low_meta = cur_node->GetMetadata(0);
+          const auto begin_offset = low_meta.GetOffset();
+          page_size += (end_offset - begin_offset) + (high_idx + 1) * sizeof(Metadata);
+
+          goto sort_finished;
+        }
+        default:
+          // ignore remove-node deltas because consolidated delta chains do not have them
+          break;
+      }
+
+      // go to the next delta record or base node
+      cur_node = cur_node->GetNextNode();
+    }
+
+  sort_finished:
+    return high_key;
+  }
+
   /*################################################################################################
    * Internal structure modification functoins
    *##############################################################################################*/
+
+  void
+  Consolidate(  //
+      Mapping_t *page_id,
+      Node_t *cur_head)
+  {
+    // reserve vectors for delta nodes and base nodes to be consolidated
+    NodeVec_t delta_nodes, base_nodes;
+    delta_nodes.reserve(kMaxDeltaNodeNum * 4);
+    base_nodes.reserve(kMaxDeltaNodeNum);
+
+    // collect and sort delta records
+    size_t page_size = component::kHeaderLength;
+    SortDeltaRecords(cur_head, delta_nodes, base_nodes, page_size);
+
+    // create a consolidated node
+    const auto node_type = (cur_head->IsLeaf()) ? NodeType::kLeaf : NodeType::kInternal;
+    Node_t *consolidated_node =
+        ::dbgroup::memory::MallocNew<Node_t>(page_size, node_type, 0UL, nullptr);
+
+    // no retry for consolidation
+    page_id->compare_exchange_weak(cur_head, consolidated_node, mo_relax);
+  }
 
  public:
   /*################################################################################################
@@ -264,15 +359,15 @@ class BwTree
   {
     // create an empty leaf node
     Mapping_t *child_page_id = mapping_table_.GetNewLogicalID();
-    Node_t *empty_leaf = ::dbgroup::memory::MallocNew<Node_t>(
-        component::kHeaderLength, component::NodeType::kLeaf, 0UL, nullptr);
+    Node_t *empty_leaf = ::dbgroup::memory::MallocNew<Node_t>(component::kHeaderLength,
+                                                              NodeType::kLeaf, 0UL, nullptr);
     child_page_id->store(empty_leaf, mo_relax);
 
     // create an empty Bw-tree
     root_ = mapping_table_.GetNewLogicalID();
     auto offset = component::kHeaderLength + sizeof(Metadata) + sizeof(Mapping_t *);
     Node_t *initial_root =
-        ::dbgroup::memory::MallocNew<Node_t>(offset, component::NodeType::kInternal, 1UL, nullptr);
+        ::dbgroup::memory::MallocNew<Node_t>(offset, NodeType::kInternal, 1UL, nullptr);
     initial_root->template SetPayload<Mapping_t *>(offset, child_page_id, sizeof(Mapping_t *));
     initial_root->SetMetadata(0, offset, 0, sizeof(Mapping_t *));
     root_->store(initial_root, mo_relax);
