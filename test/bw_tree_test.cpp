@@ -180,4 +180,19 @@ TYPED_TEST(BwTreeFixture, Write_UniqueKeys_ReadWrittenValues)
   }
 }
 
+TYPED_TEST(BwTreeFixture, Write_DuplicateKeys_ReadLatestValue)
+{
+  constexpr size_t kHalfKeyNum = TestFixture::kSmallKeyNum / 2;
+
+  for (size_t i = 0; i < kHalfKeyNum; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+  for (size_t i = 0; i < kHalfKeyNum; ++i) {
+    TestFixture::VerifyWrite(i, i + 1);
+  }
+  for (size_t i = 0; i < kHalfKeyNum; ++i) {
+    TestFixture::VerifyRead(i, i + 1);
+  }
+}
+
 }  // namespace dbgroup::index::bw_tree::test
