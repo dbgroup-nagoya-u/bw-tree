@@ -175,9 +175,9 @@ class BwTree
     // check whether there are incomplete SMOs
     while (cur_node != prev_head) {
       switch (cur_node->GetDeltaNodeType()) {
-        case DeltaNodeType::kSplit:
-          auto meta = cur_node->GetMetadata(0);
-          auto sep_key = cur_node->GetKey(meta);
+        case DeltaNodeType::kSplit: {
+          const auto meta = cur_node->GetMetadata(0);
+          const auto sep_key = cur_node->GetKey(meta);
           if (Compare{}(sep_key, key) || (!range_closed && !Compare{}(key, sep_key))) {
             // there may be incomplete split
             // CompleteSplit();
@@ -190,8 +190,8 @@ class BwTree
           // although this split may be incomplete, the other SMOs in this chain must be complete
           ++delta_chain_length;
           goto no_incomplete_smo;
-
-        case DeltaNodeType::kRemoveNode:
+        }
+        case DeltaNodeType::kRemoveNode: {
           // there may be incomplete merging
           // CompleteMerge();
 
@@ -202,16 +202,16 @@ class BwTree
           page_id = stack.back();
           cur_head = page_id->load(mo_relax);
           return ValidateNode(key, range_closed, page_id, cur_head, nullptr, stack, consol_node);
-
-        case DeltaNodeType::kMerge:
+        }
+        case DeltaNodeType::kMerge: {
           // there are no incomplete SMOs
           ++delta_chain_length;
           goto no_incomplete_smo;
-
-        case DeltaNodeType::kNotDelta:
+        }
+        case DeltaNodeType::kNotDelta: {
           // there are no incomplete SMOs
           goto no_incomplete_smo;
-
+        }
         default:
           break;
       }

@@ -274,7 +274,7 @@ class Node
   void
   SetNextNode(const Node *next_node)
   {
-    next_node_ = next_node;
+    next_node_ = const_cast<Node *>(next_node);
   }
 
   /*################################################################################################

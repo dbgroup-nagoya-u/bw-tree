@@ -52,7 +52,9 @@ class BwTreeFixture : public testing::Test
    * Internal constants
    *##############################################################################################*/
 
-  static constexpr size_t kKeyNumForTest = 1024;
+  static constexpr size_t kKeyNumForTest = 4096;
+  static constexpr size_t kSmallKeyNum = kMaxDeltaNodeNum;
+  static constexpr size_t kLargeKeyNum = kKeyNumForTest / 2;
   static constexpr size_t kKeyLength = kWordLength;
   static constexpr size_t kPayloadLength = kWordLength;
 
@@ -126,6 +128,16 @@ class BwTreeFixture : public testing::Test
       }
     }
   }
+
+  void
+  VerifyWrite(  //
+      const size_t key_id,
+      const size_t payload_id)
+  {
+    auto rc = bw_tree->Write(keys[key_id], payloads[payload_id], key_length, payload_length);
+
+    EXPECT_EQ(ReturnCode::kSuccess, rc);
+  }
 };
 
 /*##################################################################################################
@@ -157,5 +169,15 @@ TYPED_TEST(BwTreeFixture, Read_EmptyIndex_ReadFail)
 /*--------------------------------------------------------------------------------------------------
  * Write operation tests
  *------------------------------------------------------------------------------------------------*/
+
+TYPED_TEST(BwTreeFixture, Write_UniqueKeys_ReadWrittenValues)
+{
+  for (size_t i = 0; i < TestFixture::kSmallKeyNum; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+  for (size_t i = 0; i < TestFixture::kSmallKeyNum; ++i) {
+    TestFixture::VerifyRead(i, i);
+  }
+}
 
 }  // namespace dbgroup::index::bw_tree::test
