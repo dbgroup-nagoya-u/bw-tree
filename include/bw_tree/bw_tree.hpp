@@ -454,6 +454,39 @@ class BwTree
     }
   }
 
+  size_t
+  CalculatePageSize(  //
+      const Key &high_key,
+      Node_t *base_node,
+      RecordVec_t &records)
+  {
+    size_t page_size = component::kHeaderLength;
+
+    // add the size of delta records
+    int64_t rec_num = records.size();
+    for (auto &&rec : records) {
+      if (rec.first->GetDeltaType() != DeltaNodeType::kDelete) {
+        page_size += rec.second.GetTotalLength();
+      } else {
+        rec_num -= 2;
+      }
+    }
+
+    // add the size of metadata
+    auto [existence, base_rec_num] = base_node->SearchRecord(high_key, true);
+    if (existence == ReturnCode::kKeyExist) ++base_rec_num;
+    rec_num += base_rec_num;
+    page_size += rec_num * sizeof(Metadata);
+
+    // add the size of records in a base node
+    const auto begin_offset = base_node->GetMetadata(0).GetOffset();
+    const auto end_meta = base_node->GetMetadata(base_rec_num - 1);
+    const auto end_offset = end_meta.GetOffset() + end_meta.GetTotalLength();
+    page_size += end_offset - begin_offset;
+
+    return page_size;
+  }
+
   /*################################################################################################
    * Internal structure modification functoins
    *##############################################################################################*/
