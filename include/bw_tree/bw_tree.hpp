@@ -432,6 +432,28 @@ class BwTree
     return high_key;
   }
 
+  void
+  MergeRecords(  //
+      const Key &high_key,
+      RecordVec_t &records,
+      Node_t *base_node)
+  {
+    // get the number of records to be merged
+    auto [existence, rec_num] = base_node->SearchRecord(high_key, true);
+    if (existence == ReturnCode::kKeyExist) ++rec_num;
+
+    // insert records in a merged node
+    for (size_t i = 0; i < rec_num; ++i) {
+      const auto rec = std::make_pair(base_node, base_node->GetMetadata(i));
+      const auto it = std::lower_bound(records.begin(), records.end(), rec, RecordComp{});
+      if (it == records.end()) {
+        records.emplace_back(rec);
+      } else if (RecordComp{}(rec, *it)) {
+        records.insert(it, rec);
+      }
+    }
+  }
+
   /*################################################################################################
    * Internal structure modification functoins
    *##############################################################################################*/
