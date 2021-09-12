@@ -47,6 +47,8 @@ class BwTree
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
   using NodeStack_t = std::vector<Mapping_t *, ::dbgroup::memory::STLAlloc<Mapping_t *>>;
   using NodeVec_t = std::vector<Node_t *, ::dbgroup::memory::STLAlloc<Node_t *>>;
+  using RecordVec_t = std::vector<std::pair<Node_t *, Metadata>,
+                                  ::dbgroup::memory::STLAlloc<std::pair<Node_t *, Metadata>>>;
   using Binary_p = std::unique_ptr<std::remove_pointer_t<Payload>,
                                    ::dbgroup::memory::Deleter<std::remove_pointer_t<Payload>>>;
 
@@ -63,14 +65,15 @@ class BwTree
    * Internal classes
    *##############################################################################################*/
 
-  struct DeltaNodeComp {
+  struct RecordComp {
     constexpr bool
-    operator()(const Node_t *a, const Node_t *b) const noexcept
+    operator()(  //
+        const std::pair<Node_t *, Metadata> a,
+        const std::pair<Node_t *, Metadata> b) const noexcept
     {
-      assert(a != nullptr && b != nullptr);
+      assert(a.first != nullptr && b.first != nullptr);
 
-      const auto meta_a = a->GetMetadata(0), meta_b = b->GetMetadata(0);
-      const auto key_a = a->GetKey(meta_a), key_b = b->GetKey(meta_b);
+      const auto key_a = a.first->GetKey(a.second), key_b = b.first->GetKey(b.second);
       return Compare{}(key_a, key_b);
     }
   };
@@ -350,9 +353,8 @@ class BwTree
   Key
   SortDeltaRecords(  //
       Node_t *cur_node,
-      NodeVec_t &deltas,
+      RecordVec_t &records,
       NodeVec_t &base_nodes,
-      size_t &page_size,
       Mapping_t *&sib_node)
   {
     Node_t *last_smo_delta = nullptr;
@@ -360,70 +362,55 @@ class BwTree
 
     while (true) {
       switch (cur_node->GetDeltaNodeType()) {
-        case DeltaNodeType::kInsert: {
-          // check whether this insert-delta has a new key
-          auto it = std::lower_bound(deltas.begin(), deltas.end(), cur_node, DeltaNodeComp{});
-          if (it != deltas.end() && !component::IsEqual<DeltaNodeComp>(*it, cur_node)) {
-            // keep insert-delta (the position is sorted by insertion sort)
-            deltas.insert(it + 1, cur_node);
-            const auto meta = cur_node->GetMetadata(0);
-            page_size += sizeof(Metadata) + meta.GetTotalLength();
-          }
-          break;
-        }
+        case DeltaNodeType::kInsert:
         case DeltaNodeType::kDelete: {
-          // check whether this delete-delta has a new key
-          auto it = std::lower_bound(deltas.begin(), deltas.end(), cur_node, DeltaNodeComp{});
-          if (it != deltas.end() && !component::IsEqual<DeltaNodeComp>(*it, cur_node)) {
-            // keep delete-delta (the position is sorted by insertion sort)
-            deltas.insert(it + 1, cur_node);
-            const auto meta = cur_node->GetMetadata(0);
-            page_size -= sizeof(Metadata) + meta.GetTotalLength();
+          // check whether this delta record has a new key
+          const auto rec = std::make_pair(cur_node, cur_node->GetMetadata(0));
+          auto it = std::lower_bound(records.begin(), records.end(), rec, RecordComp{});
+          if (it == records.end()) {
+            records.emplace_back(rec);
+          } else if (RecordComp{}(rec, *it)) {
+            records.insert(it, rec);
           }
+
           break;
         }
         case DeltaNodeType::kSplit: {
+          const auto meta = cur_node->GetMetadata(0);
           if (last_smo_delta == nullptr) {
-            // keep this delta node to get a highest key
+            // this delta record has a highest key
             last_smo_delta = cur_node;
+            high_key = cur_node->GetKey(meta);
           }
           if (sib_node == nullptr) {
-            const auto meta = cur_node->GetMetadata(0);
             sib_node = cur_node->template GetPayload<Mapping_t *>(meta);
           }
+
+          break;
         }
         case DeltaNodeType::kMerge: {
-          // traverse a merged delta chain recursively
           const auto meta = cur_node->GetMetadata(0);
-          auto merged_node = cur_node->template GetPayload<Node_t *>(meta);
-          SortDeltaRecords(merged_node, deltas, base_nodes, page_size, sib_node);
-
           if (last_smo_delta == nullptr) {
-            // keep this delta node to get a highest key
+            // this delta record has a highest key
             last_smo_delta = cur_node;
+            high_key = cur_node->GetKey(meta);
           }
+
+          // traverse a merged delta chain recursively
+          auto merged_node = cur_node->template GetPayload<Node_t *>(meta);
+          SortDeltaRecords(merged_node, records, base_nodes, sib_node);
+
           break;
         }
         case DeltaNodeType::kNotDelta: {
+          // keep a base node for later merge sort
           base_nodes.emplace_back(cur_node);
 
-          // get a highest key and the offset at the end of its record
-          size_t high_idx;
+          // get a highest key if needed
           if (last_smo_delta == nullptr) {
-            high_idx = cur_node->GetRecordCount() - 1;
-          } else {
-            const auto meta = last_smo_delta->GetMetadata(0);
-            const auto sep_key = last_smo_delta->GetKey(meta);
-            high_idx = cur_node->SearchRecord(sep_key, true);
+            const auto meta = cur_node->GetMetadata(cur_node->GetRecordCount() - 1);
+            high_key = cur_node->GetKey(meta);
           }
-          const auto high_meta = cur_node->GetMetadata(high_idx);
-          high_key = cur_node->GetKey(high_meta);
-          const auto end_offset = high_meta.GetOffset() + high_meta.GetTotalLength();
-
-          // calculate a consolidated size
-          const auto low_meta = cur_node->GetMetadata(0);
-          const auto begin_offset = low_meta.GetOffset();
-          page_size += (end_offset - begin_offset) + (high_idx + 1) * sizeof(Metadata);
 
           // get a sibling node if needed
           if (sib_node == nullptr) {
