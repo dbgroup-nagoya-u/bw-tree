@@ -34,6 +34,8 @@ namespace dbgroup::index::bw_tree::component
 template <class Key, class Compare>
 class Node
 {
+  using Mapping_t = std::atomic<Node *>;
+
  private:
   /*################################################################################################
    * Internal variables
@@ -55,7 +57,7 @@ class Node
   uint64_t : 0;
 
   /// the pointer to the next node.
-  Node *next_node_;
+  uintptr_t next_node_;
 
   /// an actual data block (it starts with record metadata).
   Metadata meta_array_[0];
@@ -70,16 +72,16 @@ class Node
    *
    * @param node_type a flag to indicate whether a leaf or internal node is constructed.
    * @param record_count the number of records in this node.
-   * @param next_node the pointer to a sibling node.
+   * @param sib_node the pointer to a sibling node.
    */
   Node(  //
       const NodeType node_type,
       const size_t record_count,
-      const Node *next_node)
+      const Mapping_t *sib_node)
       : node_type_{node_type},
         delta_type_{DeltaNodeType::kNotDelta},
         record_count_{static_cast<uint16_t>(record_count)},
-        next_node_{const_cast<Node *>(next_node)}
+        next_node_{reinterpret_cast<const uintptr_t>(sib_node)}
   {
   }
 
@@ -143,7 +145,13 @@ class Node
   constexpr Node *
   GetNextNode() const
   {
-    return next_node_;
+    return const_cast<Node *>(reinterpret_cast<const Node *>(next_node_));
+  }
+
+  constexpr Mapping_t *
+  GetSiblingNode() const
+  {
+    return const_cast<Mapping_t *>(reinterpret_cast<const Mapping_t *>(next_node_));
   }
 
   /**
@@ -274,7 +282,7 @@ class Node
   void
   SetNextNode(const Node *next_node)
   {
-    next_node_ = const_cast<Node *>(next_node);
+    next_node_ = reinterpret_cast<const uintptr_t>(next_node);
   }
 
   /*################################################################################################
