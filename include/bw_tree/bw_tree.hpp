@@ -497,18 +497,26 @@ class BwTree
       Node_t *cur_head)
   {
     // reserve vectors for delta nodes and base nodes to be consolidated
-    NodeVec_t delta_nodes, base_nodes;
-    delta_nodes.reserve(kMaxDeltaNodeNum * 4);
+    RecordVec_t records;
+    NodeVec_t base_nodes;
+    records.reserve(kMaxDeltaNodeNum * 4);
     base_nodes.reserve(kMaxDeltaNodeNum);
 
     // collect and sort delta records
-    size_t page_size = component::kHeaderLength;
-    SortDeltaRecords(cur_head, delta_nodes, base_nodes, page_size);
+    Mapping_t *sib_node = nullptr;
+    const auto high_key = SortDeltaRecords(cur_head, records, base_nodes, sib_node);
+
+    // collect records in merged nodes
+    const auto merged_node_num = base_nodes.size() - 1;
+    for (size_t i = 0; i < merged_node_num; ++i) {
+      MergeRecords(high_key, records, base_nodes[i]);
+    }
 
     // create a consolidated node
-    const auto node_type = (cur_head->IsLeaf()) ? NodeType::kLeaf : NodeType::kInternal;
+    const auto page_size = CalculatePageSize(high_key, base_nodes[merged_node_num], records);
+    const component::NodeType node_type = cur_head->IsLeaf();
     Node_t *consolidated_node =
-        ::dbgroup::memory::MallocNew<Node_t>(page_size, node_type, 0UL, nullptr);
+        ::dbgroup::memory::MallocNew<Node_t>(page_size, node_type, 0UL, sib_node);
 
     // no retry for consolidation
     page_id->compare_exchange_weak(cur_head, consolidated_node, mo_relax);
