@@ -465,8 +465,8 @@ class BwTree
 
   size_t
   CalculatePageSize(  //
-      const Key &high_key,
       Node_t *base_node,
+      const size_t base_rec_num,
       RecordVec_t &records)
   {
     size_t page_size = component::kHeaderLength;
@@ -486,8 +486,6 @@ class BwTree
     }
 
     // add the size of metadata
-    auto [existence, base_rec_num] = base_node->SearchRecord(high_key, true);
-    if (existence == ReturnCode::kKeyExist) ++base_rec_num;
     rec_num += base_rec_num;
     page_size += rec_num * sizeof(Metadata);
 
@@ -524,14 +522,33 @@ class BwTree
       MergeRecords(high_key, records, base_nodes[i]);
     }
 
-    // create a consolidated node
-    const auto page_size = CalculatePageSize(high_key, base_nodes[merged_node_num], records);
-    const component::NodeType node_type = cur_head->IsLeaf();
-    Node_t *consolidated_node =
-        ::dbgroup::memory::MallocNew<Node_t>(page_size, node_type, 0UL, sib_node);
+    // reserve a page for a consolidated node
+    Node_t *base_node = base_nodes[merged_node_num];
+    auto [existence, base_rec_num] = base_node->SearchRecord(high_key, true);
+    if (existence == ReturnCode::kKeyExist) ++base_rec_num;
+    const auto page_size = CalculatePageSize(base_node, base_rec_num, records);
+    const NodeType node_type = cur_head->IsLeaf();
+    Node_t *consol_node = ::dbgroup::memory::MallocNew<Node_t>(page_size, node_type, 0UL, sib_node);
+
+    // copy records from a delta chain and base node
+    const auto delta_rec_num = records.size();
+    for (size_t i = 0, j = 0; i < delta_rec_num; ++i) {
+      const auto [delta, delta_meta] = records[i];
+      const auto delta_key = delta->GetKey(delta_meta);
+
+      Metadata base_meta;
+      Key base_key;
+      for (; j < base_rec_num; ++j) {
+        base_meta = base_node->GetMetadata(j);
+        base_key = base_node->GetKey(base_meta);
+        if (Compare{}(base_key, delta_key)) {
+          /* code */
+        }
+      }
+    }
 
     // no retry for consolidation
-    page_id->compare_exchange_weak(cur_head, consolidated_node, mo_relax);
+    page_id->compare_exchange_weak(cur_head, consol_node, mo_relax);
   }
 
  public:
