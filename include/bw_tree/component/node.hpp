@@ -342,15 +342,20 @@ class Node
   size_t
   CopyRecordTo(  //
       Node *copied_node,
+      size_t position,
       size_t offset,
       const Metadata meta)
   {
     const auto total_length = meta.GetTotalLength();
     offset -= total_length;
 
+    // copy a record
     auto src_addr = ShiftAddress(this, meta.GetOffset());
     auto dest_addr = ShiftAddress(copied_node, offset);
     memcpy(dest_addr, src_addr, total_length);
+
+    // set record metadata
+    copied_node->SetMetadata(position, offset, meta.GetKeyLength(), total_length);
 
     return offset;
   }

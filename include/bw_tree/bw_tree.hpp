@@ -526,28 +526,45 @@ class BwTree
     Node_t *base_node = base_nodes[merged_node_num];
     auto [existence, base_rec_num] = base_node->SearchRecord(high_key, true);
     if (existence == ReturnCode::kKeyExist) ++base_rec_num;
-    const auto page_size = CalculatePageSize(base_node, base_rec_num, records);
+    auto offset = CalculatePageSize(base_node, base_rec_num, records);
     const NodeType node_type = cur_head->IsLeaf();
-    Node_t *consol_node = ::dbgroup::memory::MallocNew<Node_t>(page_size, node_type, 0UL, sib_node);
+    Node_t *consol_node = ::dbgroup::memory::MallocNew<Node_t>(offset, node_type, 0UL, sib_node);
 
     // copy records from a delta chain and base node
+    Metadata meta;
+    Key base_key;
+    size_t rec_num = 0, j = 0;
     const auto delta_rec_num = records.size();
-    for (size_t i = 0, j = 0; i < delta_rec_num; ++i) {
+    for (size_t i = 0; i < delta_rec_num; ++i) {
       const auto [delta, delta_meta] = records[i];
       const auto delta_key = delta->GetKey(delta_meta);
 
-      Metadata base_meta;
-      Key base_key;
+      // copy records in a base node
       for (; j < base_rec_num; ++j) {
-        base_meta = base_node->GetMetadata(j);
-        base_key = base_node->GetKey(base_meta);
+        meta = base_node->GetMetadata(j);
+        base_key = base_node->GetKey(meta);
         if (Compare{}(base_key, delta_key)) {
-          /* code */
+          offset = base_node->CopyRecordTo(consol_node, rec_num++, offset, meta);
+        } else {
+          break;
         }
       }
-    }
 
-    // no retry for consolidation
+      // copy a delta record
+      if (delta->GetDeltaType() != DeltaNodeType::kDelete) {
+        offset = delta->CopyRecordTo(consol_node, rec_num++, offset, delta_meta);
+      }
+      if (!Compare{}(delta_key, base_key)) {
+        ++j;  // a base node has the same key, so skip it
+      }
+    }
+    // copy remaining records
+    for (; j < base_rec_num; ++j) {
+      offset = base_node->CopyRecordTo(consol_node, rec_num++, offset, base_node->GetMetadata(j));
+    }
+    consol_node->SetRecordCount(rec_num);
+
+    // no CAS retry for consolidation
     page_id->compare_exchange_weak(cur_head, consol_node, mo_relax);
   }
 
