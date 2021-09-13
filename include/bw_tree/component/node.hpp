@@ -217,6 +217,18 @@ class Node
     }
   }
 
+  void
+  SetNextNode(const Node *next_node)
+  {
+    next_node_ = reinterpret_cast<const uintptr_t>(next_node);
+  }
+
+  void
+  SetRecordCount(const size_t rec_num)
+  {
+    record_count_ = rec_num;
+  }
+
   /**
    * @brief Set record metadata.
    *
@@ -277,12 +289,6 @@ class Node
       offset -= sizeof(T);
       memcpy(ShiftAddress(this, offset), &payload, sizeof(T));
     }
-  }
-
-  void
-  SetNextNode(const Node *next_node)
-  {
-    next_node_ = reinterpret_cast<const uintptr_t>(next_node);
   }
 
   /*################################################################################################
