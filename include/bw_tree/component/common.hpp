@@ -56,7 +56,8 @@ enum NodeType : uint16_t
 enum DeltaNodeType : uint16_t
 {
   kNotDelta = 0,
-  kInsert,  // an insert/modify/index-entry delta in the paper.
+  kInsert,
+  kModify,
   kDelete,
   kSplit,
   kRemoveNode,

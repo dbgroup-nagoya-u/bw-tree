@@ -114,6 +114,7 @@ class BwTree
       while (true) {
         switch (cur_head->GetDeltaNodeType()) {
           case DeltaNodeType::kInsert:
+          case DeltaNodeType::kModify:
           case DeltaNodeType::kDelete: {
             // check whether this delta record includes a target key
             const auto meta0 = cur_head->GetMetadata(0), meta1 = cur_head->GetMetadata(1);
@@ -266,7 +267,8 @@ class BwTree
     // traverse a delta chain and a base node
     while (true) {
       switch (cur_head->GetDeltaNodeType()) {
-        case DeltaNodeType::kInsert: {
+        case DeltaNodeType::kInsert:
+        case DeltaNodeType::kModify: {
           // check whether this delta record includes a target key
           const auto meta = cur_head->GetMetadata(0);
           const auto rec_key = cur_head->GetKey(meta);
@@ -364,6 +366,7 @@ class BwTree
     while (true) {
       switch (cur_node->GetDeltaNodeType()) {
         case DeltaNodeType::kInsert:
+        case DeltaNodeType::kModify:
         case DeltaNodeType::kDelete: {
           // check whether this delta record is in current key-range
           const auto rec = std::make_pair(cur_node, cur_node->GetMetadata(0));
@@ -471,8 +474,12 @@ class BwTree
     // add the size of delta records
     int64_t rec_num = records.size();
     for (auto &&rec : records) {
-      if (rec.first->GetDeltaType() != DeltaNodeType::kDelete) {
+      const auto delta_type = rec.first->GetDeltaType();
+      if (delta_type == DeltaNodeType::kInsert) {
         page_size += rec.second.GetTotalLength();
+      } else if (delta_type == DeltaNodeType::kModify) {
+        page_size += rec.second.GetPayloadLength();
+        --rec_num;
       } else {
         rec_num -= 2;
       }
