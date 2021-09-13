@@ -365,7 +365,7 @@ class BwTree
     return existence;
   }
 
-  std::pair<Key, Node_t *>
+  std::pair<Key, Mapping_t *>
   SortDeltaRecords(  //
       Node_t *cur_node,
       RecordVec_t &records,
@@ -373,7 +373,7 @@ class BwTree
   {
     bool is_last_smo = true, has_sep_rec = false;
     Key high_key;
-    Node_t *sib_node;
+    Mapping_t *sib_node;
     std::pair<Node_t *, Metadata> sep_rec;
 
     while (true) {
@@ -487,7 +487,7 @@ class BwTree
     // add the size of delta records
     int64_t rec_num = records.size();
     for (auto &&rec : records) {
-      const auto delta_type = rec.first->GetDeltaType();
+      const auto delta_type = rec.first->GetDeltaNodeType();
       if (delta_type == DeltaNodeType::kInsert) {
         page_size += rec.second.GetTotalLength();
       } else if (delta_type == DeltaNodeType::kModify) {
@@ -518,29 +518,41 @@ class BwTree
   void
   Consolidate(  //
       Mapping_t *page_id,
-      Node_t *cur_head)
+      const Key &key,
+      const bool range_closed,
+      NodeStack_t &stack)
   {
+    // remove child nodes from a node stack
+    while (stack.back() != page_id) {
+      stack.pop_back();
+    }
+
     // reserve vectors for delta nodes and base nodes to be consolidated
     RecordVec_t records;
     NodeVec_t base_nodes;
     records.reserve(kMaxDeltaNodeNum * 4);
     base_nodes.reserve(kMaxDeltaNodeNum);
 
+    // check whether the target node is valid (containing a target key and no incomplete SMOs)
+    Mapping_t *dummy;
+    Node_t *cur_head = page_id->load(mo_relax);
+    ValidateNode(key, range_closed, page_id, cur_head, nullptr, stack, dummy);
+
     // collect and sort delta records
     const auto [high_key, sib_node] = SortDeltaRecords(cur_head, records, base_nodes);
-
-    // collect records in merged nodes
     const auto merged_node_num = base_nodes.size() - 1;
     for (size_t i = 0; i < merged_node_num; ++i) {
       MergeRecords(high_key, records, base_nodes[i]);
     }
 
-    // reserve a page for a consolidated node
+    // get a base node and the position of a highest key
     Node_t *base_node = base_nodes[merged_node_num];
     auto [existence, base_rec_num] = base_node->SearchRecord(high_key, true);
     if (existence == ReturnCode::kKeyExist) ++base_rec_num;
+
+    // reserve a page for a consolidated node
     auto offset = CalculatePageSize(base_node, base_rec_num, records);
-    const NodeType node_type = cur_head->IsLeaf();
+    const NodeType node_type = static_cast<NodeType>(cur_head->IsLeaf());
     Node_t *consol_node = ::dbgroup::memory::MallocNew<Node_t>(offset, node_type, 0UL, sib_node);
 
     // copy records from a delta chain and base node
@@ -564,21 +576,31 @@ class BwTree
       }
 
       // copy a delta record
-      if (delta->GetDeltaType() != DeltaNodeType::kDelete) {
+      if (delta->GetDeltaNodeType() != DeltaNodeType::kDelete) {
         offset = delta->CopyRecordTo(consol_node, rec_num++, offset, delta_meta);
       }
       if (!Compare{}(delta_key, base_key)) {
         ++j;  // a base node has the same key, so skip it
       }
     }
-    // copy remaining records
-    for (; j < base_rec_num; ++j) {
+    for (; j < base_rec_num; ++j) {  // copy remaining records
       offset = base_node->CopyRecordTo(consol_node, rec_num++, offset, base_node->GetMetadata(j));
     }
     consol_node->SetRecordCount(rec_num);
 
-    // no CAS retry for consolidation
-    page_id->compare_exchange_weak(cur_head, consol_node, mo_relax);
+    // install a consolidated node
+    const auto expected_head = cur_head;
+    while (true) {
+      if (page_id->compare_exchange_weak(cur_head, consol_node, mo_relax)) {
+        gc_.AddGarbage(cur_head);
+        break;
+      }
+      if (cur_head == expected_head) continue;
+
+      // no CAS retry for consolidation
+      ::dbgroup::memory::Delete(consol_node);
+      break;
+    }
   }
 
  public:
@@ -655,8 +677,7 @@ class BwTree
     const auto existence = CheckExistence(key, true, page_id, stack, consol_node, &payload);
 
     if (consol_node != nullptr) {
-      // execute consolidation
-      // Consolidate(consol_node);
+      Consolidate(consol_node, key, true, stack);
     }
 
     if (existence == kKeyExist) {
@@ -748,8 +769,7 @@ class BwTree
     }
 
     if (consol_node != nullptr) {
-      // execute consolidation
-      // Consolidate(consol_node);
+      Consolidate(consol_node, key, true, stack);
     }
 
     return ReturnCode::kSuccess;
