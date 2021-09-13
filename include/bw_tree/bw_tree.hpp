@@ -170,7 +170,7 @@ class BwTree
     }
 
   found_child_node:
-    if (delta_chain_length > kMaxDeltaNodeNum) {
+    if (delta_chain_length >= kMaxDeltaNodeNum) {
       consol_node = stack.back();
     }
 
@@ -258,7 +258,7 @@ class BwTree
     }
 
   no_incomplete_smo:
-    if (delta_chain_length > kMaxDeltaNodeNum) {
+    if (delta_chain_length >= kMaxDeltaNodeNum) {
       consol_node = page_id;
     }
   }
@@ -358,7 +358,7 @@ class BwTree
     }
 
   found_record:
-    if (delta_chain_length > kMaxDeltaNodeNum) {
+    if (delta_chain_length >= kMaxDeltaNodeNum) {
       consol_node = page_id;
     }
 

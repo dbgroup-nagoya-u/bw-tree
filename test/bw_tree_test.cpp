@@ -195,4 +195,14 @@ TYPED_TEST(BwTreeFixture, Write_DuplicateKeys_ReadLatestValue)
   }
 }
 
+TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithSMOs_ReadWrittenValues)
+{
+  for (size_t i = 0; i < TestFixture::kLargeKeyNum; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+  for (size_t i = 0; i < TestFixture::kLargeKeyNum; ++i) {
+    TestFixture::VerifyRead(i, i);
+  }
+}
+
 }  // namespace dbgroup::index::bw_tree::test
