@@ -350,55 +350,65 @@ class BwTree
     return existence;
   }
 
-  Key
+  std::pair<Key, Node_t *>
   SortDeltaRecords(  //
       Node_t *cur_node,
       RecordVec_t &records,
-      NodeVec_t &base_nodes,
-      Mapping_t *&sib_node)
+      NodeVec_t &base_nodes)
   {
-    Node_t *last_smo_delta = nullptr;
+    bool is_last_smo = true, has_sep_rec = false;
     Key high_key;
+    Node_t *sib_node;
+    std::pair<Node_t *, Metadata> sep_rec;
 
     while (true) {
       switch (cur_node->GetDeltaNodeType()) {
         case DeltaNodeType::kInsert:
         case DeltaNodeType::kDelete: {
-          // check whether this delta record has a new key
+          // check whether this delta record is in current key-range
           const auto rec = std::make_pair(cur_node, cur_node->GetMetadata(0));
-          auto it = std::lower_bound(records.begin(), records.end(), rec, RecordComp{});
-          if (it == records.end()) {
-            records.emplace_back(rec);
-          } else if (RecordComp{}(rec, *it)) {
-            records.insert(it, rec);
+          if (!has_sep_rec || !RecordComp{}(sep_rec, rec)) {
+            // check whether this delta record has a new key
+            const auto it = std::lower_bound(records.begin(), records.end(), rec, RecordComp{});
+            if (it == records.end()) {
+              records.emplace_back(rec);
+            } else if (RecordComp{}(rec, *it)) {
+              records.insert(it, rec);
+            }
           }
 
           break;
         }
         case DeltaNodeType::kSplit: {
+          // get a separator key to ignore out-of-range keys
           const auto meta = cur_node->GetMetadata(0);
-          if (last_smo_delta == nullptr) {
-            // this delta record has a highest key
-            last_smo_delta = cur_node;
+          sep_rec = std::make_pair(cur_node, meta);
+          has_sep_rec = true;
+
+          if (is_last_smo) {
+            // this split delta has a highest key and a sibling node
             high_key = cur_node->GetKey(meta);
-          }
-          if (sib_node == nullptr) {
             sib_node = cur_node->template GetPayload<Mapping_t *>(meta);
+            is_last_smo = false;
           }
 
           break;
         }
         case DeltaNodeType::kMerge: {
+          // get a separator key to ignore out-of-range keys
           const auto meta = cur_node->GetMetadata(0);
-          if (last_smo_delta == nullptr) {
-            // this delta record has a highest key
-            last_smo_delta = cur_node;
-            high_key = cur_node->GetKey(meta);
-          }
+          sep_rec = std::make_pair(cur_node, meta);
+          has_sep_rec = true;
 
           // traverse a merged delta chain recursively
           auto merged_node = cur_node->template GetPayload<Node_t *>(meta);
-          SortDeltaRecords(merged_node, records, base_nodes, sib_node);
+          if (is_last_smo) {
+            // a merged right node has a highest key and a sibling node
+            std::tie(high_key, sib_node) = SortDeltaRecords(merged_node, records, base_nodes);
+            is_last_smo = false;
+          } else {
+            SortDeltaRecords(merged_node, records, base_nodes);
+          }
 
           break;
         }
@@ -406,14 +416,10 @@ class BwTree
           // keep a base node for later merge sort
           base_nodes.emplace_back(cur_node);
 
-          // get a highest key if needed
-          if (last_smo_delta == nullptr) {
+          if (is_last_smo) {
+            // if there are no SMOs, a base node has a highest key and a sibling node
             const auto meta = cur_node->GetMetadata(cur_node->GetRecordCount() - 1);
             high_key = cur_node->GetKey(meta);
-          }
-
-          // get a sibling node if needed
-          if (sib_node == nullptr) {
             sib_node = cur_node->GetSiblingNode();
           }
 
@@ -429,7 +435,7 @@ class BwTree
     }
 
   sort_finished:
-    return high_key;
+    return {high_key, sib_node};
   }
 
   void
@@ -503,8 +509,7 @@ class BwTree
     base_nodes.reserve(kMaxDeltaNodeNum);
 
     // collect and sort delta records
-    Mapping_t *sib_node = nullptr;
-    const auto high_key = SortDeltaRecords(cur_head, records, base_nodes, sib_node);
+    const auto [high_key, sib_node] = SortDeltaRecords(cur_head, records, base_nodes);
 
     // collect records in merged nodes
     const auto merged_node_num = base_nodes.size() - 1;
