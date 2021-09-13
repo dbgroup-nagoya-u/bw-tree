@@ -91,14 +91,6 @@ class MappingTable
         Node_t *node = logical_ids_[i].load(mo_relax);
         if (node == nullptr) continue;
 
-        // release all delta nodes in this chain
-        Node_t *prev_node;
-        while (node->GetDeltaNodeType() != DeltaNodeType::kNotDelta) {
-          prev_node = node;
-          node = node->GetNextNode();
-          ::dbgroup::memory::Delete(prev_node);
-        }
-        // release a base node
         ::dbgroup::memory::Delete(node);
       }
     }

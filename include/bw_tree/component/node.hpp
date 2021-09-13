@@ -95,7 +95,7 @@ class Node
   Node(  //
       const NodeType node_type,
       const DeltaNodeType delta_type)
-      : node_type_{node_type}, delta_type_{delta_type}
+      : node_type_{node_type}, delta_type_{delta_type}, next_node_{0}
   {
   }
 
@@ -103,7 +103,14 @@ class Node
    * @brief Destroy the node object.
    *
    */
-  ~Node() = default;
+  ~Node()
+  {
+    // release nodes recursively until it reaches a base node
+    if (GetDeltaNodeType() != DeltaNodeType::kNotDelta) {
+      auto next_node = GetNextNode();
+      ::dbgroup::memory::Delete(next_node);
+    }
+  }
 
   Node(const Node &) = delete;
   Node &operator=(const Node &) = delete;
