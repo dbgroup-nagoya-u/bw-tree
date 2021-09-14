@@ -173,6 +173,16 @@ class Node
 
   /**
    * @param meta metadata of a corresponding record.
+   * @return auto: an address of a target key.
+   */
+  constexpr Key *
+  GetKeyAddr(const Metadata meta) const
+  {
+    return reinterpret_cast<Key *>(ShiftAddress(this, meta.GetOffset()));
+  }
+
+  /**
+   * @param meta metadata of a corresponding record.
    * @return Key: a target key.
    */
   constexpr Key
