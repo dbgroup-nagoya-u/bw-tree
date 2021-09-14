@@ -106,7 +106,7 @@ class Node
   ~Node()
   {
     // release nodes recursively until it reaches a base node
-    if (GetDeltaNodeType() != DeltaNodeType::kNotDelta) {
+    if (delta_type_ != DeltaNodeType::kNotDelta) {
       auto next_node = GetNextNode();
       ::dbgroup::memory::Delete(next_node);
     }

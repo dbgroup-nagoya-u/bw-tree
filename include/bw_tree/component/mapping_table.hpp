@@ -158,7 +158,12 @@ class MappingTable
    * @brief Construct a new MappingTable object.
    *
    */
-  MappingTable() : table_{CreateNewTable()} {}
+  MappingTable()
+  {
+    const auto table = CreateNewTable();
+    table_.store(table, mo_relax);
+    full_tables_.emplace_back(table);
+  }
 
   /**
    * @brief Destroy the MappingTable object.
@@ -199,7 +204,7 @@ class MappingTable
 
         // retain the old table to release nodes in it
         const auto guard = std::unique_lock<std::mutex>(full_tables_mtx_);
-        full_tables_.emplace_back(current_table);
+        full_tables_.emplace_back(new_table);
       } else {
         // since another thread may install a new mapping table, recheck a current table
         ::dbgroup::memory::Delete(new_table);
