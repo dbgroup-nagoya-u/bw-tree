@@ -49,6 +49,19 @@ class BwTree
   using Binary_p = std::unique_ptr<std::remove_pointer_t<Payload>,
                                    ::dbgroup::memory::Deleter<std::remove_pointer_t<Payload>>>;
 
+  struct KeyAddrComp {
+    constexpr bool
+    operator()(const void *a, const void *b) const noexcept
+    {
+      if constexpr (IsVariableLengthData<Key>()) {
+        return Compare{}(reinterpret_cast<Key>(const_cast<void *>(a)),
+                         reinterpret_cast<Key>(const_cast<void *>(b)));
+      } else {
+        return Compare{}(*reinterpret_cast<const Key *>(a), *reinterpret_cast<const Key *>(b));
+      }
+    }
+  };
+
   struct Record {
     Node_t *node;
     Metadata meta;
@@ -57,7 +70,7 @@ class BwTree
     constexpr bool
     operator<(const Record &comp) const noexcept
     {
-      return Compare{}(*key, *(comp.key));
+      return KeyAddrComp{}(this->key, comp.key);
     }
   };
 
