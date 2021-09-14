@@ -46,11 +46,22 @@ class BwTree
   using MappingTable_t = component::MappingTable<Key, Compare>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
   using NodeStack_t = std::vector<Mapping_t *, ::dbgroup::memory::STLAlloc<Mapping_t *>>;
-  using NodeVec_t = std::vector<Node_t *, ::dbgroup::memory::STLAlloc<Node_t *>>;
-  using RecordVec_t = std::vector<std::pair<Node_t *, Metadata>,
-                                  ::dbgroup::memory::STLAlloc<std::pair<Node_t *, Metadata>>>;
   using Binary_p = std::unique_ptr<std::remove_pointer_t<Payload>,
                                    ::dbgroup::memory::Deleter<std::remove_pointer_t<Payload>>>;
+
+  struct Record {
+    Node_t *node;
+    Metadata meta;
+    Key *key;
+
+    constexpr bool
+    operator<(const Record &comp) const noexcept
+    {
+      return Compare{}(*key, *(comp.key));
+    }
+  };
+
+  using RecordVec_t = std::vector<Record, ::dbgroup::memory::STLAlloc<Record>>;
 
  private:
   /*################################################################################################
@@ -60,23 +71,6 @@ class BwTree
   static constexpr auto mo_relax = component::mo_relax;
 
   static constexpr size_t kExpectedTreeHeight = 8;
-
-  /*################################################################################################
-   * Internal classes
-   *##############################################################################################*/
-
-  struct RecordComp {
-    constexpr bool
-    operator()(  //
-        const std::pair<Node_t *, Metadata> a,
-        const std::pair<Node_t *, Metadata> b) const noexcept
-    {
-      assert(a.first != nullptr && b.first != nullptr);
-
-      const auto key_a = a.first->GetKey(a.second), key_b = b.first->GetKey(b.second);
-      return Compare{}(key_a, key_b);
-    }
-  };
 
   /*################################################################################################
    * Internal member variables
