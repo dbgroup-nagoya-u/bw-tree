@@ -18,6 +18,7 @@
 
 #include <functional>
 #include <memory>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -372,16 +373,14 @@ class BwTree
     return existence;
   }
 
-  std::pair<Key, Mapping_t *>
+  std::tuple<Key *, Node_t *, Mapping_t *>
   SortDeltaRecords(  //
       Node_t *cur_node,
-      RecordVec_t &records,
-      NodeVec_t &base_nodes)
+      RecordVec_t &records)
   {
-    bool is_last_smo = true, has_sep_rec = false;
-    Key high_key;
+    bool is_last_smo = true;
     Mapping_t *sib_node;
-    std::pair<Node_t *, Metadata> sep_rec;
+    Key *sep_key = nullptr;
 
     while (true) {
       switch (cur_node->GetDeltaNodeType()) {
@@ -389,13 +388,14 @@ class BwTree
         case DeltaNodeType::kModify:
         case DeltaNodeType::kDelete: {
           // check whether this delta record is in current key-range
-          const auto rec = std::make_pair(cur_node, cur_node->GetMetadata(0));
-          if (!has_sep_rec || !RecordComp{}(sep_rec, rec)) {
+          const auto meta = cur_node->GetMetadata(0);
+          const Record rec{cur_node, meta, cur_node->GetKeyAddr(meta)};
+          if (sep_key == nullptr || KeyAddrComp{}(rec.key, sep_key)) {
             // check whether this delta record has a new key
-            const auto it = std::lower_bound(records.begin(), records.end(), rec, RecordComp{});
+            const auto it = std::lower_bound(records.begin(), records.end(), rec);
             if (it == records.end()) {
               records.emplace_back(rec);
-            } else if (RecordComp{}(rec, *it)) {
+            } else if (KeyAddrComp{}(rec.key, (*it).key)) {
               records.insert(it, rec);
             }
           }
@@ -405,12 +405,10 @@ class BwTree
         case DeltaNodeType::kSplit: {
           // get a separator key to ignore out-of-range keys
           const auto meta = cur_node->GetMetadata(0);
-          sep_rec = std::make_pair(cur_node, meta);
-          has_sep_rec = true;
+          sep_key = cur_node->GetKeyAddr(meta);
 
           if (is_last_smo) {
-            // this split delta has a highest key and a sibling node
-            high_key = cur_node->GetKey(meta);
+            // this split delta has a sibling node
             sib_node = cur_node->template GetPayload<Mapping_t *>(meta);
             is_last_smo = false;
           }
@@ -418,35 +416,32 @@ class BwTree
           break;
         }
         case DeltaNodeType::kMerge: {
-          // get a separator key to ignore out-of-range keys
           const auto meta = cur_node->GetMetadata(0);
-          sep_rec = std::make_pair(cur_node, meta);
-          has_sep_rec = true;
+          auto merged_node = cur_node->template GetPayload<Node_t *>(meta);
 
           // traverse a merged delta chain recursively
-          auto merged_node = cur_node->template GetPayload<Node_t *>(meta);
+          Key *key;
           if (is_last_smo) {
-            // a merged right node has a highest key and a sibling node
-            std::tie(high_key, sib_node) = SortDeltaRecords(merged_node, records, base_nodes);
+            // a merged right node has a sibling node
+            std::tie(key, merged_node, sib_node) = SortDeltaRecords(merged_node, records);
             is_last_smo = false;
           } else {
-            SortDeltaRecords(merged_node, records, base_nodes);
+            Mapping_t *dummy;
+            std::tie(key, merged_node, dummy) = SortDeltaRecords(merged_node, records);
           }
+
+          // add records in a merged base node
+          MergeRecords(key, records, merged_node);
 
           break;
         }
         case DeltaNodeType::kNotDelta: {
-          // keep a base node for later merge sort
-          base_nodes.emplace_back(cur_node);
-
           if (is_last_smo) {
-            // if there are no SMOs, a base node has a highest key and a sibling node
-            const auto meta = cur_node->GetMetadata(cur_node->GetRecordCount() - 1);
-            high_key = cur_node->GetKey(meta);
+            // if there are no SMOs, a base node has a sibling node
             sib_node = cur_node->GetSiblingNode();
           }
 
-          goto sort_finished;
+          return {sep_key, cur_node, sib_node};
         }
         default:
           // ignore remove-node deltas because consolidated delta chains do not have them
@@ -456,28 +451,32 @@ class BwTree
       // go to the next delta record or base node
       cur_node = cur_node->GetNextNode();
     }
-
-  sort_finished:
-    return {high_key, sib_node};
   }
 
   void
   MergeRecords(  //
-      const Key &high_key,
+      const Key *sep_key,
       RecordVec_t &records,
       Node_t *base_node)
   {
     // get the number of records to be merged
-    auto [existence, rec_num] = base_node->SearchRecord(high_key, true);
-    if (existence == ReturnCode::kKeyExist) ++rec_num;
+    size_t rec_num;
+    if (sep_key == nullptr) {
+      rec_num = base_node->GetRecordCount();
+    } else {
+      ReturnCode existence;
+      std::tie(existence, rec_num) = base_node->SearchRecord(*sep_key, true);
+      if (existence == ReturnCode::kKeyExist) ++rec_num;
+    }
 
     // insert records in a merged node
     for (size_t i = 0; i < rec_num; ++i) {
-      const auto rec = std::make_pair(base_node, base_node->GetMetadata(i));
-      const auto it = std::lower_bound(records.begin(), records.end(), rec, RecordComp{});
+      const auto meta = base_node->GetMetadata(i);
+      const Record rec{base_node, meta, base_node->GetKeyAddr(meta)};
+      const auto it = std::lower_bound(records.begin(), records.end(), rec);
       if (it == records.end()) {
         records.emplace_back(rec);
-      } else if (RecordComp{}(rec, *it)) {
+      } else if (KeyAddrComp{}(rec.key, (*it).key)) {
         records.insert(it, rec);
       }
     }
@@ -494,11 +493,11 @@ class BwTree
     // add the size of delta records
     int64_t rec_num = records.size();
     for (auto &&rec : records) {
-      const auto delta_type = rec.first->GetDeltaNodeType();
+      const auto delta_type = rec.node->GetDeltaNodeType();
       if (delta_type == DeltaNodeType::kInsert) {
-        page_size += rec.second.GetTotalLength();
+        page_size += rec.meta.GetTotalLength();
       } else if (delta_type == DeltaNodeType::kModify) {
-        page_size += rec.second.GetPayloadLength();
+        page_size += rec.meta.GetPayloadLength();
         --rec_num;
       } else {
         rec_num -= 2;
@@ -510,8 +509,8 @@ class BwTree
     page_size += rec_num * sizeof(Metadata);
 
     // add the size of records in a base node
-    const auto begin_offset = base_node->GetMetadata(0).GetOffset();
-    const auto end_meta = base_node->GetMetadata(base_rec_num - 1);
+    const auto begin_offset = base_node->GetMetadata(base_rec_num - 1).GetOffset();
+    const auto end_meta = base_node->GetMetadata(0);
     const auto end_offset = end_meta.GetOffset() + end_meta.GetTotalLength();
     page_size += end_offset - begin_offset;
 
@@ -536,9 +535,7 @@ class BwTree
 
     // reserve vectors for delta nodes and base nodes to be consolidated
     RecordVec_t records;
-    NodeVec_t base_nodes;
     records.reserve(kMaxDeltaNodeNum * 4);
-    base_nodes.reserve(kMaxDeltaNodeNum);
 
     // check whether the target node is valid (containing a target key and no incomplete SMOs)
     Mapping_t *dummy;
@@ -546,16 +543,17 @@ class BwTree
     ValidateNode(key, range_closed, page_id, cur_head, nullptr, stack, dummy);
 
     // collect and sort delta records
-    const auto [high_key, sib_node] = SortDeltaRecords(cur_head, records, base_nodes);
-    const auto merged_node_num = base_nodes.size() - 1;
-    for (size_t i = 0; i < merged_node_num; ++i) {
-      MergeRecords(high_key, records, base_nodes[i]);
-    }
+    const auto [sep_key, base_node, sib_node] = SortDeltaRecords(cur_head, records);
 
     // get a base node and the position of a highest key
-    Node_t *base_node = base_nodes[merged_node_num];
-    auto [existence, base_rec_num] = base_node->SearchRecord(high_key, true);
-    if (existence == ReturnCode::kKeyExist) ++base_rec_num;
+    size_t base_rec_num;
+    if (sep_key == nullptr) {
+      base_rec_num = base_node->GetRecordCount();
+    } else {
+      ReturnCode existence;
+      std::tie(existence, base_rec_num) = base_node->SearchRecord(*sep_key, true);
+      if (existence == ReturnCode::kKeyExist) ++base_rec_num;
+    }
 
     // reserve a page for a consolidated node
     auto offset = CalculatePageSize(base_node, base_rec_num, records);
@@ -564,18 +562,17 @@ class BwTree
 
     // copy records from a delta chain and base node
     Metadata meta;
-    Key base_key;
+    Key *base_key{};
     size_t rec_num = 0, j = 0;
     const auto delta_rec_num = records.size();
     for (size_t i = 0; i < delta_rec_num; ++i) {
-      const auto [delta, delta_meta] = records[i];
-      const auto delta_key = delta->GetKey(delta_meta);
+      const auto [delta, delta_meta, delta_key] = records[i];
 
       // copy records in a base node
       for (; j < base_rec_num; ++j) {
         meta = base_node->GetMetadata(j);
-        base_key = base_node->GetKey(meta);
-        if (Compare{}(base_key, delta_key)) {
+        base_key = base_node->GetKeyAddr(meta);
+        if (KeyAddrComp{}(base_key, delta_key)) {
           offset = base_node->CopyRecordTo(consol_node, rec_num++, offset, meta);
         } else {
           break;
@@ -586,7 +583,7 @@ class BwTree
       if (delta->GetDeltaNodeType() != DeltaNodeType::kDelete) {
         offset = delta->CopyRecordTo(consol_node, rec_num++, offset, delta_meta);
       }
-      if (!Compare{}(delta_key, base_key)) {
+      if (j < base_rec_num && !KeyAddrComp{}(delta_key, base_key)) {
         ++j;  // a base node has the same key, so skip it
       }
     }
@@ -646,7 +643,7 @@ class BwTree
    * @brief Destroy the BwTree object.
    *
    */
-  ~BwTree() {}
+  ~BwTree() = default;
 
   BwTree(const BwTree &) = delete;
   BwTree &operator=(const BwTree &) = delete;
@@ -680,7 +677,7 @@ class BwTree
 
     // prepare variables to read a record
     Mapping_t *page_id = stack.back();
-    Payload payload;
+    Payload payload{};
     const auto existence = CheckExistence(key, true, page_id, stack, consol_node, &payload);
 
     if (consol_node != nullptr) {

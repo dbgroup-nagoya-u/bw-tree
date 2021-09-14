@@ -52,8 +52,8 @@ class BwTreeFixture : public testing::Test
    * Internal constants
    *##############################################################################################*/
 
-  static constexpr size_t kKeyNumForTest = 4096;
-  static constexpr size_t kSmallKeyNum = kMaxDeltaNodeNum;
+  static constexpr size_t kKeyNumForTest = 512;
+  static constexpr size_t kSmallKeyNum = kMaxDeltaNodeNum - 1;
   static constexpr size_t kLargeKeyNum = kKeyNumForTest / 2;
   static constexpr size_t kKeyLength = kWordLength;
   static constexpr size_t kPayloadLength = kWordLength;
