@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "common.hpp"
+#include "memory/utility.hpp"
 #include "metadata.hpp"
 
 namespace dbgroup::index::bw_tree::component
@@ -34,6 +35,8 @@ namespace dbgroup::index::bw_tree::component
 template <class Key, class Compare>
 class Node
 {
+  using Mapping_t = std::atomic<Node *>;
+
  private:
   /*################################################################################################
    * Internal variables
@@ -55,7 +58,7 @@ class Node
   uint64_t : 0;
 
   /// the pointer to the next node.
-  Node *next_node_;
+  uintptr_t next_node_;
 
   /// an actual data block (it starts with record metadata).
   Metadata meta_array_[0];
@@ -70,16 +73,16 @@ class Node
    *
    * @param node_type a flag to indicate whether a leaf or internal node is constructed.
    * @param record_count the number of records in this node.
-   * @param next_node the pointer to a sibling node.
+   * @param sib_node the pointer to a sibling node.
    */
   Node(  //
       const NodeType node_type,
       const size_t record_count,
-      const Node *next_node)
+      const Mapping_t *sib_node)
       : node_type_{node_type},
         delta_type_{DeltaNodeType::kNotDelta},
         record_count_{static_cast<uint16_t>(record_count)},
-        next_node_{const_cast<Node *>(next_node)}
+        next_node_{reinterpret_cast<const uintptr_t>(sib_node)}
   {
   }
 
@@ -93,7 +96,7 @@ class Node
   Node(  //
       const NodeType node_type,
       const DeltaNodeType delta_type)
-      : node_type_{node_type}, delta_type_{delta_type}
+      : node_type_{node_type}, delta_type_{delta_type}, next_node_{0}
   {
   }
 
@@ -101,12 +104,59 @@ class Node
    * @brief Destroy the node object.
    *
    */
-  ~Node() = default;
+  ~Node()
+  {
+    // release nodes recursively until it reaches a base node
+    if (delta_type_ != DeltaNodeType::kNotDelta) {
+      auto next_node = GetNextNode();
+      ::dbgroup::memory::Delete(next_node);
+    }
+  }
 
   Node(const Node &) = delete;
   Node &operator=(const Node &) = delete;
   Node(Node &&) = delete;
   Node &operator=(Node &&) = delete;
+
+  /*################################################################################################
+   * Public node builders
+   *##############################################################################################*/
+
+  static Node *
+  CreateNode(  //
+      const size_t node_size,
+      const NodeType node_type,
+      const size_t record_count,
+      const Mapping_t *sib_node)
+  {
+    return new (::operator new(node_size)) Node{node_type, record_count, sib_node};
+  }
+
+  /*################################################################################################
+   * Public delta node builders
+   *##############################################################################################*/
+
+  template <class T>
+  static Node *
+  CreateDeltaNode(  //
+      const NodeType node_type,
+      const DeltaNodeType delta_type,
+      const Key &key,
+      const size_t key_length,
+      const T &payload,
+      const size_t payload_length)
+  {
+    const size_t total_length = key_length + payload_length;
+    size_t offset = kHeaderLength + sizeof(Metadata) + total_length;
+
+    auto delta = new (::operator new(offset)) Node{node_type, delta_type};
+
+    delta->SetPayload(offset, payload, payload_length);
+    delta->SetKey(offset, key, key_length);
+    delta->SetMetadata(0, offset, key_length, total_length);
+
+    return delta;
+  }
 
   /*################################################################################################
    * Public getters/setters
@@ -143,7 +193,13 @@ class Node
   constexpr Node *
   GetNextNode() const
   {
-    return next_node_;
+    return const_cast<Node *>(reinterpret_cast<const Node *>(next_node_));
+  }
+
+  constexpr Mapping_t *
+  GetSiblingNode() const
+  {
+    return const_cast<Mapping_t *>(reinterpret_cast<const Mapping_t *>(next_node_));
   }
 
   /**
@@ -154,6 +210,16 @@ class Node
   GetMetadata(const size_t position) const
   {
     return meta_array_[position];
+  }
+
+  /**
+   * @param meta metadata of a corresponding record.
+   * @return auto: an address of a target key.
+   */
+  constexpr Key *
+  GetKeyAddr(const Metadata meta) const
+  {
+    return reinterpret_cast<Key *>(ShiftAddress(this, meta.GetOffset()));
   }
 
   /**
@@ -202,11 +268,23 @@ class Node
     const auto offset = meta.GetOffset() + meta.GetKeyLength();
     if constexpr (IsVariableLengthData<Payload>()) {
       const auto payload_length = meta.GetPayloadLength();
-      out_payload = ::dbgroup::memory::MallocNew<std::remove_pointer_t<Payload>>(payload_length);
+      out_payload = reinterpret_cast<Payload>(::operator new(payload_length));
       memcpy(out_payload, ShiftAddress(this, offset), payload_length);
     } else {
       memcpy(&out_payload, ShiftAddress(this, offset), sizeof(Payload));
     }
+  }
+
+  void
+  SetNextNode(const Node *next_node)
+  {
+    next_node_ = reinterpret_cast<const uintptr_t>(next_node);
+  }
+
+  void
+  SetRecordCount(const size_t rec_num)
+  {
+    record_count_ = rec_num;
   }
 
   /**
@@ -271,12 +349,6 @@ class Node
     }
   }
 
-  void
-  SetNextNode(const Node *next_node)
-  {
-    next_node_ = const_cast<Node *>(next_node);
-  }
-
   /*################################################################################################
    * Public utility functions
    *##############################################################################################*/
@@ -325,40 +397,38 @@ class Node
     return {rc, begin_idx};
   }
 
-  /*################################################################################################
-   * Public node builders
-   *##############################################################################################*/
-
-  static Node *
-  CreateEmptyNode()
+  size_t
+  CopyRecordTo(  //
+      Node *copied_node,
+      size_t position,
+      size_t offset,
+      const Metadata meta)
   {
-  }
+    const auto total_length = meta.GetTotalLength();
+    offset -= total_length;
 
-  /*################################################################################################
-   * Public delta node builders
-   *##############################################################################################*/
+    // copy a record
+    auto src_addr = ShiftAddress(this, meta.GetOffset());
+    auto dest_addr = ShiftAddress(copied_node, offset);
+    memcpy(dest_addr, src_addr, total_length);
 
-  template <class T>
-  static Node *
-  CreateDeltaNode(  //
-      const NodeType node_type,
-      const DeltaNodeType delta_type,
-      const Key &key,
-      const size_t key_length,
-      const T &payload,
-      const size_t payload_length)
-  {
-    const size_t total_length = key_length + payload_length;
-    size_t offset = kHeaderLength + sizeof(Metadata) + total_length;
+    // set record metadata
+    copied_node->SetMetadata(position, offset, meta.GetKeyLength(), total_length);
 
-    auto delta = ::dbgroup::memory::MallocNew<Node>(offset, node_type, delta_type);
-
-    delta->SetPayload(offset, payload, payload_length);
-    delta->SetKey(offset, key, key_length);
-    delta->SetMetadata(0, offset, key_length, total_length);
-
-    return delta;
+    return offset;
   }
 };
 
 }  // namespace dbgroup::index::bw_tree::component
+
+namespace dbgroup::memory
+{
+template <class Key, class Compare>
+void
+Delete(::dbgroup::index::bw_tree::component::Node<Key, Compare> *obj)
+{
+  obj->~Node();
+  ::operator delete(obj);
+}
+
+}  // namespace dbgroup::memory
