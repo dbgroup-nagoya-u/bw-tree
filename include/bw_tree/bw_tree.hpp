@@ -607,6 +607,21 @@ class BwTree
     }
   }
 
+  void
+  Split(  //
+      Node_t *split_node,
+      NodeStack_t &stack)
+  {
+    // remove records to be retained in a left-split node
+    // ...
+
+    // create a index-entry-delta record by using a split-right node
+    // ...
+
+    // install the delta record into a parent node
+    // ...
+  }
+
  public:
   /*################################################################################################
    * Public constructor/destructor
