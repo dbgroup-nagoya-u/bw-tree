@@ -96,6 +96,18 @@ class MappingTable
     }
 
     /*##############################################################################################
+     * new/delete definitions
+     *############################################################################################*/
+
+    static void *operator new(std::size_t) { return calloc(1UL, kPageSize); }
+
+    static void
+    operator delete(void *p) noexcept
+    {
+      free(p);
+    }
+
+    /*##############################################################################################
      * Public getters/setters
      *############################################################################################*/
 
@@ -132,23 +144,6 @@ class MappingTable
   /// a mutex object to modify full_tables_.
   std::mutex full_tables_mtx_;
 
-  /*################################################################################################
-   * Internal utility functions
-   *##############################################################################################*/
-
-  /**
-   * @brief Create a new mapping table object.
-   *
-   * Note that a created table is initialized with zero-filling.
-   *
-   * @return BufferedMap*: a new mapping table.
-   */
-  static BufferedMap *
-  CreateNewTable()
-  {
-    return ::dbgroup::memory::CallocNew<BufferedMap>(kPageSize);
-  }
-
  public:
   /*################################################################################################
    * Public constructors/destructors
@@ -160,7 +155,7 @@ class MappingTable
    */
   MappingTable()
   {
-    const auto table = CreateNewTable();
+    const auto table = new BufferedMap{};
     table_.store(table, mo_relax);
     full_tables_.emplace_back(table);
   }
@@ -173,7 +168,7 @@ class MappingTable
   ~MappingTable()
   {
     for (auto &&table : full_tables_) {
-      ::dbgroup::memory::Delete(table);
+      delete table;
     }
   }
 
@@ -197,7 +192,7 @@ class MappingTable
     auto current_table = table_.load(mo_relax);
     auto new_id = current_table->ReserveNewID();
     while (new_id == nullptr) {
-      auto new_table = CreateNewTable();
+      auto new_table = new BufferedMap{};
       if (table_.compare_exchange_weak(current_table, new_table, mo_relax)) {
         // since install succeeds, get new ID from the new table
         new_id = new_table->ReserveNewID();
@@ -207,7 +202,7 @@ class MappingTable
         full_tables_.emplace_back(new_table);
       } else {
         // since another thread may install a new mapping table, recheck a current table
-        ::dbgroup::memory::Delete(new_table);
+        delete new_table;
         new_id = current_table->ReserveNewID();
       }
     }

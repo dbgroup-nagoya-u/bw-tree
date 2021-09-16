@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "common.hpp"
+#include "memory/utility.hpp"
 #include "metadata.hpp"
 
 namespace dbgroup::index::bw_tree::component
@@ -116,6 +117,46 @@ class Node
   Node &operator=(const Node &) = delete;
   Node(Node &&) = delete;
   Node &operator=(Node &&) = delete;
+
+  /*################################################################################################
+   * Public node builders
+   *##############################################################################################*/
+
+  static Node *
+  CreateNode(  //
+      const size_t node_size,
+      const NodeType node_type,
+      const size_t record_count,
+      const Mapping_t *sib_node)
+  {
+    return new (::operator new(node_size)) Node{node_type, record_count, sib_node};
+  }
+
+  /*################################################################################################
+   * Public delta node builders
+   *##############################################################################################*/
+
+  template <class T>
+  static Node *
+  CreateDeltaNode(  //
+      const NodeType node_type,
+      const DeltaNodeType delta_type,
+      const Key &key,
+      const size_t key_length,
+      const T &payload,
+      const size_t payload_length)
+  {
+    const size_t total_length = key_length + payload_length;
+    size_t offset = kHeaderLength + sizeof(Metadata) + total_length;
+
+    auto delta = new (::operator new(offset)) Node{node_type, delta_type};
+
+    delta->SetPayload(offset, payload, payload_length);
+    delta->SetKey(offset, key, key_length);
+    delta->SetMetadata(0, offset, key_length, total_length);
+
+    return delta;
+  }
 
   /*################################################################################################
    * Public getters/setters
@@ -227,7 +268,7 @@ class Node
     const auto offset = meta.GetOffset() + meta.GetKeyLength();
     if constexpr (IsVariableLengthData<Payload>()) {
       const auto payload_length = meta.GetPayloadLength();
-      out_payload = ::dbgroup::memory::MallocNew<std::remove_pointer_t<Payload>>(payload_length);
+      out_payload = reinterpret_cast<Payload>(::operator new(payload_length));
       memcpy(out_payload, ShiftAddress(this, offset), payload_length);
     } else {
       memcpy(&out_payload, ShiftAddress(this, offset), sizeof(Payload));
@@ -376,41 +417,18 @@ class Node
 
     return offset;
   }
-
-  /*################################################################################################
-   * Public node builders
-   *##############################################################################################*/
-
-  static Node *
-  CreateEmptyNode()
-  {
-  }
-
-  /*################################################################################################
-   * Public delta node builders
-   *##############################################################################################*/
-
-  template <class T>
-  static Node *
-  CreateDeltaNode(  //
-      const NodeType node_type,
-      const DeltaNodeType delta_type,
-      const Key &key,
-      const size_t key_length,
-      const T &payload,
-      const size_t payload_length)
-  {
-    const size_t total_length = key_length + payload_length;
-    size_t offset = kHeaderLength + sizeof(Metadata) + total_length;
-
-    auto delta = ::dbgroup::memory::MallocNew<Node>(offset, node_type, delta_type);
-
-    delta->SetPayload(offset, payload, payload_length);
-    delta->SetKey(offset, key, key_length);
-    delta->SetMetadata(0, offset, key_length, total_length);
-
-    return delta;
-  }
 };
 
 }  // namespace dbgroup::index::bw_tree::component
+
+namespace dbgroup::memory
+{
+template <class Key, class Compare>
+void
+Delete(::dbgroup::index::bw_tree::component::Node<Key, Compare> *obj)
+{
+  obj->~Node();
+  ::operator delete(obj);
+}
+
+}  // namespace dbgroup::memory

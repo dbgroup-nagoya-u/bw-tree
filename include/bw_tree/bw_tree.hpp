@@ -46,9 +46,9 @@ class BwTree
   using Mapping_t = std::atomic<Node_t *>;
   using MappingTable_t = component::MappingTable<Key, Compare>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
-  using NodeStack_t = std::vector<Mapping_t *, ::dbgroup::memory::STLAlloc<Mapping_t *>>;
-  using Binary_p = std::unique_ptr<std::remove_pointer_t<Payload>,
-                                   ::dbgroup::memory::Deleter<std::remove_pointer_t<Payload>>>;
+  using NodeStack_t = std::vector<Mapping_t *>;
+  using Binary_t = std::remove_pointer_t<Payload>;
+  using Binary_p = std::unique_ptr<Binary_t, component::PayloadDeleter<Binary_t>>;
 
   struct KeyAddrComp {
     constexpr bool
@@ -75,14 +75,14 @@ class BwTree
     }
   };
 
-  using RecordVec_t = std::vector<Record, ::dbgroup::memory::STLAlloc<Record>>;
-
  private:
   /*################################################################################################
    * Internal constants
    *##############################################################################################*/
 
   static constexpr auto mo_relax = component::mo_relax;
+
+  static constexpr auto kHeaderLength = component::kHeaderLength;
 
   static constexpr size_t kExpectedTreeHeight = 8;
 
@@ -376,7 +376,7 @@ class BwTree
   std::tuple<Key *, Node_t *, Mapping_t *>
   SortDeltaRecords(  //
       Node_t *cur_node,
-      RecordVec_t &records)
+      std::vector<Record> &records)
   {
     bool is_last_smo = true;
     Mapping_t *sib_node;
@@ -456,7 +456,7 @@ class BwTree
   void
   MergeRecords(  //
       const Key *sep_key,
-      RecordVec_t &records,
+      std::vector<Record> &records,
       Node_t *base_node)
   {
     // get the number of records to be merged
@@ -486,9 +486,9 @@ class BwTree
   CalculatePageSize(  //
       Node_t *base_node,
       const size_t base_rec_num,
-      RecordVec_t &records)
+      std::vector<Record> &records)
   {
-    size_t page_size = component::kHeaderLength;
+    size_t page_size = kHeaderLength;
 
     // add the size of delta records
     int64_t rec_num = records.size();
@@ -534,7 +534,7 @@ class BwTree
     }
 
     // reserve vectors for delta nodes and base nodes to be consolidated
-    RecordVec_t records;
+    std::vector<Record> records;
     records.reserve(kMaxDeltaNodeNum * 4);
 
     // check whether the target node is valid (containing a target key and no incomplete SMOs)
@@ -558,7 +558,7 @@ class BwTree
     // reserve a page for a consolidated node
     auto offset = CalculatePageSize(base_node, base_rec_num, records);
     const NodeType node_type = static_cast<NodeType>(cur_head->IsLeaf());
-    Node_t *consol_node = ::dbgroup::memory::MallocNew<Node_t>(offset, node_type, 0UL, sib_node);
+    Node_t *consol_node = Node_t::CreateNode(offset, node_type, 0UL, sib_node);
 
     // copy records from a delta chain and base node
     Metadata meta;
@@ -622,15 +622,13 @@ class BwTree
   {
     // create an empty leaf node
     Mapping_t *child_page_id = mapping_table_.GetNewLogicalID();
-    Node_t *empty_leaf = ::dbgroup::memory::MallocNew<Node_t>(component::kHeaderLength,
-                                                              NodeType::kLeaf, 0UL, nullptr);
+    Node_t *empty_leaf = Node_t::CreateNode(kHeaderLength, NodeType::kLeaf, 0UL, nullptr);
     child_page_id->store(empty_leaf, mo_relax);
 
     // create an empty Bw-tree
     root_ = mapping_table_.GetNewLogicalID();
-    auto offset = component::kHeaderLength + sizeof(Metadata) + sizeof(Mapping_t *);
-    Node_t *initial_root =
-        ::dbgroup::memory::MallocNew<Node_t>(offset, NodeType::kInternal, 1UL, nullptr);
+    auto offset = kHeaderLength + sizeof(Metadata) + sizeof(Mapping_t *);
+    Node_t *initial_root = Node_t::CreateNode(offset, NodeType::kInternal, 1UL, nullptr);
     initial_root->template SetPayload<Mapping_t *>(offset, child_page_id, sizeof(Mapping_t *));
     initial_root->SetMetadata(0, offset, 0, sizeof(Mapping_t *));
     root_->store(initial_root, mo_relax);
