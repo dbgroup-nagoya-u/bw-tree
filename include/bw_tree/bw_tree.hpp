@@ -602,7 +602,7 @@ class BwTree
       if (cur_head == expected_head) continue;
 
       // no CAS retry for consolidation
-      ::dbgroup::memory::Delete(consol_node);
+      Node_t::DeleteNode(consol_node);
       break;
     }
   }

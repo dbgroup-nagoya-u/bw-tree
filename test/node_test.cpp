@@ -69,7 +69,7 @@ class NodeFixture : public testing::Test
   size_t max_record_num;
 
   // a target node and its expected metadata
-  std::unique_ptr<Node_t> node;
+  Node_t *node;
   std::vector<Metadata> meta_vec;
 
   /*################################################################################################
@@ -79,6 +79,8 @@ class NodeFixture : public testing::Test
   void
   SetUp() override
   {
+    node = Node_t::CreateNode(kPageSize, NodeType::kLeaf, max_record_num, nullptr);
+
     // prepare keys
     key_length = (IsVariableLengthData<Key>()) ? 7 : sizeof(Key);
     PrepareTestData(keys, kKeyNumForTest, key_length);
@@ -96,6 +98,8 @@ class NodeFixture : public testing::Test
   void
   TearDown() override
   {
+    Node_t::DeleteNode(node);
+
     ReleaseTestData(keys, kKeyNumForTest);
     ReleaseTestData(payloads, kKeyNumForTest);
   }
@@ -105,34 +109,9 @@ class NodeFixture : public testing::Test
    *##############################################################################################*/
 
   void
-  VerifyConstructor(  //
-      const bool is_leaf,
-      const bool is_delta)
-  {
-    const auto node_type = (is_leaf) ? NodeType::kLeaf : NodeType::kInternal;
-
-    if (is_delta) {
-      node = std::make_unique<Node_t>(node_type, DeltaNodeType::kInsert);
-
-      EXPECT_EQ(DeltaNodeType::kInsert, node->GetDeltaNodeType());
-    } else {
-      node = std::make_unique<Node_t>(node_type, 0, nullptr);
-
-      EXPECT_EQ(DeltaNodeType::kNotDelta, node->GetDeltaNodeType());
-      EXPECT_EQ(0, node->GetRecordCount());
-      EXPECT_EQ(nullptr, node->GetNextNode());
-    }
-
-    EXPECT_FALSE(is_leaf ^ node->IsLeaf());
-  }
-
-  void
   VerifySetterGetter()
   {
     meta_vec.reserve(max_record_num);
-
-    // creat an empty node
-    node.reset(new (malloc(kPageSize)) Node_t{NodeType::kLeaf, max_record_num, nullptr});
 
     // set records and keep their metadata
     size_t offset = kPageSize;
@@ -174,7 +153,7 @@ class NodeFixture : public testing::Test
     EXPECT_TRUE(IsEqual<PayloadComp>(payload, payloads[idx]));
 
     if constexpr (IsVariableLengthData<Payload>()) {
-      ::dbgroup::memory::Delete(payload);
+      ::operator delete(payload);
     }
   }
 };
@@ -195,30 +174,6 @@ TYPED_TEST_CASE(NodeFixture, KeyPayloadPairs);
 /*##################################################################################################
  * Unit test definitions
  *################################################################################################*/
-
-/*--------------------------------------------------------------------------------------------------
- * Constructor tests
- *------------------------------------------------------------------------------------------------*/
-
-TYPED_TEST(NodeFixture, Construct_LeafBaseNode_CorrectlyInitialized)
-{
-  TestFixture::VerifyConstructor(true, false);
-}
-
-TYPED_TEST(NodeFixture, Construct_InternalBaseNode_CorrectlyInitialized)
-{
-  TestFixture::VerifyConstructor(false, false);
-}
-
-TYPED_TEST(NodeFixture, Construct_LeafDeltaNode_CorrectlyInitialized)
-{
-  TestFixture::VerifyConstructor(true, true);
-}
-
-TYPED_TEST(NodeFixture, Construct_InternalDeltaNode_CorrectlyInitialized)
-{
-  TestFixture::VerifyConstructor(false, true);
-}
 
 /*--------------------------------------------------------------------------------------------------
  * Getter/setter tests

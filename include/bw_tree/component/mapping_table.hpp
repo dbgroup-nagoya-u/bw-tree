@@ -91,7 +91,7 @@ class MappingTable
         Node_t *node = logical_ids_[i].load(mo_relax);
         if (node == nullptr) continue;
 
-        ::dbgroup::memory::Delete(node);
+        Node_t::DeleteNode(node);
       }
     }
 

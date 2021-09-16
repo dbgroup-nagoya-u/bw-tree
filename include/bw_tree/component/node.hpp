@@ -63,9 +63,8 @@ class Node
   /// an actual data block (it starts with record metadata).
   Metadata meta_array_[0];
 
- public:
   /*################################################################################################
-   * Public constructors/destructors
+   * Internal constructors/destructors
    *##############################################################################################*/
 
   /**
@@ -100,6 +99,17 @@ class Node
   {
   }
 
+ public:
+  /*################################################################################################
+   * Public constructors/destructors
+   *##############################################################################################*/
+
+  /**
+   * @brief Construct a new base node object.
+   *
+   */
+  constexpr Node() : node_type_{}, delta_type_{}, record_count_{}, next_node_{} {}
+
   /**
    * @brief Destroy the node object.
    *
@@ -109,7 +119,7 @@ class Node
     // release nodes recursively until it reaches a base node
     if (delta_type_ != DeltaNodeType::kNotDelta) {
       auto next_node = GetNextNode();
-      ::dbgroup::memory::Delete(next_node);
+      DeleteNode(next_node);
     }
   }
 
@@ -130,6 +140,13 @@ class Node
       const Mapping_t *sib_node)
   {
     return new (::operator new(node_size)) Node{node_type, record_count, sib_node};
+  }
+
+  static void
+  DeleteNode(Node *node)
+  {
+    node->~Node();
+    ::operator delete(node);
   }
 
   /*################################################################################################
@@ -427,8 +444,7 @@ template <class Key, class Compare>
 void
 Delete(::dbgroup::index::bw_tree::component::Node<Key, Compare> *obj)
 {
-  obj->~Node();
-  ::operator delete(obj);
+  ::dbgroup::index::bw_tree::component::Node<Key, Compare>::DeleteNode(obj);
 }
 
 }  // namespace dbgroup::memory
