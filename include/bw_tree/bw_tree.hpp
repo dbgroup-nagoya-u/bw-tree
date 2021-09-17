@@ -601,18 +601,15 @@ class BwTree
     }
 
     // install a consolidated node
-    const auto expected_head = cur_head;
-    while (true) {
-      if (page_id->compare_exchange_weak(cur_head, consol_node, mo_relax)) {
-        gc_.AddGarbage(cur_head);
-        break;
-      }
-      if (cur_head == expected_head) continue;
+    auto tmp_node = cur_head;
+    while (!page_id->compare_exchange_weak(tmp_node, consol_node, mo_relax)) {
+      if (tmp_node == cur_head) continue;  // weak CAS may fail even if it can execute
 
       // no CAS retry for consolidation
       Node_t::DeleteNode(consol_node);
-      break;
+      return;
     }
+    gc_.AddGarbage(cur_head);
   }
 
   void
