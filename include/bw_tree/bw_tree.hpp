@@ -614,17 +614,47 @@ class BwTree
 
   void
   Split(  //
+      Mapping_t *page_id,
+      Node_t *cur_head,
       Node_t *split_node,
-      NodeStack_t &stack)
+      [[maybe_unused]] NodeStack_t &stack)
   {
-    // remove records to be retained in a left-split node
-    // ...
+    // get the number of records and metadata of a separator key
+    const size_t rec_num = split_node->GetRecordCount();
+    const size_t left_num = rec_num >> 1;
+    const size_t right_num = rec_num - left_num;
+    const auto sep_meta = split_node->GetMetadata(left_num - 1);
 
-    // create a index-entry-delta record by using a split-right node
-    // ...
+    // shift metadata to use a consolidated node as a split-right node
+    auto dest_addr = component::ShiftAddress(split_node, kHeaderLength);
+    auto src_addr = component::ShiftAddress(dest_addr, sizeof(Metadata) * left_num);
+    memcpy(dest_addr, src_addr, sizeof(Metadata) * right_num);
 
-    // install the delta record into a parent node
-    // ...
+    // create a split-delta record
+    const auto node_type = static_cast<NodeType>(split_node->IsLeaf());
+    const Key *sep_key = split_node->GetKeyAddr(sep_meta);
+    Mapping_t *split_page_id = mapping_table_.GetNewLogicalID();
+    Node_t *split_delta =
+        Node_t::CreateDeltaNode(node_type, DeltaNodeType::kSplit, *sep_key, sep_meta.GetKeyLength(),
+                                split_page_id, sizeof(Mapping_t *));
+    split_page_id->store(split_delta, mo_relax);
+    split_delta->SetNextNode(cur_head);
+
+    // install the delta record for splitting a child node
+    auto *tmp_node = cur_head;
+    while (!page_id->compare_exchange_weak(tmp_node, split_delta, mo_relax)) {
+      if (tmp_node == cur_head) continue;  // weak CAS may fail even if it can execute
+
+      // no CAS retry for split
+      split_delta->SetNextNode(nullptr);
+      Node_t::DeleteNode(split_delta);
+      Node_t::DeleteNode(split_node);
+      split_page_id->store(nullptr, mo_relax);
+      return;
+    }
+
+    // execute parent split
+    // CompleteSplit();
   }
 
  public:
