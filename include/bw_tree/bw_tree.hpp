@@ -559,6 +559,7 @@ class BwTree
 
     // reserve a page for a consolidated node
     auto offset = CalculatePageSize(base_node, base_rec_num, records);
+    const bool need_split = (offset > kPageSize) ? true : false;
     const NodeType node_type = static_cast<NodeType>(cur_head->IsLeaf());
     Node_t *consol_node = Node_t::CreateNode(offset, node_type, 0UL, sib_node);
 
@@ -593,6 +594,11 @@ class BwTree
       offset = base_node->CopyRecordTo(consol_node, rec_num++, offset, base_node->GetMetadata(j));
     }
     consol_node->SetRecordCount(rec_num);
+
+    if (need_split) {
+      Split(page_id, cur_head, consol_node, stack);
+      return;
+    }
 
     // install a consolidated node
     const auto expected_head = cur_head;
