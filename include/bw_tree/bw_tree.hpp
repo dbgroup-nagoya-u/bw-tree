@@ -509,10 +509,12 @@ class BwTree
     page_size += rec_num * sizeof(Metadata);
 
     // add the size of records in a base node
-    const auto begin_offset = base_node->GetMetadata(base_rec_num - 1).GetOffset();
-    const auto end_meta = base_node->GetMetadata(0);
-    const auto end_offset = end_meta.GetOffset() + end_meta.GetTotalLength();
-    page_size += end_offset - begin_offset;
+    if (base_rec_num > 0) {
+      const auto begin_offset = base_node->GetMetadata(base_rec_num - 1).GetOffset();
+      const auto end_meta = base_node->GetMetadata(0);
+      const auto end_offset = end_meta.GetOffset() + end_meta.GetTotalLength();
+      page_size += end_offset - begin_offset;
+    }
 
     return page_size;
   }
