@@ -121,7 +121,7 @@ class BwTree
         case DeltaNodeType::kModify:
         case DeltaNodeType::kDelete: {
           // check whether this delta record includes a target key
-          const auto meta0 = cur_head->GetMetadata(0), meta1 = cur_head->GetMetadata(1);
+          const auto meta0 = cur_head->GetFirstMeta(), meta1 = cur_head->GetSecondMeta();
           const auto key0 = cur_head->GetKey(meta0), key1 = cur_head->GetKey(meta1);
           if (component::IsInRange<Compare>(key, &key0, !range_closed, &key1, range_closed)) {
             page_id = cur_head->template GetPayload<Mapping_t *>(meta0);
@@ -140,7 +140,7 @@ class BwTree
         }
         case DeltaNodeType::kSplit: {
           // check whether a split right (i.e., sibling) node includes a target key
-          const auto meta = cur_head->GetMetadata(0);
+          const auto meta = cur_head->GetFirstMeta();
           const auto sep_key = cur_head->GetKey(meta);
           if (Compare{}(sep_key, key) || (!range_closed && !Compare{}(key, sep_key))) {
             // traverse to a split right node
@@ -153,7 +153,7 @@ class BwTree
         }
         case DeltaNodeType::kMerge: {
           // check whether a merged node includes a target key
-          const auto meta = cur_head->GetMetadata(0);
+          const auto meta = cur_head->GetFirstMeta();
           const auto sep_key = cur_head->GetKey(meta);
           if (Compare{}(sep_key, key) || (!range_closed && !Compare{}(key, sep_key))) {
             // traverse to a merged node
@@ -221,7 +221,7 @@ class BwTree
     while (cur_node != prev_head) {
       switch (cur_node->GetDeltaNodeType()) {
         case DeltaNodeType::kSplit: {
-          const auto meta = cur_node->GetMetadata(0);
+          const auto meta = cur_node->GetFirstMeta();
           const auto sep_key = cur_node->GetKey(meta);
           if (Compare{}(sep_key, key) || (!range_closed && !Compare{}(key, sep_key))) {
             // there may be incomplete split
@@ -291,7 +291,7 @@ class BwTree
         case DeltaNodeType::kInsert:
         case DeltaNodeType::kModify: {
           // check whether this delta record includes a target key
-          const auto meta = cur_head->GetMetadata(0);
+          const auto meta = cur_head->GetFirstMeta();
           const auto rec_key = cur_head->GetKey(meta);
           if (component::IsEqual<Compare>(key, rec_key)) {
             existence = kKeyExist;
@@ -305,7 +305,7 @@ class BwTree
         }
         case DeltaNodeType::kDelete: {
           // check whether this delta record includes a target key
-          const auto meta = cur_head->GetMetadata(0);
+          const auto meta = cur_head->GetFirstMeta();
           const auto rec_key = cur_head->GetKey(meta);
           if (component::IsEqual<Compare>(key, rec_key)) {
             existence = kKeyNotExist;
@@ -325,7 +325,7 @@ class BwTree
         }
         case DeltaNodeType::kSplit: {
           // check whether a split right (i.e., sibling) node includes a target key
-          const auto meta = cur_head->GetMetadata(0);
+          const auto meta = cur_head->GetFirstMeta();
           const auto sep_key = cur_head->GetKey(meta);
           if (Compare{}(sep_key, key)) {
             // traverse to a split right node
@@ -338,7 +338,7 @@ class BwTree
         }
         case DeltaNodeType::kMerge: {
           // check whether a merged node includes a target key
-          const auto meta = cur_head->GetMetadata(0);
+          const auto meta = cur_head->GetFirstMeta();
           const auto sep_key = cur_head->GetKey(meta);
           if (Compare{}(sep_key, key)) {
             // traverse to a merged right node
@@ -388,7 +388,7 @@ class BwTree
         case DeltaNodeType::kModify:
         case DeltaNodeType::kDelete: {
           // check whether this delta record is in current key-range
-          const auto meta = cur_node->GetMetadata(0);
+          const auto meta = cur_node->GetFirstMeta();
           const Record rec{cur_node, meta, cur_node->GetKeyAddr(meta)};
           if (sep_key == nullptr || KeyAddrComp{}(rec.key, sep_key)) {
             // check whether this delta record has a new key
@@ -404,7 +404,7 @@ class BwTree
         }
         case DeltaNodeType::kSplit: {
           // get a separator key to ignore out-of-range keys
-          const auto meta = cur_node->GetMetadata(0);
+          const auto meta = cur_node->GetFirstMeta();
           sep_key = cur_node->GetKeyAddr(meta);
 
           if (is_last_smo) {
@@ -416,7 +416,7 @@ class BwTree
           break;
         }
         case DeltaNodeType::kMerge: {
-          const auto meta = cur_node->GetMetadata(0);
+          const auto meta = cur_node->GetFirstMeta();
           auto merged_node = cur_node->template GetPayload<Node_t *>(meta);
 
           // traverse a merged delta chain recursively
