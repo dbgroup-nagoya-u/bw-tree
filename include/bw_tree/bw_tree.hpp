@@ -225,7 +225,7 @@ class BwTree
           const auto sep_key = cur_node->GetKey(meta);
           if (Compare{}(sep_key, key) || (!range_closed && !Compare{}(key, sep_key))) {
             // there may be incomplete split
-            // CompleteSplit();
+            CompleteSplit(cur_node, stack);
 
             // traverse to a split right node
             page_id = cur_node->template GetPayload<Mapping_t *>(meta);
@@ -668,6 +668,9 @@ class BwTree
     auto src_addr = component::ShiftAddress(dest_addr, sizeof(Metadata) * left_num);
     memcpy(dest_addr, src_addr, sizeof(Metadata) * right_num);
 
+    // set a separator key as the highest key
+    split_node->SetLowMeta(sep_meta);
+
     // create a split-delta record
     const auto node_type = static_cast<NodeType>(split_node->IsLeaf());
     const Key *sep_key = split_node->GetKeyAddr(sep_meta);
@@ -692,7 +695,40 @@ class BwTree
     }
 
     // execute parent split
-    // CompleteSplit();
+    CompleteSplit(split_delta, stack);
+  }
+
+  void
+  CompleteSplit(  //
+      Node_t *split_delta,
+      NodeStack_t &stack)
+  {
+    // create an index-entry delta record
+    const auto split_meta = split_delta->GetFirstMeta();
+    const Key *sep_key = split_delta->GetKeyAddr(split_meta);
+    const Mapping_t *new_page = split_delta->template GetPayload<Mapping_t *>(split_meta);
+    Node_t *entry_delta =
+        Node_t::CreateIndexEntryDelta(sep_key, split_meta.GetKeyLength(), new_page);
+
+    Mapping_t *page_id = stack.back(), *dummy = nullptr;
+    Node_t *cur_head = page_id->load(mo_relax), *prev_node = nullptr;
+
+    while (true) {
+      // check whether there are no incomplete SMOs
+      ValidateNode(*sep_key, true, page_id, cur_head, prev_node, stack, dummy);
+
+      // check whether another thread has already completed this split
+      if (CheckExistence(*sep_key, true, page_id, stack, dummy) == ReturnCode::kKeyExist) {
+        entry_delta->SetNextNode(nullptr);
+        Node_t::DeleteNode(entry_delta);
+        return;
+      }
+
+      // insert the index-entry delta record
+      entry_delta->SetNextNode(cur_head);
+      prev_node = cur_head;
+      if (page_id->compare_exchange_weak(cur_head, entry_delta, mo_relax)) return;
+    }
   }
 
  public:
