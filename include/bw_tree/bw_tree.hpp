@@ -230,11 +230,11 @@ class BwTree
             // traverse to a split right node
             page_id = cur_node->template GetPayload<Mapping_t *>(meta);
             cur_head = page_id->load(mo_relax);
-            return ValidateNode(key, range_closed, page_id, cur_head, nullptr, stack, consol_node);
+            cur_node = cur_head;
+            delta_chain_length = 0;
+            continue;
           }
-          // although this split may be incomplete, the other SMOs in this chain must be complete
-          ++delta_chain_length;
-          goto no_incomplete_smo;
+          break;
         }
         case DeltaNodeType::kRemoveNode: {
           // there may be incomplete merging
@@ -245,14 +245,30 @@ class BwTree
           stack.pop_back();
           page_id = SearchChildNode(key, range_closed, parent_node, cur_head, stack, consol_node);
           cur_head = page_id->load(mo_relax);
-          return ValidateNode(key, range_closed, page_id, cur_head, nullptr, stack, consol_node);
+          cur_node = cur_head;
+          delta_chain_length = 0;
+          continue;
         }
         case DeltaNodeType::kMerge: {
-          // there are no incomplete SMOs
-          ++delta_chain_length;
-          goto no_incomplete_smo;
+          // there may be incomplete merging
+          // CompleteMerge();
+          break;
         }
         case DeltaNodeType::kNotDelta: {
+          // check whether a target key is in this node
+          const auto high_meta = cur_head->GetSecondMeta();
+          if (high_meta.GetKeyLength() != 0) {
+            const Key *high_key = cur_head->GetKeyAddr(high_meta);
+            if (Compare{}(*high_key, key) || (!range_closed && !Compare{}(key, *high_key))) {
+              // traverse to a sibling node
+              page_id = cur_node->GetSiblingNode();
+              cur_head = page_id->load(mo_relax);
+              cur_node = cur_head;
+              delta_chain_length = 0;
+              continue;
+            }
+          }
+
           // there are no incomplete SMOs
           goto no_incomplete_smo;
         }
