@@ -60,6 +60,12 @@ class Node
   /// the pointer to the next node.
   uintptr_t next_node_;
 
+  /// metadata of a lowest key or a first record in a delta node
+  Metadata low_meta_;
+
+  /// metadata of a highest key or a second record in a delta node
+  Metadata high_meta_;
+
   /// an actual data block (it starts with record metadata).
   Metadata meta_array_[0];
 
@@ -219,6 +225,18 @@ class Node
     return const_cast<Mapping_t *>(reinterpret_cast<const Mapping_t *>(next_node_));
   }
 
+  constexpr Metadata
+  GetFirstMeta() const
+  {
+    return low_meta_;
+  }
+
+  constexpr Metadata
+  GetSecondMeta() const
+  {
+    return high_meta_;
+  }
+
   /**
    * @param position the position of record metadata to be get.
    * @return Metadata: record metadata.
@@ -227,6 +245,22 @@ class Node
   GetMetadata(const size_t position) const
   {
     return meta_array_[position];
+  }
+
+  constexpr Key *
+  GetLowKeyAddr() const
+  {
+    if (low_meta_.GetKeyLength() == 0) return nullptr;
+
+    return reinterpret_cast<Key *>(ShiftAddress(this, low_meta_.GetOffset()));
+  }
+
+  constexpr Key *
+  GetHighKeyAddr() const
+  {
+    if (high_meta_.GetKeyLength() == 0) return nullptr;
+
+    return reinterpret_cast<Key *>(ShiftAddress(this, high_meta_.GetOffset()));
   }
 
   /**
