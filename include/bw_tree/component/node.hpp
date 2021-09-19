@@ -170,13 +170,13 @@ class Node
       const size_t payload_length)
   {
     const size_t total_length = key_length + payload_length;
-    size_t offset = kHeaderLength + sizeof(Metadata) + total_length;
+    size_t offset = kHeaderLength + total_length;
 
-    auto delta = new (::operator new(offset)) Node{node_type, delta_type};
+    Node *delta = new (::operator new(offset)) Node{node_type, delta_type};
 
     delta->SetPayload(offset, payload, payload_length);
     delta->SetKey(offset, key, key_length);
-    delta->SetMetadata(0, offset, key_length, total_length);
+    delta->SetLowMeta(offset, key_length, total_length);
 
     return delta;
   }
@@ -336,6 +336,24 @@ class Node
   SetRecordCount(const size_t rec_num)
   {
     record_count_ = rec_num;
+  }
+
+  constexpr void
+  SetLowMeta(  //
+      const size_t offset,
+      const size_t key_length,
+      const size_t total_length)
+  {
+    low_meta_ = Metadata{offset, key_length, total_length};
+  }
+
+  constexpr void
+  SetHighMeta(  //
+      const size_t offset,
+      const size_t key_length,
+      const size_t total_length)
+  {
+    high_meta_ = Metadata{offset, key_length, total_length};
   }
 
   /**

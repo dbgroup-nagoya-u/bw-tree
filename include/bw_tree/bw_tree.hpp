@@ -673,12 +673,16 @@ class BwTree
     // create an empty leaf node
     Mapping_t *child_page_id = mapping_table_.GetNewLogicalID();
     Node_t *empty_leaf = Node_t::CreateNode(kHeaderLength, NodeType::kLeaf, 0UL, nullptr);
+    empty_leaf->SetLowMeta(0, 0, 0);
+    empty_leaf->SetHighMeta(0, 0, 0);
     child_page_id->store(empty_leaf, mo_relax);
 
     // create an empty Bw-tree
     root_ = mapping_table_.GetNewLogicalID();
     auto offset = kHeaderLength + sizeof(Metadata) + sizeof(Mapping_t *);
     Node_t *initial_root = Node_t::CreateNode(offset, NodeType::kInternal, 1UL, nullptr);
+    initial_root->SetLowMeta(0, 0, 0);
+    initial_root->SetHighMeta(0, 0, 0);
     initial_root->template SetPayload<Mapping_t *>(offset, child_page_id, sizeof(Mapping_t *));
     initial_root->SetMetadata(0, offset, 0, sizeof(Mapping_t *));
     root_->store(initial_root, mo_relax);
