@@ -181,6 +181,34 @@ class Node
     return delta;
   }
 
+  static Node *
+  CreateIndexEntryDelta(  //
+      const Key *sep_key,
+      const size_t sep_key_len,
+      const Mapping_t *split_page)
+  {
+    const auto total_length = sep_key_len + sizeof(Mapping_t *);
+    const Node *split_node = split_page->load(mo_relax);
+    const auto high_meta = split_node->GetSecondMeta();
+    const auto high_key_len = high_meta.GetKeyLength();
+    size_t offset = kHeaderLength + total_length + high_key_len;
+
+    Node *delta = new (::operator new(offset)) Node{NodeType::kInternal, DeltaNodeType::kInsert};
+
+    if (high_key_len == 0) {
+      delta->SetHighMeta(high_meta);
+    } else {
+      const Key *high_key = split_node->GetKeyAddr(high_meta);
+      delta->SetKey(offset, *high_key, high_key_len);
+      delta->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
+    }
+    delta->SetPayload(offset, split_page, sizeof(Mapping_t *));
+    delta->SetKey(offset, *sep_key, sep_key_len);
+    delta->SetLowMeta(Metadata{offset, sep_key_len, total_length});
+
+    return delta;
+  }
+
   /*################################################################################################
    * Public getters/setters
    *##############################################################################################*/
