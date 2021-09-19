@@ -670,6 +670,7 @@ class BwTree
 
     // set a separator key as the highest key
     split_node->SetLowMeta(sep_meta);
+    split_node->SetRecordCount(right_num);
 
     // create a split-delta record
     const auto node_type = static_cast<NodeType>(split_node->IsLeaf());
@@ -678,7 +679,7 @@ class BwTree
     Node_t *split_delta =
         Node_t::CreateDeltaNode(node_type, DeltaNodeType::kSplit, *sep_key, sep_meta.GetKeyLength(),
                                 split_page_id, sizeof(Mapping_t *));
-    split_page_id->store(split_delta, mo_relax);
+    split_page_id->store(split_node, mo_relax);
     split_delta->SetNextNode(cur_head);
 
     // install the delta record for splitting a child node
@@ -695,6 +696,7 @@ class BwTree
     }
 
     // execute parent split
+    stack.pop_back();
     CompleteSplit(split_delta, stack);
   }
 
