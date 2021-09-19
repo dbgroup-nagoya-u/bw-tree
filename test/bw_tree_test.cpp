@@ -52,7 +52,7 @@ class BwTreeFixture : public testing::Test
    * Internal constants
    *##############################################################################################*/
 
-  static constexpr size_t kKeyNumForTest = 4096;
+  static constexpr size_t kKeyNumForTest = 40960;
   static constexpr size_t kSmallKeyNum = kMaxDeltaNodeNum - 1;
   static constexpr size_t kLargeKeyNum = kKeyNumForTest - 1;
   static constexpr size_t kKeyLength = kWordLength;
@@ -236,7 +236,7 @@ TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithConsolidate_ReadWrittenValues)
 
 TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithSplit_ReadWrittenValues)
 {
-  const size_t repeat_num = TestFixture::GetMaxRecordNumInPage() * TestFixture::kSmallKeyNum;
+  const size_t repeat_num = TestFixture::GetMaxRecordNumInPage() * 2;
 
   for (size_t i = 0; i < repeat_num; ++i) {
     TestFixture::VerifyWrite(i, i);

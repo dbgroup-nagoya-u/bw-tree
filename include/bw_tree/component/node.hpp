@@ -183,7 +183,7 @@ class Node
 
   static Node *
   CreateIndexEntryDelta(  //
-      const Key *sep_key,
+      const Key &sep_key,
       const size_t sep_key_len,
       const Mapping_t *split_page)
   {
@@ -203,7 +203,7 @@ class Node
       delta->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
     }
     delta->SetPayload(offset, split_page, sizeof(Mapping_t *));
-    delta->SetKey(offset, *sep_key, sep_key_len);
+    delta->SetKey(offset, sep_key, sep_key_len);
     delta->SetLowMeta(Metadata{offset, sep_key_len, total_length});
 
     return delta;

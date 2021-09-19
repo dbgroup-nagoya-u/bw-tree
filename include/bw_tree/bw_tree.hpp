@@ -121,10 +121,9 @@ class BwTree
         case DeltaNodeType::kModify:
         case DeltaNodeType::kDelete: {
           // check whether this delta record includes a target key
-          const auto meta0 = cur_head->GetFirstMeta(), meta1 = cur_head->GetSecondMeta();
-          const auto key0 = cur_head->GetKey(meta0), key1 = cur_head->GetKey(meta1);
-          if (component::IsInRange<Compare>(key, &key0, !range_closed, &key1, range_closed)) {
-            page_id = cur_head->template GetPayload<Mapping_t *>(meta0);
+          const auto low_key = cur_head->GetLowKeyAddr(), high_key = cur_head->GetHighKeyAddr();
+          if (component::IsInRange<Compare>(key, low_key, !range_closed, high_key, range_closed)) {
+            page_id = cur_head->template GetPayload<Mapping_t *>(cur_head->GetFirstMeta());
             ++delta_chain_length;
             goto found_child_node;
           }
@@ -389,13 +388,13 @@ class BwTree
     return existence;
   }
 
-  std::tuple<Key *, Node_t *, Mapping_t *>
+  std::tuple<Key *, Node_t *, Node_t *, Mapping_t *>
   SortDeltaRecords(  //
       Node_t *cur_node,
       std::vector<Record> &records)
   {
-    bool is_last_smo = true;
     Mapping_t *sib_node;
+    Node_t *last_smo_delta = nullptr;
     Key *sep_key = nullptr;
 
     while (true) {
@@ -423,10 +422,10 @@ class BwTree
           const auto meta = cur_node->GetFirstMeta();
           sep_key = cur_node->GetKeyAddr(meta);
 
-          if (is_last_smo) {
+          if (last_smo_delta == nullptr) {
             // this split delta has a sibling node
+            last_smo_delta = cur_node;
             sib_node = cur_node->template GetPayload<Mapping_t *>(meta);
-            is_last_smo = false;
           }
 
           break;
@@ -437,13 +436,15 @@ class BwTree
 
           // traverse a merged delta chain recursively
           Key *key;
-          if (is_last_smo) {
+          Node_t *dummy_node;
+          if (last_smo_delta == nullptr) {
             // a merged right node has a sibling node
-            std::tie(key, merged_node, sib_node) = SortDeltaRecords(merged_node, records);
-            is_last_smo = false;
+            last_smo_delta = cur_node;
+            std::tie(key, merged_node, dummy_node, sib_node) =
+                SortDeltaRecords(merged_node, records);
           } else {
             Mapping_t *dummy;
-            std::tie(key, merged_node, dummy) = SortDeltaRecords(merged_node, records);
+            std::tie(key, merged_node, dummy_node, dummy) = SortDeltaRecords(merged_node, records);
           }
 
           // add records in a merged base node
@@ -452,12 +453,12 @@ class BwTree
           break;
         }
         case DeltaNodeType::kNotDelta: {
-          if (is_last_smo) {
+          if (last_smo_delta == nullptr) {
             // if there are no SMOs, a base node has a sibling node
             sib_node = cur_node->GetSiblingNode();
           }
 
-          return {sep_key, cur_node, sib_node};
+          return {sep_key, cur_node, last_smo_delta, sib_node};
         }
         default:
           // ignore remove-node deltas because consolidated delta chains do not have them
@@ -502,7 +503,8 @@ class BwTree
   CalculatePageSize(  //
       Node_t *base_node,
       const size_t base_rec_num,
-      std::vector<Record> &records)
+      std::vector<Record> &records,
+      const Node_t *last_smo_delta)
   {
     size_t page_size = kHeaderLength;
 
@@ -526,7 +528,11 @@ class BwTree
 
     // add the size of records in a base node
     page_size += base_node->GetFirstMeta().GetTotalLength();
-    page_size += base_node->GetSecondMeta().GetTotalLength();
+    if (last_smo_delta == nullptr) {
+      page_size += base_node->GetSecondMeta().GetTotalLength();
+    } else {
+      page_size += last_smo_delta->GetFirstMeta().GetTotalLength();
+    }
     if (base_rec_num > 0) {
       const auto begin_offset = base_node->GetMetadata(base_rec_num - 1).GetOffset();
       const auto end_meta = base_node->GetMetadata(0);
@@ -563,7 +569,7 @@ class BwTree
     ValidateNode(key, range_closed, page_id, cur_head, nullptr, stack, dummy);
 
     // collect and sort delta records
-    const auto [sep_key, base_node, sib_node] = SortDeltaRecords(cur_head, records);
+    const auto [sep_key, base_node, last_smo_delta, sib_node] = SortDeltaRecords(cur_head, records);
 
     // get a base node and the position of a highest key
     size_t base_rec_num;
@@ -576,7 +582,7 @@ class BwTree
     }
 
     // reserve a page for a consolidated node
-    auto offset = CalculatePageSize(base_node, base_rec_num, records);
+    auto offset = CalculatePageSize(base_node, base_rec_num, records, last_smo_delta);
     const bool need_split = (offset > kPageSize) ? true : false;
     const NodeType node_type = static_cast<NodeType>(cur_head->IsLeaf());
     Node_t *consol_node = Node_t::CreateNode(offset, node_type, 0UL, sib_node);
@@ -591,12 +597,20 @@ class BwTree
       consol_node->SetKey(offset, *low_key, low_key_len);
       consol_node->SetLowMeta(Metadata{offset, low_key_len, low_key_len});
     }
-    const Metadata high_meta = base_node->GetSecondMeta();
-    const auto high_key_len = low_meta.GetKeyLength();
-    if (high_key_len == 0) {
-      consol_node->SetHighMeta(high_meta);
-    } else {
-      const Key *high_key = base_node->GetKeyAddr(high_meta);
+    if (last_smo_delta == nullptr) {
+      const Metadata high_meta = base_node->GetSecondMeta();
+      const auto high_key_len = high_meta.GetKeyLength();
+      if (high_key_len == 0) {
+        consol_node->SetHighMeta(high_meta);
+      } else {
+        const Key *high_key = base_node->GetKeyAddr(high_meta);
+        consol_node->SetKey(offset, *high_key, high_key_len);
+        consol_node->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
+      }
+    } else if (last_smo_delta->GetDeltaNodeType() == DeltaNodeType::kSplit) {
+      const Metadata high_meta = last_smo_delta->GetFirstMeta();
+      const auto high_key_len = high_meta.GetKeyLength();
+      const Key *high_key = last_smo_delta->GetKeyAddr(high_meta);
       consol_node->SetKey(offset, *high_key, high_key_len);
       consol_node->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
     }
@@ -710,7 +724,7 @@ class BwTree
     const Key *sep_key = split_delta->GetKeyAddr(split_meta);
     const Mapping_t *new_page = split_delta->template GetPayload<Mapping_t *>(split_meta);
     Node_t *entry_delta =
-        Node_t::CreateIndexEntryDelta(sep_key, split_meta.GetKeyLength(), new_page);
+        Node_t::CreateIndexEntryDelta(*sep_key, split_meta.GetKeyLength(), new_page);
 
     Mapping_t *page_id = stack.back(), *dummy = nullptr;
     Node_t *cur_head = page_id->load(mo_relax), *prev_node = nullptr;
