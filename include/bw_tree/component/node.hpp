@@ -176,7 +176,7 @@ class Node
 
     delta->SetPayload(offset, payload, payload_length);
     delta->SetKey(offset, key, key_length);
-    delta->SetLowMeta(offset, key_length, total_length);
+    delta->SetLowMeta(Metadata{offset, key_length, total_length});
 
     return delta;
   }
@@ -339,21 +339,15 @@ class Node
   }
 
   constexpr void
-  SetLowMeta(  //
-      const size_t offset,
-      const size_t key_length,
-      const size_t total_length)
+  SetLowMeta(const Metadata meta)
   {
-    low_meta_ = Metadata{offset, key_length, total_length};
+    low_meta_ = meta;
   }
 
   constexpr void
-  SetHighMeta(  //
-      const size_t offset,
-      const size_t key_length,
-      const size_t total_length)
+  SetHighMeta(const Metadata meta)
   {
-    high_meta_ = Metadata{offset, key_length, total_length};
+    high_meta_ = meta;
   }
 
   /**
@@ -365,11 +359,9 @@ class Node
   constexpr void
   SetMetadata(  //
       const size_t position,
-      const size_t offset,
-      const size_t key_length,
-      const size_t total_length)
+      const Metadata meta)
   {
-    meta_array_[position] = Metadata{offset, key_length, total_length};
+    meta_array_[position] = meta;
   }
 
   /**
@@ -482,7 +474,7 @@ class Node
     memcpy(dest_addr, src_addr, total_length);
 
     // set record metadata
-    copied_node->SetMetadata(position, offset, meta.GetKeyLength(), total_length);
+    copied_node->SetMetadata(position, Metadata{offset, meta.GetKeyLength(), total_length});
 
     return offset;
   }

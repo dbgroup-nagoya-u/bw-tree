@@ -119,7 +119,7 @@ class NodeFixture : public testing::Test
       // set a record
       node->SetPayload(offset, payloads[i], payload_length);
       node->SetKey(offset, keys[i], key_length);
-      node->SetMetadata(i, offset, key_length, record_length);
+      node->SetMetadata(i, Metadata{offset, key_length, record_length});
 
       // keep metadata for verification
       meta_vec.emplace_back(offset, key_length, record_length);

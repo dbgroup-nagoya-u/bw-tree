@@ -509,6 +509,8 @@ class BwTree
     page_size += rec_num * sizeof(Metadata);
 
     // add the size of records in a base node
+    page_size += base_node->GetFirstMeta().GetTotalLength();
+    page_size += base_node->GetSecondMeta().GetTotalLength();
     if (base_rec_num > 0) {
       const auto begin_offset = base_node->GetMetadata(base_rec_num - 1).GetOffset();
       const auto end_meta = base_node->GetMetadata(0);
@@ -562,6 +564,26 @@ class BwTree
     const bool need_split = (offset > kPageSize) ? true : false;
     const NodeType node_type = static_cast<NodeType>(cur_head->IsLeaf());
     Node_t *consol_node = Node_t::CreateNode(offset, node_type, 0UL, sib_node);
+
+    // copy the lowest/highest keys
+    const Metadata low_meta = base_node->GetFirstMeta();
+    const auto low_key_len = low_meta.GetKeyLength();
+    if (low_key_len == 0) {
+      consol_node->SetLowMeta(low_meta);
+    } else {
+      const Key *low_key = base_node->GetKeyAddr(low_meta);
+      consol_node->SetKey(offset, *low_key, low_key_len);
+      consol_node->SetLowMeta(Metadata{offset, low_key_len, low_key_len});
+    }
+    const Metadata high_meta = base_node->GetSecondMeta();
+    const auto high_key_len = low_meta.GetKeyLength();
+    if (high_key_len == 0) {
+      consol_node->SetHighMeta(high_meta);
+    } else {
+      const Key *high_key = base_node->GetKeyAddr(high_meta);
+      consol_node->SetKey(offset, *high_key, high_key_len);
+      consol_node->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
+    }
 
     // copy records from a delta chain and base node
     Metadata meta;
@@ -673,18 +695,18 @@ class BwTree
     // create an empty leaf node
     Mapping_t *child_page_id = mapping_table_.GetNewLogicalID();
     Node_t *empty_leaf = Node_t::CreateNode(kHeaderLength, NodeType::kLeaf, 0UL, nullptr);
-    empty_leaf->SetLowMeta(0, 0, 0);
-    empty_leaf->SetHighMeta(0, 0, 0);
+    empty_leaf->SetLowMeta(Metadata{0, 0, 0});
+    empty_leaf->SetHighMeta(Metadata{0, 0, 0});
     child_page_id->store(empty_leaf, mo_relax);
 
     // create an empty Bw-tree
     root_ = mapping_table_.GetNewLogicalID();
     auto offset = kHeaderLength + sizeof(Metadata) + sizeof(Mapping_t *);
     Node_t *initial_root = Node_t::CreateNode(offset, NodeType::kInternal, 1UL, nullptr);
-    initial_root->SetLowMeta(0, 0, 0);
-    initial_root->SetHighMeta(0, 0, 0);
+    initial_root->SetLowMeta(Metadata{0, 0, 0});
+    initial_root->SetHighMeta(Metadata{0, 0, 0});
     initial_root->template SetPayload<Mapping_t *>(offset, child_page_id, sizeof(Mapping_t *));
-    initial_root->SetMetadata(0, offset, 0, sizeof(Mapping_t *));
+    initial_root->SetMetadata(0, Metadata{offset, 0, sizeof(Mapping_t *)});
     root_->store(initial_root, mo_relax);
 
     // start garbage collector for removed nodes
