@@ -612,13 +612,13 @@ class BwTree
     size_t rec_num = 0, j = 0;
     const auto delta_rec_num = records.size();
     for (size_t i = 0; i < delta_rec_num; ++i) {
-      const auto [delta, delta_meta, delta_key] = records[i];
+      auto [delta, delta_meta, delta_key] = records[i];
 
       // copy records in a base node
       for (; j < base_rec_num; ++j) {
         meta = base_node->GetMetadata(j);
         base_key = base_node->GetKeyAddr(meta);
-        if (component::LT<Key, Comp>(base_key, delta_key)) {
+        if (meta.GetKeyLength() != 0 && component::LT<Key, Comp>(base_key, delta_key)) {
           offset = base_node->CopyRecordTo(consol_node, rec_num++, offset, meta);
         } else {
           break;
@@ -627,7 +627,42 @@ class BwTree
 
       // copy a delta record
       if (delta->GetDeltaNodeType() != DeltaNodeType::kDelete) {
-        offset = delta->CopyRecordTo(consol_node, rec_num++, offset, delta_meta);
+        if (delta->IsLeaf()) {
+          offset = delta->CopyRecordTo(consol_node, rec_num++, offset, delta_meta);
+        } else {
+          Node_t *prev_node = base_node;
+          Metadata prev_meta = meta;
+          do {
+            // insert a new index-entry
+            const auto sep_key = delta->GetLowKeyAddr();
+            const auto sep_key_len = delta_meta.GetKeyLength();
+            const auto ins_page = prev_node->template GetPayload<Mapping_t *>(prev_meta);
+            consol_node->SetPayload(offset, ins_page, sizeof(Mapping_t *));
+            consol_node->SetKey(offset, sep_key, sep_key_len);
+            consol_node->SetMetadata(
+                rec_num++, Metadata{offset, sep_key_len, sep_key_len + sizeof(Mapping_t *)});
+
+            // keep a current delta record for multiple splitting
+            prev_node = delta;
+            prev_meta = delta->GetFirstMeta();
+
+            // check the next delta record
+            if (++i >= delta_rec_num) break;
+            delta = records[i].node;
+            delta_meta = records[i].meta;
+            delta_key = records[i].key;
+          } while (meta.GetKeyLength() == 0 || component::LT<Key, Comp>(delta_key, base_key));
+
+          // insert the originally inserted index-entry
+          const auto orig_key = base_node->GetKeyAddr(meta);
+          const auto orig_key_len = meta.GetKeyLength();
+          const auto ins_page = prev_node->template GetPayload<Mapping_t *>(prev_meta);
+          consol_node->SetPayload(offset, ins_page, sizeof(Mapping_t *));
+          consol_node->SetKey(offset, orig_key, orig_key_len);
+          consol_node->SetMetadata(
+              rec_num++, Metadata{offset, orig_key_len, orig_key_len + sizeof(Mapping_t *)});
+          ++j;
+        }
       }
       if (j < base_rec_num && !component::LT<Key, Comp>(delta_key, base_key)) {
         ++j;  // a base node has the same key, so skip it
@@ -673,7 +708,7 @@ class BwTree
     auto src_addr = component::ShiftAddress(dest_addr, sizeof(Metadata) * left_num);
     memcpy(dest_addr, src_addr, sizeof(Metadata) * right_num);
 
-    // set a separator key as the highest key
+    // set a separator key as the lowest key
     split_node->SetLowMeta(sep_meta);
     split_node->SetRecordCount(right_num);
 
