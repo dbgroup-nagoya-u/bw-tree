@@ -40,7 +40,7 @@ enum ReturnCode
 };
 
 /**
- * @brief Compare binary keys as CString. The end of every key must be '\\0'.
+ * @brief Comp binary keys as CString. The end of every key must be '\\0'.
  *
  */
 struct CompareAsCString {

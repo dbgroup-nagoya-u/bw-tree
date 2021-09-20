@@ -130,12 +130,15 @@ class BwTreeFixture : public testing::Test
     if (expect_fail) {
       EXPECT_EQ(ReturnCode::kKeyNotExist, rc);
     } else {
+      bool result;
       EXPECT_EQ(ReturnCode::kSuccess, rc);
       if constexpr (IsVariableLengthData<Payload>()) {
-        EXPECT_TRUE(component::IsEqual<PayloadComp>(payloads[expected_id], actual.get()));
+        result = component::IsEqual<Payload, PayloadComp>(payloads[expected_id], actual.get());
       } else {
-        EXPECT_TRUE(component::IsEqual<PayloadComp>(payloads[expected_id], actual));
+        result = component::IsEqual<Payload, PayloadComp>(component::GetAddr(payloads[expected_id]),
+                                                          component::GetAddr(actual));
       }
+      EXPECT_TRUE(result);
     }
   }
 

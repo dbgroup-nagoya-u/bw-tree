@@ -30,9 +30,9 @@ namespace dbgroup::index::bw_tree::component
  * Note that this class represents both base nodes and delta nodes.
  *
  * @tparam Key a target key class.
- * @tparam Compare a comparetor class for keys.
+ * @tparam Comp a comparetor class for keys.
  */
-template <class Key, class Compare>
+template <class Key, class Comp>
 class Node
 {
   using Mapping_t = std::atomic<Node *>;
@@ -164,7 +164,7 @@ class Node
   CreateDeltaNode(  //
       const NodeType node_type,
       const DeltaNodeType delta_type,
-      const Key &key,
+      const void *key,
       const size_t key_length,
       const T &payload,
       const size_t payload_length)
@@ -183,7 +183,7 @@ class Node
 
   static Node *
   CreateIndexEntryDelta(  //
-      const Key &sep_key,
+      const void *sep_key,
       const size_t sep_key_len,
       const Mapping_t *split_page)
   {
@@ -198,8 +198,8 @@ class Node
     if (high_key_len == 0) {
       delta->SetHighMeta(high_meta);
     } else {
-      const Key *high_key = split_node->GetKeyAddr(high_meta);
-      delta->SetKey(offset, *high_key, high_key_len);
+      const auto high_key = split_node->GetKeyAddr(high_meta);
+      delta->SetKey(offset, high_key, high_key_len);
       delta->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
     }
     delta->SetPayload(offset, split_page, sizeof(Mapping_t *));
@@ -295,24 +295,10 @@ class Node
    * @param meta metadata of a corresponding record.
    * @return auto: an address of a target key.
    */
-  constexpr Key *
+  constexpr void *
   GetKeyAddr(const Metadata meta) const
   {
-    return reinterpret_cast<Key *>(ShiftAddress(this, meta.GetOffset()));
-  }
-
-  /**
-   * @param meta metadata of a corresponding record.
-   * @return Key: a target key.
-   */
-  constexpr Key
-  GetKey(const Metadata meta) const
-  {
-    if constexpr (IsVariableLengthData<Key>()) {
-      return reinterpret_cast<Key>(ShiftAddress(this, meta.GetOffset()));
-    } else {
-      return *reinterpret_cast<Key *>(ShiftAddress(this, meta.GetOffset()));
-    }
+    return ShiftAddress(this, meta.GetOffset());
   }
 
   /**
@@ -402,16 +388,11 @@ class Node
   void
   SetKey(  //
       size_t &offset,
-      const Key &key,
+      const void *key,
       const size_t key_length)
   {
-    if constexpr (IsVariableLengthData<Key>()) {
-      offset -= key_length;
-      memcpy(ShiftAddress(this, offset), key, key_length);
-    } else {
-      offset -= sizeof(Key);
-      memcpy(ShiftAddress(this, offset), &key, sizeof(Key));
-    }
+    offset -= key_length;
+    memcpy(ShiftAddress(this, offset), key, key_length);
   }
 
   /**
@@ -454,7 +435,7 @@ class Node
    */
   std::pair<ReturnCode, size_t>
   SearchRecord(  //
-      const Key &key,
+      const void *key,
       const bool range_is_closed) const
   {
     int64_t begin_idx = 0;
@@ -464,12 +445,12 @@ class Node
 
     while (begin_idx <= end_idx) {
       const auto meta = GetMetadata(idx);
-      const auto idx_key = GetKey(meta);
+      const auto idx_key = GetKeyAddr(meta);
 
-      if (meta.GetKeyLength() == 0 || Compare{}(key, idx_key)) {
+      if (meta.GetKeyLength() == 0 || LT<Key, Comp>(key, idx_key)) {
         // a target key is in a left side
         end_idx = idx - 1;
-      } else if (Compare{}(idx_key, key)) {
+      } else if (LT<Key, Comp>(idx_key, key)) {
         // a target key is in a right side
         begin_idx = idx + 1;
       } else {
@@ -512,11 +493,11 @@ class Node
 
 namespace dbgroup::memory
 {
-template <class Key, class Compare>
+template <class Key, class Comp>
 void
-Delete(::dbgroup::index::bw_tree::component::Node<Key, Compare> *obj)
+Delete(::dbgroup::index::bw_tree::component::Node<Key, Comp> *obj)
 {
-  ::dbgroup::index::bw_tree::component::Node<Key, Compare>::DeleteNode(obj);
+  ::dbgroup::index::bw_tree::component::Node<Key, Comp>::DeleteNode(obj);
 }
 
 }  // namespace dbgroup::memory

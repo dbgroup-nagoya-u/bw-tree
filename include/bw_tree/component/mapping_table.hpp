@@ -29,12 +29,12 @@ namespace dbgroup::index::bw_tree::component
  * @brief
  *
  * @tparam Key a target key class.
- * @tparam Compare a comparetor class for keys.
+ * @tparam Comp a comparetor class for keys.
  */
-template <class Key, class Compare>
+template <class Key, class Comp>
 class MappingTable
 {
-  using Node_t = Node<Key, Compare>;
+  using Node_t = Node<Key, Comp>;
   using Mapping_t = std::atomic<Node_t *>;
 
  public:

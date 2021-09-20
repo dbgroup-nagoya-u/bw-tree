@@ -118,7 +118,7 @@ class NodeFixture : public testing::Test
     for (size_t i = 0; i < max_record_num; ++i) {
       // set a record
       node->SetPayload(offset, payloads[i], payload_length);
-      node->SetKey(offset, keys[i], key_length);
+      node->SetKey(offset, &keys[i], key_length);
       node->SetMetadata(i, Metadata{offset, key_length, record_length});
 
       // keep metadata for verification
@@ -139,8 +139,9 @@ class NodeFixture : public testing::Test
       const size_t idx,
       const Metadata meta)
   {
-    auto key = node->GetKey(meta);
-    EXPECT_TRUE(IsEqual<KeyComp>(key, keys[idx]));
+    const auto key = node->GetKeyAddr(meta);
+    const auto result = IsEqual<Key, KeyComp>(key, GetAddr(keys[idx]));
+    EXPECT_TRUE(result);
   }
 
   void
@@ -150,7 +151,9 @@ class NodeFixture : public testing::Test
   {
     Payload payload{};
     node->CopyPayload(meta, payload);
-    EXPECT_TRUE(IsEqual<PayloadComp>(payload, payloads[idx]));
+
+    const auto result = IsEqual<Payload, PayloadComp>(GetAddr(payload), GetAddr(payloads[idx]));
+    EXPECT_TRUE(result);
 
     if constexpr (IsVariableLengthData<Payload>()) {
       ::operator delete(payload);
