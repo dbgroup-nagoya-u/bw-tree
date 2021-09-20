@@ -58,7 +58,7 @@ PrepareTestData(  //
     // variable-length data
     for (size_t i = 0; i < data_num; ++i) {
       auto data = reinterpret_cast<char *>(malloc(data_length));
-      snprintf(data, data_length, "%06lu", i);
+      snprintf(data, data_length, "%08lu", i);
       data_array[i] = reinterpret_cast<T>(data);
     }
   } else if constexpr (std::is_same_v<T, uint64_t *>) {
