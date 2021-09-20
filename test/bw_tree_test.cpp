@@ -210,7 +210,7 @@ TYPED_TEST(BwTreeFixture, Write_DuplicateKeys_ReadLatestValue)
   }
 }
 
-TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithConsolidate_ReadWrittenValues)
+TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithLeafConsolidate_ReadWrittenValues)
 {
   const size_t repeat_num = TestFixture::GetMaxRecordNumInPage();
 
@@ -222,7 +222,7 @@ TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithConsolidate_ReadWrittenValues)
   }
 }
 
-TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithConsolidate_ReadWrittenValues)
+TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithLeafConsolidate_ReadWrittenValues)
 {
   const size_t repeat_num = TestFixture::GetMaxRecordNumInPage() / 2;
 
@@ -237,7 +237,7 @@ TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithConsolidate_ReadWrittenValues)
   }
 }
 
-TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithSplit_ReadWrittenValues)
+TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithLeafSplit_ReadWrittenValues)
 {
   const size_t repeat_num = TestFixture::GetMaxRecordNumInPage() * 2;
 
@@ -249,9 +249,9 @@ TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithSplit_ReadWrittenValues)
   }
 }
 
-TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithSplit_ReadWrittenValues)
+TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithLeafSplit_ReadWrittenValues)
 {
-  const size_t repeat_num = TestFixture::GetMaxRecordNumInPage();
+  const size_t repeat_num = TestFixture::GetMaxRecordNumInPage() * 2;
 
   for (size_t i = 0; i < repeat_num; ++i) {
     TestFixture::VerifyWrite(i, i);
@@ -264,7 +264,7 @@ TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithSplit_ReadWrittenValues)
   }
 }
 
-TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithParentConsolidation_ReadWrittenValues)
+TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithInternalConsolidation_ReadWrittenValues)
 {
   const size_t repeat_num = TestFixture::GetMaxRecordNumInPage() * TestFixture::kSmallKeyNum;
 
@@ -273,6 +273,21 @@ TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithParentConsolidation_ReadWrittenVal
   }
   for (size_t i = 0; i < repeat_num; ++i) {
     TestFixture::VerifyRead(i, i);
+  }
+}
+
+TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithInternalConsolidation_ReadWrittenValues)
+{
+  const size_t repeat_num = TestFixture::GetMaxRecordNumInPage() * TestFixture::kSmallKeyNum;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i + 1);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i + 1);
   }
 }
 
