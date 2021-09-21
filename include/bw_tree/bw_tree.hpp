@@ -674,7 +674,7 @@ class BwTree
     consol_node->SetRecordCount(rec_num);
 
     if (need_split) {
-      Split(page_id, cur_head, consol_node, key, closed, stack);
+      HalfSplit(page_id, cur_head, consol_node, key, closed, stack);
       return;
     }
 
@@ -691,7 +691,7 @@ class BwTree
   }
 
   void
-  Split(  //
+  HalfSplit(  //
       Mapping_t *page_id,
       Node_t *cur_head,
       Node_t *split_node,
@@ -718,11 +718,11 @@ class BwTree
     const auto node_type = static_cast<NodeType>(split_node->IsLeaf());
     const Key *sep_key = reinterpret_cast<Key *>(split_node->GetKeyAddr(sep_meta));
     Mapping_t *split_page_id = mapping_table_.GetNewLogicalID();
-    Node_t *split_delta =
-        Node_t::CreateDeltaNode(node_type, DeltaNodeType::kSplit, sep_key, sep_meta.GetKeyLength(),
-                                split_page_id, sizeof(Mapping_t *));
-    split_page_id->store(split_node, mo_relax);
+    Node_t *split_delta = Node_t::CreateDeltaNode(node_type, DeltaNodeType::kSplit,  //
+                                                  sep_key, sep_meta.GetKeyLength(),  //
+                                                  split_page_id, sizeof(Mapping_t *));
     split_delta->SetNextNode(cur_head);
+    split_page_id->store(split_node, mo_relax);
 
     // install the delta record for splitting a child node
     auto tmp_node = cur_head;
@@ -737,10 +737,11 @@ class BwTree
       return;
     }
 
-    // execute parent split
+    // execute parent update
     Mapping_t *consol_node = nullptr;
     CompleteSplit(split_delta, stack, consol_node);
 
+    // execute parent consolidation/split if needed
     if (consol_node != nullptr) {
       Consolidate(consol_node, key, closed, stack);
     }
