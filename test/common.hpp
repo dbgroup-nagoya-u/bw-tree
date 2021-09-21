@@ -26,6 +26,10 @@ static constexpr size_t kThreadNum = BW_TREE_TEST_THREAD_NUM;
 static constexpr size_t kThreadNum = 8;
 #endif
 
+constexpr size_t kVariableDataLength = 9;
+
+constexpr size_t kRandomSeed = 10;
+
 // aliases for typed tests
 using UInt32Comp = std::less<uint32_t>;
 using UInt64Comp = std::less<uint64_t>;
@@ -46,8 +50,6 @@ IsVariableLengthData<char *>()
 }
 
 }  // namespace dbgroup::index::bw_tree
-
-constexpr size_t kVariableDataLength = 9;
 
 template <class T>
 constexpr size_t

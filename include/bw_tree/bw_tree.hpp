@@ -245,9 +245,9 @@ class BwTree
         }
         case DeltaNodeType::kNotDelta: {
           // check whether a target key is in this node
-          const auto high_meta = cur_head->GetSecondMeta();
+          const auto high_meta = cur_node->GetSecondMeta();
           if (high_meta.GetKeyLength() != 0) {
-            const auto high_key = cur_head->GetKeyAddr(high_meta);
+            const auto high_key = cur_node->GetKeyAddr(high_meta);
             if (component::LT<Key, Comp>(high_key, key)
                 || (!closed && component::LT<Key, Comp>(key, high_key))) {
               // traverse to a sibling node
@@ -716,7 +716,7 @@ class BwTree
 
     // create a split-delta record
     const auto node_type = static_cast<NodeType>(split_node->IsLeaf());
-    const void *sep_key = split_node->GetKeyAddr(sep_meta);
+    const Key *sep_key = reinterpret_cast<Key *>(split_node->GetKeyAddr(sep_meta));
     Mapping_t *split_page_id = mapping_table_.GetNewLogicalID();
     Node_t *split_delta =
         Node_t::CreateDeltaNode(node_type, DeltaNodeType::kSplit, sep_key, sep_meta.GetKeyLength(),
@@ -754,7 +754,7 @@ class BwTree
   {
     // create an index-entry delta record
     const auto split_meta = split_delta->GetFirstMeta();
-    const void *sep_key = split_delta->GetKeyAddr(split_meta);
+    const Key *sep_key = reinterpret_cast<Key *>(split_delta->GetKeyAddr(split_meta));
     Mapping_t *right_page = split_delta->template GetPayload<Mapping_t *>(split_meta);
 
     if (stack.size() > 1) {

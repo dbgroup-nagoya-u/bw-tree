@@ -125,7 +125,9 @@ class Node
     // release nodes recursively until it reaches a base node
     if (delta_type_ != DeltaNodeType::kNotDelta) {
       auto next_node = GetNextNode();
-      DeleteNode(next_node);
+      if (next_node != nullptr) {
+        DeleteNode(next_node);
+      }
     }
   }
 
