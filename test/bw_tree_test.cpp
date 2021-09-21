@@ -278,4 +278,19 @@ TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithInternalSplit_ReadWrittenValues)
   }
 }
 
+TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithInternalSplit_ReadWrittenValues)
+{
+  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kMaxRecordNum;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i + 1);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i + 1);
+  }
+}
+
 }  // namespace dbgroup::index::bw_tree::test
