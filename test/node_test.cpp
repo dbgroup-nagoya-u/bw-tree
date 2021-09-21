@@ -50,26 +50,23 @@ class NodeFixture : public testing::Test
    * Internal constants
    *##############################################################################################*/
 
+  static constexpr size_t kKeyLength = GetDataLength<Key>();
+  static constexpr size_t kPayloadLength = GetDataLength<Payload>();
+  static constexpr size_t kRecordLength = kKeyLength + kPayloadLength;
+  static constexpr size_t kMaxRecordNum =
+      (kPageSize - component::kHeaderLength) / (kRecordLength + sizeof(Metadata));
   static constexpr size_t kKeyNumForTest = 1024;
-  static constexpr size_t kKeyLength = kWordLength;
-  static constexpr size_t kPayloadLength = kWordLength;
 
   /*################################################################################################
    * Internal member variables
    *##############################################################################################*/
 
   // actual keys and payloads
-  size_t key_length;
-  size_t payload_length;
   Key keys[kKeyNumForTest];
   Payload payloads[kKeyNumForTest];
 
-  // the length of a record and its maximum number
-  size_t record_length;
-  size_t max_record_num;
-
   // a target node and its expected metadata
-  std::unique_ptr<Node_t> node;
+  Node_t *node;
   std::vector<Metadata> meta_vec;
 
   /*################################################################################################
@@ -79,23 +76,16 @@ class NodeFixture : public testing::Test
   void
   SetUp() override
   {
-    // prepare keys
-    key_length = (IsVariableLengthData<Key>()) ? 7 : sizeof(Key);
-    PrepareTestData(keys, kKeyNumForTest, key_length);
-
-    // prepare payloads
-    payload_length = (IsVariableLengthData<Payload>()) ? 7 : sizeof(Payload);
-    PrepareTestData(payloads, kKeyNumForTest, payload_length);
-
-    // set a record length and its maximum number
-    record_length = key_length + payload_length;
-    max_record_num = (kPageSize - kHeaderLength) / (record_length + sizeof(Metadata));
-    if (max_record_num > kKeyNumForTest) max_record_num = kKeyNumForTest;
+    node = Node_t::CreateNode(kPageSize, NodeType::kLeaf, kMaxRecordNum, nullptr);
+    PrepareTestData(keys, kKeyNumForTest);
+    PrepareTestData(payloads, kKeyNumForTest);
   }
 
   void
   TearDown() override
   {
+    Node_t::DeleteNode(node);
+
     ReleaseTestData(keys, kKeyNumForTest);
     ReleaseTestData(payloads, kKeyNumForTest);
   }
@@ -105,49 +95,24 @@ class NodeFixture : public testing::Test
    *##############################################################################################*/
 
   void
-  VerifyConstructor(  //
-      const bool is_leaf,
-      const bool is_delta)
-  {
-    const auto node_type = (is_leaf) ? NodeType::kLeaf : NodeType::kInternal;
-
-    if (is_delta) {
-      node = std::make_unique<Node_t>(node_type, DeltaNodeType::kInsert);
-
-      EXPECT_EQ(DeltaNodeType::kInsert, node->GetDeltaNodeType());
-    } else {
-      node = std::make_unique<Node_t>(node_type, 0, nullptr);
-
-      EXPECT_EQ(DeltaNodeType::kNotDelta, node->GetDeltaNodeType());
-      EXPECT_EQ(0, node->GetRecordCount());
-      EXPECT_EQ(nullptr, node->GetNextNode());
-    }
-
-    EXPECT_FALSE(is_leaf ^ node->IsLeaf());
-  }
-
-  void
   VerifySetterGetter()
   {
-    meta_vec.reserve(max_record_num);
-
-    // creat an empty node
-    node.reset(new (malloc(kPageSize)) Node_t{NodeType::kLeaf, max_record_num, nullptr});
+    meta_vec.reserve(kMaxRecordNum);
 
     // set records and keep their metadata
     size_t offset = kPageSize;
-    for (size_t i = 0; i < max_record_num; ++i) {
+    for (size_t i = 0; i < kMaxRecordNum; ++i) {
       // set a record
-      node->SetPayload(offset, payloads[i], payload_length);
-      node->SetKey(offset, keys[i], key_length);
-      node->SetMetadata(i, offset, key_length, record_length);
+      node->SetPayload(offset, payloads[i], kPayloadLength);
+      node->SetKey(offset, GetAddr(keys[i]), kKeyLength);
+      node->SetMetadata(i, Metadata{offset, kKeyLength, kRecordLength});
 
       // keep metadata for verification
-      meta_vec.emplace_back(offset, key_length, record_length);
+      meta_vec.emplace_back(offset, kKeyLength, kRecordLength);
     }
 
     // verify records and their metadata
-    for (size_t i = 0; i < max_record_num; ++i) {
+    for (size_t i = 0; i < kMaxRecordNum; ++i) {
       const auto meta = node->GetMetadata(i);
       EXPECT_EQ(meta_vec.at(i), meta);
       VerifyKey(i, meta);
@@ -160,8 +125,9 @@ class NodeFixture : public testing::Test
       const size_t idx,
       const Metadata meta)
   {
-    auto key = node->GetKey(meta);
-    EXPECT_TRUE(IsEqual<KeyComp>(key, keys[idx]));
+    const auto key = node->GetKeyAddr(meta);
+    const auto result = IsEqual<Key, KeyComp>(key, GetAddr(keys[idx]));
+    EXPECT_TRUE(result);
   }
 
   void
@@ -171,10 +137,12 @@ class NodeFixture : public testing::Test
   {
     Payload payload{};
     node->CopyPayload(meta, payload);
-    EXPECT_TRUE(IsEqual<PayloadComp>(payload, payloads[idx]));
+
+    const auto result = IsEqual<Payload, PayloadComp>(GetAddr(payload), GetAddr(payloads[idx]));
+    EXPECT_TRUE(result);
 
     if constexpr (IsVariableLengthData<Payload>()) {
-      ::dbgroup::memory::Delete(payload);
+      ::operator delete(payload);
     }
   }
 };
@@ -195,30 +163,6 @@ TYPED_TEST_CASE(NodeFixture, KeyPayloadPairs);
 /*##################################################################################################
  * Unit test definitions
  *################################################################################################*/
-
-/*--------------------------------------------------------------------------------------------------
- * Constructor tests
- *------------------------------------------------------------------------------------------------*/
-
-TYPED_TEST(NodeFixture, Construct_LeafBaseNode_CorrectlyInitialized)
-{
-  TestFixture::VerifyConstructor(true, false);
-}
-
-TYPED_TEST(NodeFixture, Construct_InternalBaseNode_CorrectlyInitialized)
-{
-  TestFixture::VerifyConstructor(false, false);
-}
-
-TYPED_TEST(NodeFixture, Construct_LeafDeltaNode_CorrectlyInitialized)
-{
-  TestFixture::VerifyConstructor(true, true);
-}
-
-TYPED_TEST(NodeFixture, Construct_InternalDeltaNode_CorrectlyInitialized)
-{
-  TestFixture::VerifyConstructor(false, true);
-}
 
 /*--------------------------------------------------------------------------------------------------
  * Getter/setter tests

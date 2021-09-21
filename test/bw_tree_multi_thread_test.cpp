@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
-#include "bw_tree/bw_tree.hpp"
-
+#include <future>
 #include <memory>
+#include <mutex>
+#include <random>
+#include <thread>
 #include <vector>
 
+#include "bw_tree/bw_tree.hpp"
 #include "common.hpp"
 #include "gtest/gtest.h"
 
@@ -57,8 +60,22 @@ class BwTreeFixture : public testing::Test
   static constexpr size_t kRecordLength = kKeyLength + kPayloadLength;
   static constexpr size_t kMaxRecordNum =
       (kPageSize - component::kHeaderLength) / (kRecordLength + sizeof(Metadata));
-  static constexpr size_t kKeyNumForTest = kMaxRecordNum * kMaxRecordNum + 1;
+  static constexpr size_t kKeyNumForTest = 10000;  // kMaxRecordNum * kMaxRecordNum + 1;
   static constexpr size_t kSmallKeyNum = kMaxDeltaNodeNum - 1;
+
+  enum WriteType
+  {
+    kWrite,
+    kInsert,
+    kUpdate,
+    kDelete
+  };
+
+  struct Operation {
+    WriteType w_type;
+    size_t key_id;
+    size_t payload_id;
+  };
 
   /*################################################################################################
    * Internal member variables
@@ -70,6 +87,12 @@ class BwTreeFixture : public testing::Test
 
   // a target node and its expected metadata
   std::unique_ptr<BwTree_t> bw_tree;
+
+  std::uniform_int_distribution<size_t> id_dist{0, kKeyNumForTest - 2};
+
+  std::shared_mutex main_lock;
+
+  std::shared_mutex worker_lock;
 
   /*################################################################################################
    * Setup/Teardown
@@ -88,6 +111,121 @@ class BwTreeFixture : public testing::Test
   {
     ReleaseTestData(keys, kKeyNumForTest);
     ReleaseTestData(payloads, kKeyNumForTest);
+  }
+
+  /*################################################################################################
+   * Utility functions
+   *##############################################################################################*/
+
+  ReturnCode
+  PerformWriteOperation(const Operation &ops)
+  {
+    const auto key = keys[ops.key_id];
+    const auto payload = payloads[ops.payload_id];
+
+    switch (ops.w_type) {
+      case kInsert:
+        // return bw_tree->Insert(key, payload, kKeyLength, kPayloadLength);
+      case kUpdate:
+        // return bw_tree->Update(key, payload, kKeyLength, kPayloadLength);
+      case kDelete:
+        // return bw_tree->Delete(key, kKeyLength);
+      case kWrite:
+        break;
+    }
+    return bw_tree->Write(key, payload, kKeyLength, kPayloadLength);
+  }
+
+  Operation
+  PrepareOperation(  //
+      const WriteType w_type,
+      std::mt19937_64 &rand_engine)
+  {
+    const auto id = id_dist(rand_engine);
+
+    switch (w_type) {
+      case kWrite:
+      case kInsert:
+      case kDelete:
+        break;
+      case kUpdate:
+        return Operation{w_type, id, id + 1};
+    }
+    return Operation{w_type, id, id};
+  }
+
+  void
+  WriteRandomKeys(  //
+      const size_t write_num,
+      const WriteType w_type,
+      const size_t rand_seed,
+      std::promise<std::vector<size_t>> p)
+  {
+    std::vector<Operation> operations;
+    std::vector<size_t> written_ids;
+    operations.reserve(write_num);
+    written_ids.reserve(write_num);
+
+    {  // create a lock to prevent a main thread
+      const std::shared_lock<std::shared_mutex> guard{main_lock};
+
+      // prepare operations to be executed
+      std::mt19937_64 rand_engine{rand_seed};
+      for (size_t i = 0; i < write_num; ++i) {
+        operations.emplace_back(PrepareOperation(w_type, rand_engine));
+      }
+    }
+
+    {  // wait for a main thread to release a lock
+      const std::shared_lock<std::shared_mutex> lock{worker_lock};
+
+      // perform and gather results
+      for (auto &&ops : operations) {
+        if (PerformWriteOperation(ops) == ReturnCode::kSuccess) {
+          written_ids.emplace_back(ops.key_id);
+        }
+      }
+    }
+
+    // return results via promise
+    p.set_value(std::move(written_ids));
+  }
+
+  std::vector<size_t>
+  RunOverMultiThread(  //
+      const size_t write_num,
+      const size_t thread_num,
+      const WriteType w_type)
+  {
+    std::vector<std::future<std::vector<size_t>>> futures;
+
+    {  // create a lock to prevent workers from executing
+      const std::unique_lock<std::shared_mutex> guard{worker_lock};
+
+      // run a function over multi-threads with promise
+      std::mt19937_64 rand_engine(kRandomSeed);
+      for (size_t i = 0; i < thread_num; ++i) {
+        std::promise<std::vector<size_t>> p;
+        futures.emplace_back(p.get_future());
+        const auto rand_seed = rand_engine();
+        std::thread{
+            &BwTreeFixture::WriteRandomKeys, this, write_num, w_type, rand_seed, std::move(p)}
+            .detach();
+      }
+
+      // wait for all workers to finish initialization
+      const std::unique_lock<std::shared_mutex> lock{main_lock};
+    }
+
+    // gather results via promise-future
+    std::vector<size_t> written_ids;
+    written_ids.reserve(write_num * thread_num);
+    for (auto &&future : futures) {
+      auto tmp_written = future.get();
+      written_ids.insert(written_ids.end(), tmp_written.begin(), tmp_written.end());
+    }
+
+    return written_ids;
   }
 
   /*################################################################################################
@@ -118,13 +256,14 @@ class BwTreeFixture : public testing::Test
   }
 
   void
-  VerifyWrite(  //
-      const size_t key_id,
-      const size_t payload_id)
+  VerifyWrite()
   {
-    auto rc = bw_tree->Write(keys[key_id], payloads[payload_id], kKeyLength, kPayloadLength);
+    const size_t write_num = (kKeyNumForTest - 1) / kThreadNum;
 
-    EXPECT_EQ(ReturnCode::kSuccess, rc);
+    auto written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kWrite);
+    for (auto &&id : written_ids) {
+      VerifyRead(id, id);
+    }
   }
 };
 
@@ -145,152 +284,9 @@ TYPED_TEST_CASE(BwTreeFixture, KeyPayloadPairs);
  * Unit test definitions
  *################################################################################################*/
 
-/*--------------------------------------------------------------------------------------------------
- * Read operation tests
- *------------------------------------------------------------------------------------------------*/
-
-TYPED_TEST(BwTreeFixture, Read_EmptyIndex_ReadFail)
+TYPED_TEST(BwTreeFixture, Write_MultiThreads_ReadWrittenPayloads)
 {  //
-  TestFixture::VerifyRead(0, 0, true);
-}
-
-/*--------------------------------------------------------------------------------------------------
- * Write operation tests
- *------------------------------------------------------------------------------------------------*/
-
-TYPED_TEST(BwTreeFixture, Write_UniqueKeys_ReadWrittenValues)
-{
-  const size_t repeat_num = TestFixture::kSmallKeyNum;
-
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyRead(i, i);
-  }
-}
-
-TYPED_TEST(BwTreeFixture, Write_DuplicateKeys_ReadLatestValue)
-{
-  const size_t repeat_num = TestFixture::kSmallKeyNum / 2;
-
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i + 1);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyRead(i, i + 1);
-  }
-}
-
-TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithLeafConsolidate_ReadWrittenValues)
-{
-  const size_t repeat_num = TestFixture::kMaxRecordNum;
-
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyRead(i, i);
-  }
-}
-
-TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithLeafConsolidate_ReadWrittenValues)
-{
-  const size_t repeat_num = TestFixture::kMaxRecordNum / 2;
-
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i + 1);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyRead(i, i + 1);
-  }
-}
-
-TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithLeafSplit_ReadWrittenValues)
-{
-  const size_t repeat_num = TestFixture::kMaxRecordNum * 2;
-
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyRead(i, i);
-  }
-}
-
-TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithLeafSplit_ReadWrittenValues)
-{
-  const size_t repeat_num = TestFixture::kMaxRecordNum * 2;
-
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i + 1);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyRead(i, i + 1);
-  }
-}
-
-TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithInternalConsolidation_ReadWrittenValues)
-{
-  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kSmallKeyNum;
-
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyRead(i, i);
-  }
-}
-
-TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithInternalConsolidation_ReadWrittenValues)
-{
-  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kSmallKeyNum;
-
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i + 1);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyRead(i, i + 1);
-  }
-}
-
-TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithInternalSplit_ReadWrittenValues)
-{
-  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kMaxRecordNum;
-
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyRead(i, i);
-  }
-}
-
-TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithInternalSplit_ReadWrittenValues)
-{
-  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kMaxRecordNum;
-
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyWrite(i, i + 1);
-  }
-  for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::VerifyRead(i, i + 1);
-  }
+   // TestFixture::VerifyWrite();
 }
 
 }  // namespace dbgroup::index::bw_tree::test

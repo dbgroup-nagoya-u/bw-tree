@@ -30,9 +30,9 @@ namespace dbgroup::index::bw_tree::component
  * Note that this class represents both base nodes and delta nodes.
  *
  * @tparam Key a target key class.
- * @tparam Compare a comparetor class for keys.
+ * @tparam Comp a comparetor class for keys.
  */
-template <class Key, class Compare>
+template <class Key, class Comp>
 class Node
 {
   using Mapping_t = std::atomic<Node *>;
@@ -60,12 +60,17 @@ class Node
   /// the pointer to the next node.
   uintptr_t next_node_;
 
+  /// metadata of a lowest key or a first record in a delta node
+  Metadata low_meta_;
+
+  /// metadata of a highest key or a second record in a delta node
+  Metadata high_meta_;
+
   /// an actual data block (it starts with record metadata).
   Metadata meta_array_[0];
 
- public:
   /*################################################################################################
-   * Public constructors/destructors
+   * Internal constructors/destructors
    *##############################################################################################*/
 
   /**
@@ -100,6 +105,17 @@ class Node
   {
   }
 
+ public:
+  /*################################################################################################
+   * Public constructors/destructors
+   *##############################################################################################*/
+
+  /**
+   * @brief Construct a new base node object.
+   *
+   */
+  constexpr Node() : node_type_{}, delta_type_{}, record_count_{}, next_node_{} {}
+
   /**
    * @brief Destroy the node object.
    *
@@ -109,7 +125,9 @@ class Node
     // release nodes recursively until it reaches a base node
     if (delta_type_ != DeltaNodeType::kNotDelta) {
       auto next_node = GetNextNode();
-      ::dbgroup::memory::Delete(next_node);
+      if (next_node != nullptr) {
+        DeleteNode(next_node);
+      }
     }
   }
 
@@ -132,6 +150,13 @@ class Node
     return new (::operator new(node_size)) Node{node_type, record_count, sib_node};
   }
 
+  static void
+  DeleteNode(Node *node)
+  {
+    node->~Node();
+    ::operator delete(node);
+  }
+
   /*################################################################################################
    * Public delta node builders
    *##############################################################################################*/
@@ -141,19 +166,47 @@ class Node
   CreateDeltaNode(  //
       const NodeType node_type,
       const DeltaNodeType delta_type,
-      const Key &key,
+      const void *key,
       const size_t key_length,
       const T &payload,
       const size_t payload_length)
   {
     const size_t total_length = key_length + payload_length;
-    size_t offset = kHeaderLength + sizeof(Metadata) + total_length;
+    size_t offset = kHeaderLength + total_length;
 
-    auto delta = new (::operator new(offset)) Node{node_type, delta_type};
+    Node *delta = new (::operator new(offset)) Node{node_type, delta_type};
 
     delta->SetPayload(offset, payload, payload_length);
     delta->SetKey(offset, key, key_length);
-    delta->SetMetadata(0, offset, key_length, total_length);
+    delta->SetLowMeta(Metadata{offset, key_length, total_length});
+
+    return delta;
+  }
+
+  static Node *
+  CreateIndexEntryDelta(  //
+      const void *sep_key,
+      const size_t sep_key_len,
+      const Mapping_t *split_page)
+  {
+    const auto total_length = sep_key_len + sizeof(Mapping_t *);
+    const Node *split_node = split_page->load(mo_relax);
+    const auto high_meta = split_node->GetSecondMeta();
+    const auto high_key_len = high_meta.GetKeyLength();
+    size_t offset = kHeaderLength + total_length + high_key_len;
+
+    Node *delta = new (::operator new(offset)) Node{NodeType::kInternal, DeltaNodeType::kInsert};
+
+    if (high_key_len == 0) {
+      delta->SetHighMeta(high_meta);
+    } else {
+      const auto high_key = split_node->GetKeyAddr(high_meta);
+      delta->SetKey(offset, high_key, high_key_len);
+      delta->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
+    }
+    delta->SetPayload(offset, split_page, sizeof(Mapping_t *));
+    delta->SetKey(offset, sep_key, sep_key_len);
+    delta->SetLowMeta(Metadata{offset, sep_key_len, total_length});
 
     return delta;
   }
@@ -202,6 +255,18 @@ class Node
     return const_cast<Mapping_t *>(reinterpret_cast<const Mapping_t *>(next_node_));
   }
 
+  constexpr Metadata
+  GetFirstMeta() const
+  {
+    return low_meta_;
+  }
+
+  constexpr Metadata
+  GetSecondMeta() const
+  {
+    return high_meta_;
+  }
+
   /**
    * @param position the position of record metadata to be get.
    * @return Metadata: record metadata.
@@ -212,28 +277,30 @@ class Node
     return meta_array_[position];
   }
 
-  /**
-   * @param meta metadata of a corresponding record.
-   * @return auto: an address of a target key.
-   */
   constexpr Key *
-  GetKeyAddr(const Metadata meta) const
+  GetLowKeyAddr() const
   {
-    return reinterpret_cast<Key *>(ShiftAddress(this, meta.GetOffset()));
+    if (low_meta_.GetKeyLength() == 0) return nullptr;
+
+    return reinterpret_cast<Key *>(ShiftAddress(this, low_meta_.GetOffset()));
+  }
+
+  constexpr Key *
+  GetHighKeyAddr() const
+  {
+    if (high_meta_.GetKeyLength() == 0) return nullptr;
+
+    return reinterpret_cast<Key *>(ShiftAddress(this, high_meta_.GetOffset()));
   }
 
   /**
    * @param meta metadata of a corresponding record.
-   * @return Key: a target key.
+   * @return auto: an address of a target key.
    */
-  constexpr Key
-  GetKey(const Metadata meta) const
+  constexpr void *
+  GetKeyAddr(const Metadata meta) const
   {
-    if constexpr (IsVariableLengthData<Key>()) {
-      return reinterpret_cast<Key>(ShiftAddress(this, meta.GetOffset()));
-    } else {
-      return *reinterpret_cast<Key *>(ShiftAddress(this, meta.GetOffset()));
-    }
+    return ShiftAddress(this, meta.GetOffset());
   }
 
   /**
@@ -287,6 +354,18 @@ class Node
     record_count_ = rec_num;
   }
 
+  constexpr void
+  SetLowMeta(const Metadata meta)
+  {
+    low_meta_ = meta;
+  }
+
+  constexpr void
+  SetHighMeta(const Metadata meta)
+  {
+    high_meta_ = meta;
+  }
+
   /**
    * @brief Set record metadata.
    *
@@ -296,11 +375,9 @@ class Node
   constexpr void
   SetMetadata(  //
       const size_t position,
-      const size_t offset,
-      const size_t key_length,
-      const size_t total_length)
+      const Metadata meta)
   {
-    meta_array_[position] = Metadata{offset, key_length, total_length};
+    meta_array_[position] = meta;
   }
 
   /**
@@ -313,16 +390,11 @@ class Node
   void
   SetKey(  //
       size_t &offset,
-      const Key &key,
+      const void *key,
       const size_t key_length)
   {
-    if constexpr (IsVariableLengthData<Key>()) {
-      offset -= key_length;
-      memcpy(ShiftAddress(this, offset), key, key_length);
-    } else {
-      offset -= sizeof(Key);
-      memcpy(ShiftAddress(this, offset), &key, sizeof(Key));
-    }
+    offset -= key_length;
+    memcpy(ShiftAddress(this, offset), key, key_length);
   }
 
   /**
@@ -365,7 +437,7 @@ class Node
    */
   std::pair<ReturnCode, size_t>
   SearchRecord(  //
-      const Key &key,
+      const void *key,
       const bool range_is_closed) const
   {
     int64_t begin_idx = 0;
@@ -375,12 +447,12 @@ class Node
 
     while (begin_idx <= end_idx) {
       const auto meta = GetMetadata(idx);
-      const auto idx_key = GetKey(meta);
+      const auto idx_key = GetKeyAddr(meta);
 
-      if (meta.GetKeyLength() == 0 || Compare{}(key, idx_key)) {
+      if (meta.GetKeyLength() == 0 || LT<Key, Comp>(key, idx_key)) {
         // a target key is in a left side
         end_idx = idx - 1;
-      } else if (Compare{}(idx_key, key)) {
+      } else if (LT<Key, Comp>(idx_key, key)) {
         // a target key is in a right side
         begin_idx = idx + 1;
       } else {
@@ -413,7 +485,7 @@ class Node
     memcpy(dest_addr, src_addr, total_length);
 
     // set record metadata
-    copied_node->SetMetadata(position, offset, meta.GetKeyLength(), total_length);
+    copied_node->SetMetadata(position, Metadata{offset, meta.GetKeyLength(), total_length});
 
     return offset;
   }
@@ -423,12 +495,11 @@ class Node
 
 namespace dbgroup::memory
 {
-template <class Key, class Compare>
+template <class Key, class Comp>
 void
-Delete(::dbgroup::index::bw_tree::component::Node<Key, Compare> *obj)
+Delete(::dbgroup::index::bw_tree::component::Node<Key, Comp> *obj)
 {
-  obj->~Node();
-  ::operator delete(obj);
+  ::dbgroup::index::bw_tree::component::Node<Key, Comp>::DeleteNode(obj);
 }
 
 }  // namespace dbgroup::memory

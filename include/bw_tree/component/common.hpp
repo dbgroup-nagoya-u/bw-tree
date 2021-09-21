@@ -71,11 +71,50 @@ enum DeltaNodeType : uint16_t
 constexpr auto mo_relax = std::memory_order_relaxed;
 
 /// Header length in bytes.
-constexpr size_t kHeaderLength = 2 * kWordLength;
+constexpr size_t kHeaderLength = 28;
 
 /*##################################################################################################
  * Internal utility functions
  *################################################################################################*/
+
+template <class T>
+constexpr const void *
+GetAddr(const T &obj)
+{
+  if constexpr (IsVariableLengthData<T>()) {
+    return reinterpret_cast<const void *>(obj);
+  } else {
+    return reinterpret_cast<const void *>(&obj);
+  }
+}
+
+template <class Key, class Comp, class T1, class T2>
+constexpr bool
+LT(const T1 &a, const T2 &b)
+{
+  if constexpr (std::is_same_v<T1, Key> && std::is_same_v<T2, Key>) {
+    return Comp{}(a, b);
+  } else if constexpr (std::is_same_v<T1, Key> && std::is_same_v<T2, void *>) {
+    if constexpr (IsVariableLengthData<Key>()) {
+      return Comp{}(a, reinterpret_cast<const Key>(b));
+    } else {
+      return Comp{}(a, *reinterpret_cast<const Key *>(b));
+    }
+  } else if constexpr (std::is_same_v<T1, void *> && std::is_same_v<T2, Key>) {
+    if constexpr (IsVariableLengthData<Key>()) {
+      return Comp{}(reinterpret_cast<const Key>(a), b);
+    } else {
+      return Comp{}(*reinterpret_cast<const Key *>(a), b);
+    }
+  } else {
+    if constexpr (IsVariableLengthData<Key>()) {
+      return Comp{}(reinterpret_cast<Key>(const_cast<void *>(a)),
+                    reinterpret_cast<Key>(const_cast<void *>(b)));
+    } else {
+      return Comp{}(*reinterpret_cast<const Key *>(a), *reinterpret_cast<const Key *>(b));
+    }
+  }
+}
 
 /**
  * @brief Cast a given pointer to a specified pointer type.
@@ -119,25 +158,25 @@ GetMaxRecordNum()
 }
 
 /**
- * @tparam Compare a comparator class.
+ * @tparam Comp a comparator class.
  * @tparam T a target class.
  * @param obj_1 an object to be compared.
  * @param obj_2 another object to be compared.
  * @retval true if given objects are equivalent.
  * @retval false if given objects are different.
  */
-template <class Compare, class T>
+template <class Key, class Comp>
 constexpr bool
 IsEqual(  //
-    const T &obj_1,
-    const T &obj_2)
+    const void *obj_1,
+    const void *obj_2)
 {
-  return !Compare{}(obj_1, obj_2) && !Compare{}(obj_2, obj_1);
+  return !LT<Key, Comp>(obj_1, obj_2) && !LT<Key, Comp>(obj_2, obj_1);
 }
 
 /**
- * @tparam Compare a comparator class for target keys.
  * @tparam Key a target key class.
+ * @tparam Comp a comparator class for target keys.
  * @param key a target key.
  * @param begin_key a begin key of a range condition.
  * @param begin_closed a flag to indicate whether the begin side of range is closed.
@@ -146,13 +185,13 @@ IsEqual(  //
  * @retval true if a target key is in a range.
  * @retval false if a target key is outside of a range.
  */
-template <class Compare, class Key>
+template <class Key, class Comp>
 constexpr bool
 IsInRange(  //
-    const Key &key,
-    const Key *begin_key,
+    const void *key,
+    const void *begin_key,
     const bool begin_closed,
-    const Key *end_key,
+    const void *end_key,
     const bool end_closed)
 {
   if (begin_key == nullptr && end_key == nullptr) {
@@ -160,15 +199,15 @@ IsInRange(  //
     return true;
   } else if (begin_key == nullptr) {
     // less than or equal to
-    return Compare{}(key, *end_key) || (end_closed && !Compare{}(*end_key, key));
+    return LT<Key, Comp>(key, end_key) || (end_closed && !LT<Key, Comp>(end_key, key));
   } else if (end_key == nullptr) {
     // greater than or equal to
-    return Compare{}(*begin_key, key) || (begin_closed && !Compare{}(key, *begin_key));
+    return LT<Key, Comp>(begin_key, key) || (begin_closed && !LT<Key, Comp>(key, begin_key));
   } else {
     // between
-    return !((Compare{}(key, *begin_key) || Compare{}(*end_key, key))
-             || (!begin_closed && IsEqual<Compare>(key, *begin_key))
-             || (!end_closed && IsEqual<Compare>(key, *end_key)));
+    return !((LT<Key, Comp>(key, begin_key) || LT<Key, Comp>(end_key, key))
+             || (!begin_closed && IsEqual<Key, Comp>(key, begin_key))
+             || (!end_closed && IsEqual<Key, Comp>(key, end_key)));
   }
 }
 

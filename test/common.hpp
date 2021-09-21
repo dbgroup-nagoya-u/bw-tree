@@ -26,6 +26,10 @@ static constexpr size_t kThreadNum = BW_TREE_TEST_THREAD_NUM;
 static constexpr size_t kThreadNum = 8;
 #endif
 
+constexpr size_t kVariableDataLength = 9;
+
+constexpr size_t kRandomSeed = 10;
+
 // aliases for typed tests
 using UInt32Comp = std::less<uint32_t>;
 using UInt64Comp = std::less<uint64_t>;
@@ -48,23 +52,33 @@ IsVariableLengthData<char *>()
 }  // namespace dbgroup::index::bw_tree
 
 template <class T>
+constexpr size_t
+GetDataLength()
+{
+  if constexpr (::dbgroup::index::bw_tree::IsVariableLengthData<T>()) {
+    return kVariableDataLength;
+  } else {
+    return sizeof(T);
+  }
+}
+
+template <class T>
 void
 PrepareTestData(  //
     T *data_array,
-    const size_t data_num,
-    [[maybe_unused]] const size_t data_length)
+    const size_t data_num)
 {
   if constexpr (::dbgroup::index::bw_tree::IsVariableLengthData<T>()) {
     // variable-length data
     for (size_t i = 0; i < data_num; ++i) {
-      auto data = reinterpret_cast<char *>(malloc(data_length));
-      snprintf(data, data_length, "%06lu", i);
+      auto data = reinterpret_cast<char *>(malloc(kVariableDataLength));
+      snprintf(data, kVariableDataLength, "%08lu", i);
       data_array[i] = reinterpret_cast<T>(data);
     }
   } else if constexpr (std::is_same_v<T, uint64_t *>) {
     // pointer data
     for (size_t i = 0; i < data_num; ++i) {
-      auto data = reinterpret_cast<uint64_t *>(malloc(data_length));
+      auto data = reinterpret_cast<uint64_t *>(malloc(sizeof(uint64_t)));
       *data = i;
       data_array[i] = data;
     }
