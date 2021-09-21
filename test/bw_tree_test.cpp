@@ -52,24 +52,21 @@ class BwTreeFixture : public testing::Test
    * Internal constants
    *##############################################################################################*/
 
-  static constexpr size_t kKeyNumForTest = 409600;
+  static constexpr size_t kKeyLength = GetDataLength<Key>();
+  static constexpr size_t kPayloadLength = GetDataLength<Payload>();
+  static constexpr size_t kRecordLength = kKeyLength + kPayloadLength;
+  static constexpr size_t kMaxRecordNum =
+      (kPageSize - component::kHeaderLength) / (kRecordLength + sizeof(Metadata));
+  static constexpr size_t kKeyNumForTest = kMaxRecordNum * kMaxRecordNum + 1;
   static constexpr size_t kSmallKeyNum = kMaxDeltaNodeNum - 1;
-  static constexpr size_t kKeyLength = kWordLength;
-  static constexpr size_t kPayloadLength = kWordLength;
 
   /*################################################################################################
    * Internal member variables
    *##############################################################################################*/
 
   // actual keys and payloads
-  size_t key_length;
-  size_t payload_length;
   Key keys[kKeyNumForTest];
   Payload payloads[kKeyNumForTest];
-
-  // the length of a record and its maximum number
-  size_t record_length;
-  size_t max_record_num;
 
   // a target node and its expected metadata
   std::unique_ptr<BwTree_t> bw_tree;
@@ -81,19 +78,9 @@ class BwTreeFixture : public testing::Test
   void
   SetUp() override
   {
-    // prepare keys
-    key_length = (IsVariableLengthData<Key>()) ? 9 : sizeof(Key);
-    PrepareTestData(keys, kKeyNumForTest, key_length);
-
-    // prepare payloads
-    payload_length = (IsVariableLengthData<Payload>()) ? 9 : sizeof(Payload);
-    PrepareTestData(payloads, kKeyNumForTest, payload_length);
-
-    // set a record length and its maximum number
-    record_length = key_length + payload_length;
-    max_record_num = (kPageSize - component::kHeaderLength) / (record_length + sizeof(Metadata));
-
     bw_tree = std::make_unique<BwTree_t>(1000);
+    PrepareTestData(keys, kKeyNumForTest);
+    PrepareTestData(payloads, kKeyNumForTest);
   }
 
   void
@@ -101,16 +88,6 @@ class BwTreeFixture : public testing::Test
   {
     ReleaseTestData(keys, kKeyNumForTest);
     ReleaseTestData(payloads, kKeyNumForTest);
-  }
-
-  /*################################################################################################
-   * Utility functions
-   *##############################################################################################*/
-
-  size_t
-  GetMaxRecordNumInPage() const
-  {
-    return max_record_num;
   }
 
   /*################################################################################################
@@ -145,7 +122,7 @@ class BwTreeFixture : public testing::Test
       const size_t key_id,
       const size_t payload_id)
   {
-    auto rc = bw_tree->Write(keys[key_id], payloads[payload_id], key_length, payload_length);
+    auto rc = bw_tree->Write(keys[key_id], payloads[payload_id], kKeyLength, kPayloadLength);
 
     EXPECT_EQ(ReturnCode::kSuccess, rc);
   }
@@ -210,7 +187,7 @@ TYPED_TEST(BwTreeFixture, Write_DuplicateKeys_ReadLatestValue)
 
 TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithLeafConsolidate_ReadWrittenValues)
 {
-  const size_t repeat_num = TestFixture::GetMaxRecordNumInPage();
+  const size_t repeat_num = TestFixture::kMaxRecordNum;
 
   for (size_t i = 0; i < repeat_num; ++i) {
     TestFixture::VerifyWrite(i, i);
@@ -222,7 +199,7 @@ TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithLeafConsolidate_ReadWrittenValues)
 
 TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithLeafConsolidate_ReadWrittenValues)
 {
-  const size_t repeat_num = TestFixture::GetMaxRecordNumInPage() / 2;
+  const size_t repeat_num = TestFixture::kMaxRecordNum / 2;
 
   for (size_t i = 0; i < repeat_num; ++i) {
     TestFixture::VerifyWrite(i, i);
@@ -237,7 +214,7 @@ TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithLeafConsolidate_ReadWrittenValu
 
 TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithLeafSplit_ReadWrittenValues)
 {
-  const size_t repeat_num = TestFixture::GetMaxRecordNumInPage() * 2;
+  const size_t repeat_num = TestFixture::kMaxRecordNum * 2;
 
   for (size_t i = 0; i < repeat_num; ++i) {
     TestFixture::VerifyWrite(i, i);
@@ -249,7 +226,7 @@ TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithLeafSplit_ReadWrittenValues)
 
 TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithLeafSplit_ReadWrittenValues)
 {
-  const size_t repeat_num = TestFixture::GetMaxRecordNumInPage() * 2;
+  const size_t repeat_num = TestFixture::kMaxRecordNum * 2;
 
   for (size_t i = 0; i < repeat_num; ++i) {
     TestFixture::VerifyWrite(i, i);
@@ -264,7 +241,7 @@ TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithLeafSplit_ReadWrittenValues)
 
 TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithInternalConsolidation_ReadWrittenValues)
 {
-  const size_t repeat_num = TestFixture::GetMaxRecordNumInPage() * TestFixture::kSmallKeyNum;
+  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kSmallKeyNum;
 
   for (size_t i = 0; i < repeat_num; ++i) {
     TestFixture::VerifyWrite(i, i);
@@ -276,7 +253,7 @@ TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithInternalConsolidation_ReadWrittenV
 
 TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithInternalConsolidation_ReadWrittenValues)
 {
-  const size_t repeat_num = TestFixture::GetMaxRecordNumInPage() * TestFixture::kSmallKeyNum;
+  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kSmallKeyNum;
 
   for (size_t i = 0; i < repeat_num; ++i) {
     TestFixture::VerifyWrite(i, i);
@@ -291,8 +268,7 @@ TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithInternalConsolidation_ReadWritt
 
 TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithInternalSplit_ReadWrittenValues)
 {
-  const size_t repeat_num =
-      TestFixture::GetMaxRecordNumInPage() * TestFixture::GetMaxRecordNumInPage();
+  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kMaxRecordNum;
 
   for (size_t i = 0; i < repeat_num; ++i) {
     TestFixture::VerifyWrite(i, i);

@@ -47,24 +47,36 @@ IsVariableLengthData<char *>()
 
 }  // namespace dbgroup::index::bw_tree
 
+constexpr size_t kVariableDataLength = 9;
+
+template <class T>
+constexpr size_t
+GetDataLength()
+{
+  if constexpr (::dbgroup::index::bw_tree::IsVariableLengthData<T>()) {
+    return kVariableDataLength;
+  } else {
+    return sizeof(T);
+  }
+}
+
 template <class T>
 void
 PrepareTestData(  //
     T *data_array,
-    const size_t data_num,
-    [[maybe_unused]] const size_t data_length)
+    const size_t data_num)
 {
   if constexpr (::dbgroup::index::bw_tree::IsVariableLengthData<T>()) {
     // variable-length data
     for (size_t i = 0; i < data_num; ++i) {
-      auto data = reinterpret_cast<char *>(malloc(data_length));
-      snprintf(data, data_length, "%08lu", i);
+      auto data = reinterpret_cast<char *>(malloc(kVariableDataLength));
+      snprintf(data, kVariableDataLength, "%08lu", i);
       data_array[i] = reinterpret_cast<T>(data);
     }
   } else if constexpr (std::is_same_v<T, uint64_t *>) {
     // pointer data
     for (size_t i = 0; i < data_num; ++i) {
-      auto data = reinterpret_cast<uint64_t *>(malloc(data_length));
+      auto data = reinterpret_cast<uint64_t *>(malloc(sizeof(uint64_t)));
       *data = i;
       data_array[i] = data;
     }

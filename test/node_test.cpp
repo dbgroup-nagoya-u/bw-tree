@@ -50,23 +50,20 @@ class NodeFixture : public testing::Test
    * Internal constants
    *##############################################################################################*/
 
+  static constexpr size_t kKeyLength = GetDataLength<Key>();
+  static constexpr size_t kPayloadLength = GetDataLength<Payload>();
+  static constexpr size_t kRecordLength = kKeyLength + kPayloadLength;
+  static constexpr size_t kMaxRecordNum =
+      (kPageSize - component::kHeaderLength) / (kRecordLength + sizeof(Metadata));
   static constexpr size_t kKeyNumForTest = 1024;
-  static constexpr size_t kKeyLength = kWordLength;
-  static constexpr size_t kPayloadLength = kWordLength;
 
   /*################################################################################################
    * Internal member variables
    *##############################################################################################*/
 
   // actual keys and payloads
-  size_t key_length;
-  size_t payload_length;
   Key keys[kKeyNumForTest];
   Payload payloads[kKeyNumForTest];
-
-  // the length of a record and its maximum number
-  size_t record_length;
-  size_t max_record_num;
 
   // a target node and its expected metadata
   Node_t *node;
@@ -79,20 +76,9 @@ class NodeFixture : public testing::Test
   void
   SetUp() override
   {
-    node = Node_t::CreateNode(kPageSize, NodeType::kLeaf, max_record_num, nullptr);
-
-    // prepare keys
-    key_length = (IsVariableLengthData<Key>()) ? 9 : sizeof(Key);
-    PrepareTestData(keys, kKeyNumForTest, key_length);
-
-    // prepare payloads
-    payload_length = (IsVariableLengthData<Payload>()) ? 9 : sizeof(Payload);
-    PrepareTestData(payloads, kKeyNumForTest, payload_length);
-
-    // set a record length and its maximum number
-    record_length = key_length + payload_length;
-    max_record_num = (kPageSize - kHeaderLength) / (record_length + sizeof(Metadata));
-    if (max_record_num > kKeyNumForTest) max_record_num = kKeyNumForTest;
+    node = Node_t::CreateNode(kPageSize, NodeType::kLeaf, kMaxRecordNum, nullptr);
+    PrepareTestData(keys, kKeyNumForTest);
+    PrepareTestData(payloads, kKeyNumForTest);
   }
 
   void
@@ -111,22 +97,22 @@ class NodeFixture : public testing::Test
   void
   VerifySetterGetter()
   {
-    meta_vec.reserve(max_record_num);
+    meta_vec.reserve(kMaxRecordNum);
 
     // set records and keep their metadata
     size_t offset = kPageSize;
-    for (size_t i = 0; i < max_record_num; ++i) {
+    for (size_t i = 0; i < kMaxRecordNum; ++i) {
       // set a record
-      node->SetPayload(offset, payloads[i], payload_length);
-      node->SetKey(offset, GetAddr(keys[i]), key_length);
-      node->SetMetadata(i, Metadata{offset, key_length, record_length});
+      node->SetPayload(offset, payloads[i], kPayloadLength);
+      node->SetKey(offset, GetAddr(keys[i]), kKeyLength);
+      node->SetMetadata(i, Metadata{offset, kKeyLength, kRecordLength});
 
       // keep metadata for verification
-      meta_vec.emplace_back(offset, key_length, record_length);
+      meta_vec.emplace_back(offset, kKeyLength, kRecordLength);
     }
 
     // verify records and their metadata
-    for (size_t i = 0; i < max_record_num; ++i) {
+    for (size_t i = 0; i < kMaxRecordNum; ++i) {
       const auto meta = node->GetMetadata(i);
       EXPECT_EQ(meta_vec.at(i), meta);
       VerifyKey(i, meta);
