@@ -546,18 +546,20 @@ class BwTree
       NodeStack_t &stack)
   {
     // remove child nodes from a node stack
-    while (stack.back() != page_id) {
-      stack.pop_back();
-    }
+    while (!stack.empty() && stack.back() != page_id) stack.pop_back();
+    if (stack.empty()) return;
 
     // reserve vectors for delta nodes and base nodes to be consolidated
     std::vector<Record> records;
     records.reserve(kMaxDeltaNodeNum * 4);
 
     // check whether the target node is valid (containing a target key and no incomplete SMOs)
-    Mapping_t *dummy;
+    Mapping_t *dummy = nullptr;
     Node_t *cur_head = page_id->load(mo_relax);
     ValidateNode(key, closed, page_id, cur_head, nullptr, stack, dummy);
+    if (dummy == nullptr) {
+      return;
+    }
 
     // collect and sort delta records
     const auto [sep_key, base_node, last_smo_delta, sib_node] = SortDeltaRecords(cur_head, records);
@@ -674,7 +676,8 @@ class BwTree
     consol_node->SetRecordCount(rec_num);
 
     if (need_split) {
-      HalfSplit(page_id, cur_head, consol_node, key, closed, stack);
+      if (HalfSplit(page_id, cur_head, consol_node, key, closed, stack)) return;
+      Consolidate(page_id, key, closed, stack);
       return;
     }
 
@@ -690,7 +693,7 @@ class BwTree
     gc_.AddGarbage(cur_head);
   }
 
-  void
+  bool
   HalfSplit(  //
       Mapping_t *page_id,
       Node_t *cur_head,
@@ -734,7 +737,7 @@ class BwTree
       Node_t::DeleteNode(split_delta);
       Node_t::DeleteNode(split_node);
       split_page_id->store(nullptr, mo_relax);
-      return;
+      return false;
     }
 
     // execute parent update
@@ -745,6 +748,8 @@ class BwTree
     if (consol_node != nullptr) {
       Consolidate(consol_node, key, closed, stack);
     }
+
+    return true;
   }
 
   void
