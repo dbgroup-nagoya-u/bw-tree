@@ -82,11 +82,11 @@ class NodeFixture : public testing::Test
     node = Node_t::CreateNode(kPageSize, NodeType::kLeaf, max_record_num, nullptr);
 
     // prepare keys
-    key_length = (IsVariableLengthData<Key>()) ? 7 : sizeof(Key);
+    key_length = (IsVariableLengthData<Key>()) ? 9 : sizeof(Key);
     PrepareTestData(keys, kKeyNumForTest, key_length);
 
     // prepare payloads
-    payload_length = (IsVariableLengthData<Payload>()) ? 7 : sizeof(Payload);
+    payload_length = (IsVariableLengthData<Payload>()) ? 9 : sizeof(Payload);
     PrepareTestData(payloads, kKeyNumForTest, payload_length);
 
     // set a record length and its maximum number
@@ -118,7 +118,7 @@ class NodeFixture : public testing::Test
     for (size_t i = 0; i < max_record_num; ++i) {
       // set a record
       node->SetPayload(offset, payloads[i], payload_length);
-      node->SetKey(offset, &keys[i], key_length);
+      node->SetKey(offset, GetAddr(keys[i]), key_length);
       node->SetMetadata(i, Metadata{offset, key_length, record_length});
 
       // keep metadata for verification
