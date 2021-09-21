@@ -708,7 +708,7 @@ class BwTree
     // shift metadata to use a consolidated node as a split-right node
     auto dest_addr = component::ShiftAddress(split_node, kHeaderLength);
     auto src_addr = component::ShiftAddress(dest_addr, sizeof(Metadata) * left_num);
-    memcpy(dest_addr, src_addr, sizeof(Metadata) * right_num);
+    memmove(dest_addr, src_addr, sizeof(Metadata) * right_num);
 
     // set a separator key as the lowest key
     split_node->SetLowMeta(sep_meta);

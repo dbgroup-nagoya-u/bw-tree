@@ -286,7 +286,7 @@ TYPED_TEST_CASE(BwTreeFixture, KeyPayloadPairs);
 
 TYPED_TEST(BwTreeFixture, Write_MultiThreads_ReadWrittenPayloads)
 {  //
-   // TestFixture::VerifyWrite();
+  TestFixture::VerifyWrite();
 }
 
 }  // namespace dbgroup::index::bw_tree::test
