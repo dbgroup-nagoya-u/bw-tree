@@ -52,9 +52,8 @@ class BwTreeFixture : public testing::Test
    * Internal constants
    *##############################################################################################*/
 
-  static constexpr size_t kKeyNumForTest = 204800;
+  static constexpr size_t kKeyNumForTest = 409600;
   static constexpr size_t kSmallKeyNum = kMaxDeltaNodeNum - 1;
-  static constexpr size_t kLargeKeyNum = kKeyNumForTest - 1;
   static constexpr size_t kKeyLength = kWordLength;
   static constexpr size_t kPayloadLength = kWordLength;
 
@@ -93,7 +92,6 @@ class BwTreeFixture : public testing::Test
     // set a record length and its maximum number
     record_length = key_length + payload_length;
     max_record_num = (kPageSize - component::kHeaderLength) / (record_length + sizeof(Metadata));
-    if (max_record_num >= kKeyNumForTest) max_record_num = kKeyNumForTest - 1;
 
     bw_tree = std::make_unique<BwTree_t>(1000);
   }
@@ -291,17 +289,17 @@ TYPED_TEST(BwTreeFixture, Write_DuplicateKeysWithInternalConsolidation_ReadWritt
   }
 }
 
-// TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithInternalSplit_ReadWrittenValues)
-// {
-//   const size_t repeat_num =
-//       TestFixture::GetMaxRecordNumInPage() * TestFixture::GetMaxRecordNumInPage();
+TYPED_TEST(BwTreeFixture, Write_UniqueKeysWithInternalSplit_ReadWrittenValues)
+{
+  const size_t repeat_num =
+      TestFixture::GetMaxRecordNumInPage() * TestFixture::GetMaxRecordNumInPage();
 
-//   for (size_t i = 0; i < repeat_num; ++i) {
-//     TestFixture::VerifyWrite(i, i);
-//   }
-//   for (size_t i = 0; i < repeat_num; ++i) {
-//     TestFixture::VerifyRead(i, i);
-//   }
-// }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i);
+  }
+}
 
 }  // namespace dbgroup::index::bw_tree::test

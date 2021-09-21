@@ -78,7 +78,7 @@ class BwTree
    *##############################################################################################*/
 
   /// a root node of Bw-tree
-  Mapping_t *root_;
+  std::atomic<Mapping_t *> root_;
 
   /// a mapping table
   MappingTable_t mapping_table_;
@@ -214,7 +214,7 @@ class BwTree
           if (component::LT<Key, Comp>(sep_key, key)
               || (!closed && !component::LT<Key, Comp>(key, sep_key))) {
             // there may be incomplete split
-            CompleteSplit(cur_node, stack);
+            CompleteSplit(cur_node, stack, consol_node);
 
             // traverse to a split right node
             page_id = cur_node->template GetPayload<Mapping_t *>(meta);
@@ -634,13 +634,13 @@ class BwTree
           Metadata prev_meta = meta;
           do {
             // insert a new index-entry
-            const auto sep_key = delta->GetLowKeyAddr();
-            const auto sep_key_len = delta_meta.GetKeyLength();
+            const auto cur_key = delta->GetLowKeyAddr();
+            const auto cur_key_len = delta_meta.GetKeyLength();
             const auto ins_page = prev_node->template GetPayload<Mapping_t *>(prev_meta);
             consol_node->SetPayload(offset, ins_page, sizeof(Mapping_t *));
-            consol_node->SetKey(offset, sep_key, sep_key_len);
+            consol_node->SetKey(offset, cur_key, cur_key_len);
             consol_node->SetMetadata(
-                rec_num++, Metadata{offset, sep_key_len, sep_key_len + sizeof(Mapping_t *)});
+                rec_num++, Metadata{offset, cur_key_len, cur_key_len + sizeof(Mapping_t *)});
 
             // keep a current delta record for multiple splitting
             prev_node = delta;
@@ -674,7 +674,7 @@ class BwTree
     consol_node->SetRecordCount(rec_num);
 
     if (need_split) {
-      Split(page_id, cur_head, consol_node, stack);
+      Split(page_id, cur_head, consol_node, key, closed, stack);
       return;
     }
 
@@ -695,7 +695,9 @@ class BwTree
       Mapping_t *page_id,
       Node_t *cur_head,
       Node_t *split_node,
-      [[maybe_unused]] NodeStack_t &stack)
+      const void *key,
+      const bool closed,
+      NodeStack_t &stack)
   {
     // get the number of records and metadata of a separator key
     const size_t rec_num = split_node->GetRecordCount();
@@ -723,7 +725,7 @@ class BwTree
     split_delta->SetNextNode(cur_head);
 
     // install the delta record for splitting a child node
-    auto *tmp_node = cur_head;
+    auto tmp_node = cur_head;
     while (!page_id->compare_exchange_weak(tmp_node, split_delta, mo_relax)) {
       if (tmp_node == cur_head) continue;  // weak CAS may fail even if it can execute
 
@@ -736,33 +738,40 @@ class BwTree
     }
 
     // execute parent split
-    stack.pop_back();
-    CompleteSplit(split_delta, stack);
+    Mapping_t *consol_node = nullptr;
+    CompleteSplit(split_delta, stack, consol_node);
+
+    if (consol_node != nullptr) {
+      Consolidate(consol_node, key, closed, stack);
+    }
   }
 
   void
   CompleteSplit(  //
       Node_t *split_delta,
-      NodeStack_t &stack)
+      NodeStack_t &stack,
+      Mapping_t *&consol_node)
   {
     // create an index-entry delta record
     const auto split_meta = split_delta->GetFirstMeta();
     const void *sep_key = split_delta->GetKeyAddr(split_meta);
     Mapping_t *right_page = split_delta->template GetPayload<Mapping_t *>(split_meta);
 
-    if (!stack.empty()) {
+    if (stack.size() > 1) {
+      stack.pop_back();
+
       // insert an index-entry delta record into a parent node
       Node_t *entry_delta =
           Node_t::CreateIndexEntryDelta(sep_key, split_meta.GetKeyLength(), right_page);
-      Mapping_t *page_id = stack.back(), *dummy = nullptr;
+      Mapping_t *page_id = stack.back();
       Node_t *cur_head = page_id->load(mo_relax), *prev_node = nullptr;
 
       while (true) {
         // check whether there are no incomplete SMOs
-        ValidateNode(sep_key, true, page_id, cur_head, prev_node, stack, dummy);
+        ValidateNode(sep_key, true, page_id, cur_head, prev_node, stack, consol_node);
 
         // check whether another thread has already completed this split
-        if (CheckExistence(sep_key, true, page_id, stack, dummy) == ReturnCode::kKeyExist) {
+        if (CheckExistence(sep_key, true, page_id, stack, consol_node) == ReturnCode::kKeyExist) {
           entry_delta->SetNextNode(nullptr);
           Node_t::DeleteNode(entry_delta);
           return;
@@ -775,7 +784,7 @@ class BwTree
       }
     } else {
       // create a new root node
-      const Mapping_t *left_page = root_;
+      Mapping_t *left_page = stack.back();
       const size_t sep_key_len = split_meta.GetKeyLength(),
                    total_len = sep_key_len + sizeof(Mapping_t *);
       size_t offset = kHeaderLength + 2 * sizeof(Metadata) + sizeof(Mapping_t *) + total_len;
@@ -792,27 +801,17 @@ class BwTree
       new_root->template SetPayload<Mapping_t *>(offset, right_page, sizeof(Mapping_t *));
       new_root->SetMetadata(1, Metadata{offset, 0, sizeof(Mapping_t *)});
 
-      while (true) {
-        // check a current root node is still old one
-        Node_t *cur_head = root_->load(mo_relax), *cur_node = cur_head;
-        while (cur_node->GetDeltaNodeType() != DeltaNodeType::kNotDelta) {
-          if (cur_node->GetDeltaNodeType() == DeltaNodeType::kSplit) {
-            const auto cur_key = cur_node->GetLowKeyAddr();
-            if (component::IsEqual<Key, Comp>(sep_key, cur_key)) {
-              // install the new root
-              if (root_->compare_exchange_weak(cur_head, new_root, mo_relax)) return;
-
-              // if failed, retry installation
-              cur_node = cur_head;
-              continue;
-            }
-          }
-          cur_node->GetNextNode();
-        }
+      // install a new root page
+      Mapping_t *new_root_page = mapping_table_.GetNewLogicalID();
+      new_root_page->store(new_root, mo_relax);
+      auto tmp_page = left_page;
+      while (!root_.compare_exchange_weak(tmp_page, new_root_page, mo_relax)) {
+        if (tmp_page == left_page) continue;  // weak CAS may fail even if it can execute
 
         // another thread has already inserted a new root
+        new_root_page->store(nullptr, mo_relax);
         Node_t::DeleteNode(new_root);
-        return;
+        break;
       }
     }
   }
@@ -838,14 +837,15 @@ class BwTree
     child_page_id->store(empty_leaf, mo_relax);
 
     // create an empty Bw-tree
-    root_ = mapping_table_.GetNewLogicalID();
+    Mapping_t *root_page_id = mapping_table_.GetNewLogicalID();
     auto offset = kHeaderLength + sizeof(Metadata) + sizeof(Mapping_t *);
     Node_t *initial_root = Node_t::CreateNode(offset, NodeType::kInternal, 1UL, nullptr);
     initial_root->SetLowMeta(Metadata{0, 0, 0});
     initial_root->SetHighMeta(Metadata{0, 0, 0});
     initial_root->template SetPayload<Mapping_t *>(offset, child_page_id, sizeof(Mapping_t *));
     initial_root->SetMetadata(0, Metadata{offset, 0, sizeof(Mapping_t *)});
-    root_->store(initial_root, mo_relax);
+    root_page_id->store(initial_root, mo_relax);
+    root_.store(root_page_id, mo_relax);
 
     // start garbage collector for removed nodes
     gc_.StartGC();
@@ -887,7 +887,7 @@ class BwTree
     NodeStack_t stack;
     stack.reserve(kExpectedTreeHeight);
     Mapping_t *consol_node = nullptr;
-    SearchLeafNode(key_addr, true, root_, stack, consol_node);
+    SearchLeafNode(key_addr, true, root_.load(mo_relax), stack, consol_node);
 
     // prepare variables to read a record
     Mapping_t *page_id = stack.back();
@@ -967,7 +967,7 @@ class BwTree
     // traverse to a target leaf node
     NodeStack_t stack;
     Mapping_t *consol_node = nullptr;
-    SearchLeafNode(key_addr, true, root_, stack, consol_node);
+    SearchLeafNode(key_addr, true, root_.load(mo_relax), stack, consol_node);
 
     // prepare variables to insert a new delta record
     Mapping_t *page_id = stack.back();
