@@ -191,7 +191,7 @@ class Node
   {
     const auto total_length = sep_key_len + sizeof(Mapping_t *);
     const Node *split_node = split_page->load(mo_relax);
-    const auto high_meta = split_node->GetSecondMeta();
+    const auto high_meta = split_node->GetHighMeta();
     const auto high_key_len = high_meta.GetKeyLength();
     size_t offset = kHeaderLength + total_length + high_key_len;
 
@@ -256,13 +256,13 @@ class Node
   }
 
   constexpr Metadata
-  GetFirstMeta() const
+  GetLowMeta() const
   {
     return low_meta_;
   }
 
   constexpr Metadata
-  GetSecondMeta() const
+  GetHighMeta() const
   {
     return high_meta_;
   }
