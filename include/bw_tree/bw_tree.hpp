@@ -765,66 +765,77 @@ class BwTree
       Mapping_t *&consol_node)
   {
     // create an index-entry delta record
-    const auto split_meta = split_delta->GetFirstMeta();
-    const auto sep_key = split_delta->GetKeyAddr(split_meta);
-    Mapping_t *right_page = split_delta->template GetPayload<Mapping_t *>(split_meta);
+    const void *sep_key = split_delta->GetKeyAddr(sep_key_len);
+    const size_t sep_key_len = split_delta->GetFirstMeta().GetKeyLength();
+    Mapping_t *right_page = split_delta->template GetPayload<Mapping_t *>(sep_key_len);
 
-    if (stack.size() > 1) {
-      stack.pop_back();
+    if (stack.size() <= 1) {
+      // a split node is a root node
+      SplitRoot(sep_key, sep_key_len, right_page, stack);
+      return;
+    }
 
-      // insert an index-entry delta record into a parent node
-      Node_t *entry_delta =
-          Node_t::CreateIndexEntryDelta(sep_key, split_meta.GetKeyLength(), right_page);
-      Mapping_t *page_id = stack.back();
-      Node_t *cur_head = page_id->load(mo_relax), *prev_node = nullptr;
+    // remove a split child node to modify its parent node
+    stack.pop_back();
 
-      while (true) {
-        // check whether there are no incomplete SMOs
-        ValidateNode(sep_key, true, page_id, cur_head, prev_node, stack, consol_node);
+    // insert an index-entry delta record into a parent node
+    Mapping_t *parent_id = stack.back();
+    Node_t *entry_delta = Node_t::CreateIndexEntryDelta(sep_key, sep_key_len, right_page);
+    Node_t *cur_head = parent_id->load(mo_relax);
+    Node_t *prev_node = nullptr;
+    while (true) {
+      // check whether there are no incomplete SMOs
+      ValidateNode(sep_key, true, parent_id, cur_head, prev_node, stack, consol_node);
 
-        // check whether another thread has already completed this split
-        if (CheckExistence(sep_key, true, page_id, stack, consol_node) == ReturnCode::kKeyExist) {
-          entry_delta->SetNextNode(nullptr);
-          Node_t::DeleteNode(entry_delta);
-          return;
-        }
-
-        // insert the index-entry delta record
-        entry_delta->SetNextNode(cur_head);
-        prev_node = cur_head;
-        if (page_id->compare_exchange_weak(cur_head, entry_delta, mo_relax)) return;
+      // check whether another thread has already completed this split
+      if (CheckExistence(sep_key, true, parent_id, stack, consol_node) == ReturnCode::kKeyExist) {
+        entry_delta->SetNextNode(nullptr);
+        Node_t::DeleteNode(entry_delta);
+        return;
       }
-    } else {
-      // create a new root node
-      Mapping_t *left_page = stack.back();
-      const size_t sep_key_len = split_meta.GetKeyLength(),
-                   total_len = sep_key_len + sizeof(Mapping_t *);
-      size_t offset = kHeaderLength + 2 * sizeof(Metadata) + sizeof(Mapping_t *) + total_len;
-      Node_t *new_root = Node_t::CreateNode(offset, NodeType::kInternal, 2, nullptr);
-      new_root->SetLowMeta(Metadata{0, 0, 0});
-      new_root->SetHighMeta(Metadata{0, 0, 0});
 
-      // set a split-left page
-      new_root->SetPayload(offset, left_page, sizeof(Mapping_t *));
-      new_root->SetKey(offset, sep_key, sep_key_len);
-      new_root->SetMetadata(0, Metadata{offset, sep_key_len, total_len});
+      // try to insert the index-entry delta record
+      entry_delta->SetNextNode(cur_head);
+      prev_node = cur_head;
+      if (parent_id->compare_exchange_weak(cur_head, entry_delta, mo_relax)) return;
+    }
+  }
 
-      // set a split-right page
-      new_root->template SetPayload<Mapping_t *>(offset, right_page, sizeof(Mapping_t *));
-      new_root->SetMetadata(1, Metadata{offset, 0, sizeof(Mapping_t *)});
+  void
+  SplitRoot(  //
+      const void *sep_key,
+      const size_t sep_key_len,
+      Mapping_t *right_page,
+      NodeStack_t &stack)
+  {
+    // create a new root node
+    Mapping_t *left_page = stack.back();  // i.e., the old root node
+    const size_t total_len = sep_key_len + sizeof(Mapping_t *);
+    size_t offset = kHeaderLength + (2 * sizeof(Metadata)) + sizeof(Mapping_t *) + total_len;
+    Node_t *new_root = Node_t::CreateNode(offset, NodeType::kInternal, 2, nullptr);
+    new_root->SetLowMeta(Metadata{0, 0, 0});
+    new_root->SetHighMeta(Metadata{0, 0, 0});
 
-      // install a new root page
-      Mapping_t *new_root_page = mapping_table_.GetNewLogicalID();
-      new_root_page->store(new_root, mo_relax);
-      auto tmp_page = left_page;
-      while (!root_.compare_exchange_weak(tmp_page, new_root_page, mo_relax)) {
-        if (tmp_page == left_page) continue;  // weak CAS may fail even if it can execute
+    // set a split-left page
+    new_root->SetPayload(offset, left_page, sizeof(Mapping_t *));
+    new_root->SetKey(offset, sep_key, sep_key_len);
+    new_root->SetMetadata(0, Metadata{offset, sep_key_len, total_len});
 
-        // another thread has already inserted a new root
-        new_root_page->store(nullptr, mo_relax);
-        Node_t::DeleteNode(new_root);
-        break;
-      }
+    // set a split-right page
+    new_root->SetPayload(offset, right_page, sizeof(Mapping_t *));
+    new_root->SetMetadata(1, Metadata{offset, 0, sizeof(Mapping_t *)});
+
+    // install a new root page
+    Mapping_t *old_root_page = left_page;
+    Mapping_t *new_root_page = mapping_table_.GetNewLogicalID();
+    new_root_page->store(new_root, mo_relax);
+    while (!root_.compare_exchange_weak(old_root_page, new_root_page, mo_relax)) {
+      if (old_root_page == left_page) continue;  // weak CAS may fail even if it can execute
+
+      // another thread has already inserted a new root
+      new_root_page->store(nullptr, mo_relax);
+      Node_t::DeleteNode(new_root);
+      return;
     }
   }
 
