@@ -582,34 +582,34 @@ class BwTree
 
     // reserve a page for a consolidated node
     auto offset = CalculatePageSize(base_node, base_rec_num, records, last_smo_delta);
-    const bool need_split = (offset > kPageSize) ? true : false;
-    const NodeType node_type = static_cast<NodeType>(cur_head->IsLeaf());
+    const auto need_split = (offset > kPageSize) ? true : false;
+    const auto node_type = static_cast<NodeType>(cur_head->IsLeaf());
     Node_t *consol_node = Node_t::CreateNode(offset, node_type, 0UL, sib_node);
 
     // copy the lowest/highest keys
-    const Metadata low_meta = base_node->GetFirstMeta();
+    const auto low_meta = base_node->GetFirstMeta();
     const auto low_key_len = low_meta.GetKeyLength();
     if (low_key_len == 0) {
       consol_node->SetLowMeta(low_meta);
     } else {
-      const void *low_key = base_node->GetKeyAddr(low_meta);
+      const auto low_key = base_node->GetKeyAddr(low_meta);
       consol_node->SetKey(offset, low_key, low_key_len);
       consol_node->SetLowMeta(Metadata{offset, low_key_len, low_key_len});
     }
     if (last_smo_delta == nullptr) {
-      const Metadata high_meta = base_node->GetSecondMeta();
+      const auto high_meta = base_node->GetSecondMeta();
       const auto high_key_len = high_meta.GetKeyLength();
       if (high_key_len == 0) {
         consol_node->SetHighMeta(high_meta);
       } else {
-        const void *high_key = base_node->GetKeyAddr(high_meta);
+        const auto high_key = base_node->GetKeyAddr(high_meta);
         consol_node->SetKey(offset, high_key, high_key_len);
         consol_node->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
       }
     } else if (last_smo_delta->GetDeltaNodeType() == DeltaNodeType::kSplit) {
-      const Metadata high_meta = last_smo_delta->GetFirstMeta();
+      const auto high_meta = last_smo_delta->GetFirstMeta();
       const auto high_key_len = high_meta.GetKeyLength();
-      const void *high_key = last_smo_delta->GetKeyAddr(high_meta);
+      const auto high_key = last_smo_delta->GetKeyAddr(high_meta);
       consol_node->SetKey(offset, high_key, high_key_len);
       consol_node->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
     }
@@ -642,9 +642,9 @@ class BwTree
           Metadata prev_meta = meta;
           do {
             // insert a new index-entry
-            const auto cur_key = delta->GetLowKeyAddr();
-            const auto cur_key_len = delta_meta.GetKeyLength();
-            const auto ins_page = prev_node->template GetPayload<Mapping_t *>(prev_meta);
+            const void *cur_key = delta->GetLowKeyAddr();
+            const size_t cur_key_len = delta_meta.GetKeyLength();
+            const Mapping_t *ins_page = prev_node->template GetPayload<Mapping_t *>(prev_meta);
             consol_node->SetPayload(offset, ins_page, sizeof(Mapping_t *));
             consol_node->SetKey(offset, cur_key, cur_key_len);
             consol_node->SetMetadata(
@@ -688,9 +688,9 @@ class BwTree
     }
 
     // install a consolidated node
-    auto tmp_node = cur_head;
-    while (!page_id->compare_exchange_weak(tmp_node, consol_node, mo_relax)) {
-      if (tmp_node == cur_head) continue;  // weak CAS may fail even if it can execute
+    auto old_head = cur_head;
+    while (!page_id->compare_exchange_weak(old_head, consol_node, mo_relax)) {
+      if (old_head == cur_head) continue;  // weak CAS may fail even if it can execute
 
       // no CAS retry for consolidation
       Node_t::DeleteNode(consol_node);
@@ -709,14 +709,14 @@ class BwTree
       NodeStack_t &stack)
   {
     // get the number of records and metadata of a separator key
-    const size_t rec_num = split_node->GetRecordCount();
-    const size_t left_num = rec_num >> 1;
-    const size_t right_num = rec_num - left_num;
+    const auto total_num = split_node->GetRecordCount();
+    const auto left_num = total_num >> 1;
+    const auto right_num = total_num - left_num;
     const auto sep_meta = split_node->GetMetadata(left_num - 1);
 
     // shift metadata to use a consolidated node as a split-right node
     auto dest_addr = component::ShiftAddress(split_node, kHeaderLength);
-    auto src_addr = component::ShiftAddress(dest_addr, sizeof(Metadata) * left_num);
+    const auto src_addr = component::ShiftAddress(dest_addr, sizeof(Metadata) * left_num);
     memmove(dest_addr, src_addr, sizeof(Metadata) * right_num);
 
     // set a separator key as the lowest key
@@ -726,23 +726,23 @@ class BwTree
     // create a split-delta record
     const auto node_type = static_cast<NodeType>(split_node->IsLeaf());
     const auto sep_key = split_node->GetKeyAddr(sep_meta);
-    Mapping_t *split_page_id = mapping_table_.GetNewLogicalID();
+    Mapping_t *right_page_id = mapping_table_.GetNewLogicalID();
     Node_t *split_delta = Node_t::CreateDeltaNode(node_type, DeltaNodeType::kSplit,  //
                                                   sep_key, sep_meta.GetKeyLength(),  //
-                                                  split_page_id, sizeof(Mapping_t *));
+                                                  right_page_id, sizeof(Mapping_t *));
     split_delta->SetNextNode(cur_head);
-    split_page_id->store(split_node, mo_relax);
+    right_page_id->store(split_node, mo_relax);
 
     // install the delta record for splitting a child node
-    auto tmp_node = cur_head;
-    while (!page_id->compare_exchange_weak(tmp_node, split_delta, mo_relax)) {
-      if (tmp_node == cur_head) continue;  // weak CAS may fail even if it can execute
+    Node_t *old_head = cur_head;
+    while (!page_id->compare_exchange_weak(old_head, split_delta, mo_relax)) {
+      if (old_head == cur_head) continue;  // weak CAS may fail even if it can execute
 
       // no CAS retry for split
       split_delta->SetNextNode(nullptr);
       Node_t::DeleteNode(split_delta);
       Node_t::DeleteNode(split_node);
-      split_page_id->store(nullptr, mo_relax);
+      right_page_id->store(nullptr, mo_relax);
       return false;
     }
 
@@ -765,9 +765,10 @@ class BwTree
       Mapping_t *&consol_node)
   {
     // create an index-entry delta record
-    const void *sep_key = split_delta->GetKeyAddr(sep_key_len);
-    const size_t sep_key_len = split_delta->GetFirstMeta().GetKeyLength();
-    Mapping_t *right_page = split_delta->template GetPayload<Mapping_t *>(sep_key_len);
+    const auto sep_meta = split_delta->GetFirstMeta();
+    const auto sep_key_len = sep_meta.GetKeyLength();
+    const auto sep_key = split_delta->GetKeyAddr(sep_meta);
+    Mapping_t *right_page = split_delta->template GetPayload<Mapping_t *>(sep_meta);
 
     if (stack.size() <= 1) {
       // a split node is a root node
@@ -810,8 +811,8 @@ class BwTree
   {
     // create a new root node
     Mapping_t *left_page = stack.back();  // i.e., the old root node
-    const size_t total_len = sep_key_len + sizeof(Mapping_t *);
-    size_t offset = kHeaderLength + (2 * sizeof(Metadata)) + sizeof(Mapping_t *) + total_len;
+    const auto total_len = sep_key_len + sizeof(Mapping_t *);
+    auto offset = kHeaderLength + (2 * sizeof(Metadata)) + sizeof(Mapping_t *) + total_len;
     Node_t *new_root = Node_t::CreateNode(offset, NodeType::kInternal, 2, nullptr);
     new_root->SetLowMeta(Metadata{0, 0, 0});
     new_root->SetHighMeta(Metadata{0, 0, 0});
