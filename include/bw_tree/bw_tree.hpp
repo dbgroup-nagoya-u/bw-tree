@@ -669,7 +669,7 @@ class BwTree
 
     if (need_split) {
       if (HalfSplit(consol_page, cur_head, consol_node, key, closed, stack)) return;
-      Consolidate(consol_page, key, closed, stack);
+      Consolidate(consol_page, key, closed, stack);  // retry split
       return;
     }
 
@@ -687,7 +687,7 @@ class BwTree
 
   bool
   HalfSplit(  //
-      Mapping_t *page_id,
+      Mapping_t *split_page,
       Node_t *cur_head,
       Node_t *split_node,
       const void *key,
@@ -721,7 +721,7 @@ class BwTree
 
     // install the delta record for splitting a child node
     for (auto old_head = cur_head;
-         !page_id->compare_exchange_weak(old_head, split_delta, mo_relax);) {
+         !split_page->compare_exchange_weak(old_head, split_delta, mo_relax);) {
       if (old_head == cur_head) continue;  // weak CAS may fail even if it can execute
 
       // no CAS retry for split
@@ -733,12 +733,12 @@ class BwTree
     }
 
     // execute parent update
-    Mapping_t *consol_node = nullptr;
-    CompleteSplit(split_delta, stack, consol_node);
+    Mapping_t *consol_page = nullptr;
+    CompleteSplit(split_delta, stack, consol_page);
 
     // execute parent consolidation/split if needed
-    if (consol_node != nullptr) {
-      Consolidate(consol_node, key, closed, stack);
+    if (consol_page != nullptr) {
+      Consolidate(consol_page, key, closed, stack);
     }
 
     return true;
