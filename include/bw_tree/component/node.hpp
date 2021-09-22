@@ -445,13 +445,9 @@ class Node
     int64_t idx = (begin_idx + end_idx) >> 1;
     ReturnCode rc = ReturnCode::kKeyNotExist;
 
-    auto act_key = GetKey<Key>(key);  // tmp
-
     while (begin_idx <= end_idx) {
       const auto meta = GetMetadata(idx);
       const auto idx_key = GetKeyAddr(meta);
-
-      auto tmp_key = GetKey<Key>(idx_key);  // tmp
 
       if (meta.GetKeyLength() == 0 || LT<Key, Comp>(key, idx_key)) {
         // a target key is in a left side

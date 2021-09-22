@@ -315,9 +315,8 @@ class BwTree
         break;
       } else if (delta_type == DeltaNodeType::kDelete) {
         // check whether a target key is deleted
-        meta = cur_node->GetLowMeta();
-        if (component::IsEqual<Key, Comp>(key, cur_node->GetKeyAddr(meta))) {
-          cur_node == nullptr;
+        if (component::IsEqual<Key, Comp>(key, cur_node->GetLowKeyAddr())) {
+          cur_node = nullptr;
           ++delta_chain_length;
           break;
         }
@@ -659,7 +658,7 @@ class BwTree
     consol_node->SetRecordCount(rec_num);
 
     if (need_split) {
-      if (HalfSplit(consol_page, cur_head, consol_node, key, closed, stack)) return;
+      if (HalfSplit(consol_page, cur_head, consol_node, stack)) return;
       Consolidate(consol_page, key, closed, stack);  // retry split
       return;
     }
@@ -681,8 +680,6 @@ class BwTree
       Mapping_t *split_page,
       Node_t *cur_head,
       Node_t *split_node,
-      const void *key,
-      const bool closed,
       NodeStack_t &stack)
   {
     // get the number of records and metadata of a separator key
@@ -729,7 +726,7 @@ class BwTree
 
     // execute parent consolidation/split if needed
     if (consol_page != nullptr) {
-      Consolidate(consol_page, key, closed, stack);
+      Consolidate(consol_page, sep_key, true, stack);
     }
 
     return true;
