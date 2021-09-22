@@ -188,16 +188,16 @@ class BwTree
     return child_page;
   }
 
-  void
+  Node_t *
   ValidateNode(  //
       const void *key,
       const bool closed,
-      Mapping_t *&page_id,
-      Node_t *&cur_head,
       const Node_t *prev_head,
       NodeStack_t &stack,
       Mapping_t *&consol_node)
   {
+    Mapping_t *page_id = stack.back();
+    Node_t *cur_head = page_id->load(mo_relax);
     size_t delta_chain_length = 0;
 
     // check whether there are incomplete SMOs and a target key in this logical page
@@ -265,6 +265,8 @@ class BwTree
     if (delta_chain_length >= kMaxDeltaNodeNum) {
       consol_node = page_id;
     }
+
+    return cur_head;
   }
 
   ReturnCode
@@ -535,28 +537,23 @@ class BwTree
 
   void
   Consolidate(  //
-      Mapping_t *page_id,
+      const Mapping_t *target_page,
       const void *key,
       const bool closed,
       NodeStack_t &stack)
   {
     // remove child nodes from a node stack
-    while (!stack.empty() && stack.back() != page_id) stack.pop_back();
+    while (!stack.empty() && stack.back() != target_page) stack.pop_back();
     if (stack.empty()) return;
 
-    // reserve vectors for delta nodes and base nodes to be consolidated
-    std::vector<Record> records;
-    records.reserve(kMaxDeltaNodeNum * 4);
-
     // check whether the target node is valid (containing a target key and no incomplete SMOs)
-    Mapping_t *dummy = nullptr;
-    Node_t *cur_head = page_id->load(mo_relax);
-    ValidateNode(key, closed, page_id, cur_head, nullptr, stack, dummy);
-    if (dummy == nullptr) {
-      return;
-    }
+    Mapping_t *consol_page = nullptr;
+    Node_t *cur_head = ValidateNode(key, closed, nullptr, stack, consol_page);
+    if (consol_page != target_page) return;
 
     // collect and sort delta records
+    std::vector<Record> records;
+    records.reserve(kMaxDeltaNodeNum * 4);
     const auto [sep_key, base_node, last_smo_delta, sib_node] = SortDeltaRecords(cur_head, records);
 
     // get a base node and the position of a highest key
@@ -671,14 +668,14 @@ class BwTree
     consol_node->SetRecordCount(rec_num);
 
     if (need_split) {
-      if (HalfSplit(page_id, cur_head, consol_node, key, closed, stack)) return;
-      Consolidate(page_id, key, closed, stack);
+      if (HalfSplit(consol_page, cur_head, consol_node, key, closed, stack)) return;
+      Consolidate(consol_page, key, closed, stack);
       return;
     }
 
     // install a consolidated node
     auto old_head = cur_head;
-    while (!page_id->compare_exchange_weak(old_head, consol_node, mo_relax)) {
+    while (!consol_page->compare_exchange_weak(old_head, consol_node, mo_relax)) {
       if (old_head == cur_head) continue;  // weak CAS may fail even if it can execute
 
       // no CAS retry for consolidation
@@ -751,7 +748,7 @@ class BwTree
   CompleteSplit(  //
       Node_t *split_delta,
       NodeStack_t &stack,
-      Mapping_t *&consol_node)
+      Mapping_t *&consol_page)
   {
     // create an index-entry delta record
     const auto sep_meta = split_delta->GetLowMeta();
@@ -765,20 +762,18 @@ class BwTree
       return;
     }
 
-    // remove a split child node to modify its parent node
-    stack.pop_back();
-
-    // insert an index-entry delta record into a parent node
-    Mapping_t *parent_id = stack.back();
+    // create an index-entry delta record to complete split
     Node_t *entry_delta = Node_t::CreateIndexEntryDelta(sep_key, sep_key_len, right_page);
-    Node_t *cur_head = parent_id->load(mo_relax);
-    Node_t *prev_node = nullptr;
-    while (true) {
+
+    // insert the delta record into a parent node
+    stack.pop_back();  // remove a split child node to modify its parent node
+    for (Node_t *prev_node = nullptr; true;) {
       // check whether there are no incomplete SMOs
-      ValidateNode(sep_key, true, parent_id, cur_head, prev_node, stack, consol_node);
+      Node_t *cur_head = ValidateNode(sep_key, true, prev_node, stack, consol_page);
 
       // check whether another thread has already completed this split
-      if (CheckExistence(sep_key, true, parent_id, stack, consol_node) == ReturnCode::kKeyExist) {
+      Mapping_t *parent_page = stack.back();
+      if (CheckExistence(sep_key, true, parent_page, stack, consol_page) == ReturnCode::kKeyExist) {
         entry_delta->SetNextNode(nullptr);
         Node_t::DeleteNode(entry_delta);
         return;
@@ -787,7 +782,7 @@ class BwTree
       // try to insert the index-entry delta record
       entry_delta->SetNextNode(cur_head);
       prev_node = cur_head;
-      if (parent_id->compare_exchange_weak(cur_head, entry_delta, mo_relax)) return;
+      if (parent_page->compare_exchange_weak(cur_head, entry_delta, mo_relax)) return;
     }
   }
 
@@ -982,19 +977,16 @@ class BwTree
                                                  key_addr, key_length, payload, payload_length);
 
     // insert the delta record
-    Mapping_t *page_id = stack.back();
-    Node_t *cur_head = page_id->load(mo_relax);
-    Node_t *prev_head = nullptr;
-    while (true) {
+    for (Node_t *prev_head = nullptr; true;) {
       // check whether the target node is valid (containing a target key and no incomplete SMOs)
-      ValidateNode(key_addr, true, page_id, cur_head, prev_head, stack, consol_node);
+      Node_t *cur_head = ValidateNode(key_addr, true, prev_head, stack, consol_node);
 
       // prepare nodes to perform CAS
       delta_node->SetNextNode(cur_head);
       prev_head = cur_head;
 
       // try to insert the delta record
-      if (page_id->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
+      if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
     }
 
     if (consol_node != nullptr) {
