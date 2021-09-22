@@ -277,20 +277,20 @@ class Node
     return meta_array_[position];
   }
 
-  constexpr Key *
+  constexpr void *
   GetLowKeyAddr() const
   {
     if (low_meta_.GetKeyLength() == 0) return nullptr;
 
-    return reinterpret_cast<Key *>(ShiftAddress(this, low_meta_.GetOffset()));
+    return ShiftAddress(this, low_meta_.GetOffset());
   }
 
-  constexpr Key *
+  constexpr void *
   GetHighKeyAddr() const
   {
     if (high_meta_.GetKeyLength() == 0) return nullptr;
 
-    return reinterpret_cast<Key *>(ShiftAddress(this, high_meta_.GetOffset()));
+    return ShiftAddress(this, high_meta_.GetOffset());
   }
 
   /**

@@ -201,66 +201,61 @@ class BwTree
     Node_t *cur_node = cur_head;
     size_t delta_chain_length = 0;
 
-    // check whether there are incomplete SMOs
+    // check whether there are incomplete SMOs and a target key in this logical page
     while (cur_node != prev_head) {
-      switch (cur_node->GetDeltaNodeType()) {
-        case DeltaNodeType::kSplit: {
-          const auto meta = cur_node->GetLowMeta();
-          const auto sep_key = cur_node->GetKeyAddr(meta);
-          if (component::LT<Key, Comp>(sep_key, key)
-              || (!closed && !component::LT<Key, Comp>(key, sep_key))) {
-            // there may be incomplete split
-            CompleteSplit(cur_node, stack, consol_node);
-
-            // traverse to a split right node
-            page_id = cur_node->template GetPayload<Mapping_t *>(meta);
-            stack.emplace_back(page_id);
-            cur_head = page_id->load(mo_relax);
-            cur_node = cur_head;
-            delta_chain_length = 0;
-            continue;
-          }
-          break;
-        }
-        case DeltaNodeType::kRemoveNode: {
-          // there may be incomplete merging
-          // CompleteMerge();
-
-          // traverse to a merged node
-          const auto parent_node = stack.back();
-          stack.pop_back();
-          page_id = SearchChildNode(key, closed, parent_node, cur_head, stack, consol_node);
+      const auto delta_type = cur_node->GetDeltaNodeType();
+      if (delta_type == DeltaNodeType::kNotDelta) {
+        // check whether a target key is in this node
+        const auto high_key = cur_node->GetHighKeyAddr();
+        if (high_key != nullptr
+            && (component::LT<Key, Comp>(high_key, key)
+                || (!closed && component::LT<Key, Comp>(key, high_key)))) {
+          // traverse to a sibling node
+          page_id = cur_node->GetSiblingNode();
           cur_head = page_id->load(mo_relax);
           cur_node = cur_head;
           delta_chain_length = 0;
+
+          // swap a current node in a stack
+          stack.pop_back();
+          stack.emplace_back(page_id);
           continue;
         }
-        case DeltaNodeType::kMerge: {
-          // there may be incomplete merging
-          // CompleteMerge();
-          break;
-        }
-        case DeltaNodeType::kNotDelta: {
-          // check whether a target key is in this node
-          const auto high_meta = cur_node->GetHighMeta();
-          if (high_meta.GetKeyLength() != 0) {
-            const auto high_key = cur_node->GetKeyAddr(high_meta);
-            if (component::LT<Key, Comp>(high_key, key)
-                || (!closed && component::LT<Key, Comp>(key, high_key))) {
-              // traverse to a sibling node
-              page_id = cur_node->GetSiblingNode();
-              cur_head = page_id->load(mo_relax);
-              cur_node = cur_head;
-              delta_chain_length = 0;
-              continue;
-            }
-          }
+        break;
+      } else if (delta_type == DeltaNodeType::kSplit) {
+        // check whether a target key is in a split-right node
+        const auto meta = cur_node->GetLowMeta();
+        const auto sep_key = cur_node->GetKeyAddr(meta);
+        if (component::LT<Key, Comp>(sep_key, key)
+            || (!closed && !component::LT<Key, Comp>(key, sep_key))) {
+          // there may be incomplete split
+          CompleteSplit(cur_node, stack, consol_node);
 
-          // there are no incomplete SMOs
-          goto no_incomplete_smo;
+          // traverse to a split right node
+          page_id = cur_node->template GetPayload<Mapping_t *>(meta);
+          cur_head = page_id->load(mo_relax);
+          cur_node = cur_head;
+          delta_chain_length = 0;
+
+          // insert a new current-level node (an old node was popped in parent-update)
+          stack.emplace_back(page_id);
+          continue;
         }
-        default:
-          break;
+      } else if (DeltaNodeType::kMerge) {
+        // there may be incomplete merging
+        // CompleteMerge();
+      } else if (DeltaNodeType::kRemoveNode) {
+        // there may be incomplete merging
+        // CompleteMerge();
+
+        // traverse to a merged node
+        const auto parent_node = stack.back();
+        stack.pop_back();
+        page_id = SearchChildNode(key, closed, parent_node, cur_head, stack, consol_node);
+        cur_head = page_id->load(mo_relax);
+        cur_node = cur_head;
+        delta_chain_length = 0;
+        continue;
       }
 
       // go to the next delta record or base node
@@ -268,7 +263,6 @@ class BwTree
       ++delta_chain_length;
     }
 
-  no_incomplete_smo:
     if (delta_chain_length >= kMaxDeltaNodeNum) {
       consol_node = page_id;
     }
