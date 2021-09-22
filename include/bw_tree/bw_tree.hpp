@@ -90,6 +90,30 @@ class BwTree
    * Internal utility functions
    *##############################################################################################*/
 
+  NodeStack_t
+  SearchLeafNode(  //
+      const void *key,
+      const bool closed,
+      Mapping_t *&consol_node)
+  {
+    NodeStack_t stack;
+    stack.reserve(kExpectedTreeHeight);
+
+    // get a logical page of a root node
+    Mapping_t *page_id = root_.load(mo_relax);
+    stack.emplace_back(page_id);
+
+    // traverse a Bw-tree
+    Node_t *cur_head = page_id->load(mo_relax);
+    while (!cur_head->IsLeaf()) {
+      page_id = SearchChildNode(key, closed, page_id, cur_head, stack, consol_node);
+      stack.emplace_back(page_id);
+      cur_head = page_id->load(mo_relax);
+    }
+
+    return stack;
+  }
+
   Mapping_t *
   SearchChildNode(  //
       const void *key,
@@ -171,25 +195,6 @@ class BwTree
     }
 
     return page_id;
-  }
-
-  void
-  SearchLeafNode(  //
-      const void *key,
-      const bool closed,
-      Mapping_t *page_id,
-      NodeStack_t &stack,
-      Mapping_t *&consol_node)
-  {
-    Node_t *cur_head = page_id->load(mo_relax);
-    stack.emplace_back(page_id);
-
-    // traverse a Bw-tree
-    while (!cur_head->IsLeaf()) {
-      page_id = SearchChildNode(key, closed, page_id, cur_head, stack, consol_node);
-      stack.emplace_back(page_id);
-      cur_head = page_id->load(mo_relax);
-    }
   }
 
   void
@@ -904,14 +909,11 @@ class BwTree
   Read(const Key &key)
   {
     const auto key_addr = component::GetAddr(key);
-
     const auto guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    NodeStack_t stack;
-    stack.reserve(kExpectedTreeHeight);
     Mapping_t *consol_node = nullptr;
-    SearchLeafNode(key_addr, true, root_.load(mo_relax), stack, consol_node);
+    NodeStack_t stack = SearchLeafNode(key_addr, true, consol_node);
 
     // prepare variables to read a record
     Mapping_t *page_id = stack.back();
@@ -985,21 +987,20 @@ class BwTree
       const size_t payload_length = sizeof(Payload))
   {
     const auto key_addr = component::GetAddr(key);
-
     const auto guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    NodeStack_t stack;
     Mapping_t *consol_node = nullptr;
-    SearchLeafNode(key_addr, true, root_.load(mo_relax), stack, consol_node);
+    NodeStack_t stack = SearchLeafNode(key_addr, true, consol_node);
 
-    // prepare variables to insert a new delta record
-    Mapping_t *page_id = stack.back();
-    Node_t *cur_head = page_id->load(mo_relax);
-    Node_t *prev_head = nullptr;
+    // create a delta record to write a key/value pair
     Node_t *delta_node = Node_t::CreateDeltaNode(NodeType::kLeaf, DeltaNodeType::kInsert,  //
                                                  key_addr, key_length, payload, payload_length);
 
+    // insert the delta record
+    Mapping_t *page_id = stack.back();
+    Node_t *cur_head = page_id->load(mo_relax);
+    Node_t *prev_head = nullptr;
     while (true) {
       // check whether the target node is valid (containing a target key and no incomplete SMOs)
       ValidateNode(key_addr, true, page_id, cur_head, prev_head, stack, consol_node);
@@ -1008,7 +1009,7 @@ class BwTree
       delta_node->SetNextNode(cur_head);
       prev_head = cur_head;
 
-      // insert the delta record
+      // try to insert the delta record
       if (page_id->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
     }
 
