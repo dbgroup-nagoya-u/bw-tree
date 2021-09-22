@@ -533,8 +533,7 @@ class BwTree
       NodeStack_t &stack)
   {
     // remove child nodes from a node stack
-    while (!stack.empty() && stack.back() != target_page) stack.pop_back();
-    if (stack.empty()) return;
+    while (stack.back() != target_page) stack.pop_back();
 
     // check whether the target node is valid (containing a target key and no incomplete SMOs)
     Mapping_t *consol_page = nullptr;
@@ -544,7 +543,7 @@ class BwTree
     // collect and sort delta records
     std::vector<Record> records;
     records.reserve(kMaxDeltaNodeNum * 4);
-    const auto [sep_key, base_node, last_smo_delta, sib_node] = SortDeltaRecords(cur_head, records);
+    const auto [sep_key, base_node, last_smo_delta, sib_page] = SortDeltaRecords(cur_head, records);
 
     // get a base node and the position of a highest key
     size_t base_rec_num;
@@ -560,7 +559,7 @@ class BwTree
     auto offset = CalculatePageSize(base_node, base_rec_num, records, last_smo_delta);
     const auto need_split = (offset > kPageSize) ? true : false;
     const auto node_type = static_cast<NodeType>(cur_head->IsLeaf());
-    Node_t *consol_node = Node_t::CreateNode(offset, node_type, 0UL, sib_node);
+    Node_t *consol_node = Node_t::CreateNode(offset, node_type, 0UL, sib_page);
 
     // copy the lowest/highest keys
     const auto low_meta = base_node->GetLowMeta();
