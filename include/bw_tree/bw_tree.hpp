@@ -292,6 +292,8 @@ class BwTree
     ReturnCode existence;
     size_t delta_chain_length = 0;
 
+    auto act_key = GetKey<Key>(key);  // tmp
+
     // traverse a delta chain and a base node
     while (true) {
       switch (cur_head->GetDeltaNodeType()) {
@@ -300,6 +302,9 @@ class BwTree
           // check whether this delta record includes a target key
           const auto meta = cur_head->GetFirstMeta();
           const auto rec_key = cur_head->GetKeyAddr(meta);
+
+          auto tmp_key = GetKey<Key>(rec_key);  // tmp
+
           if (component::IsEqual<Key, Comp>(key, rec_key)) {
             existence = kKeyExist;
             ++delta_chain_length;
@@ -720,7 +725,7 @@ class BwTree
 
     // create a split-delta record
     const auto node_type = static_cast<NodeType>(split_node->IsLeaf());
-    const Key *sep_key = reinterpret_cast<Key *>(split_node->GetKeyAddr(sep_meta));
+    const auto sep_key = split_node->GetKeyAddr(sep_meta);
     Mapping_t *split_page_id = mapping_table_.GetNewLogicalID();
     Node_t *split_delta = Node_t::CreateDeltaNode(node_type, DeltaNodeType::kSplit,  //
                                                   sep_key, sep_meta.GetKeyLength(),  //
@@ -761,7 +766,7 @@ class BwTree
   {
     // create an index-entry delta record
     const auto split_meta = split_delta->GetFirstMeta();
-    const Key *sep_key = reinterpret_cast<Key *>(split_delta->GetKeyAddr(split_meta));
+    const auto sep_key = split_delta->GetKeyAddr(split_meta);
     Mapping_t *right_page = split_delta->template GetPayload<Mapping_t *>(split_meta);
 
     if (stack.size() > 1) {
