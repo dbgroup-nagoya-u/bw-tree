@@ -128,8 +128,8 @@ class BwTree
 
     // traverse a delta chain
     while (true) {
-      const auto delta_type = cur_node->GetDeltaNodeType();
-      if (delta_type == DeltaNodeType::kInsert ||  //
+      if (const auto delta_type = cur_node->GetDeltaNodeType();
+          delta_type == DeltaNodeType::kInsert ||  //
           delta_type == DeltaNodeType::kModify ||  //
           delta_type == DeltaNodeType::kDelete) {
         // check whether this delta record includes a target key
@@ -198,13 +198,12 @@ class BwTree
       NodeStack_t &stack,
       Mapping_t *&consol_node)
   {
-    Node_t *cur_node = cur_head;
     size_t delta_chain_length = 0;
 
     // check whether there are incomplete SMOs and a target key in this logical page
-    while (cur_node != prev_head) {
-      const auto delta_type = cur_node->GetDeltaNodeType();
-      if (delta_type == DeltaNodeType::kNotDelta) {
+    for (Node_t *cur_node = cur_head; cur_node != prev_head;) {
+      if (const auto delta_type = cur_node->GetDeltaNodeType();
+          delta_type == DeltaNodeType::kNotDelta) {
         // check whether a target key is in this node
         const auto high_key = cur_node->GetHighKeyAddr();
         if (high_key != nullptr
@@ -241,10 +240,10 @@ class BwTree
           stack.emplace_back(page_id);
           continue;
         }
-      } else if (DeltaNodeType::kMerge) {
+      } else if (delta_type == DeltaNodeType::kMerge) {
         // there may be incomplete merging
         // CompleteMerge();
-      } else if (DeltaNodeType::kRemoveNode) {
+      } else if (delta_type == DeltaNodeType::kRemoveNode) {
         // there may be incomplete merging
         // CompleteMerge();
 
@@ -724,8 +723,8 @@ class BwTree
     right_page_id->store(split_node, mo_relax);
 
     // install the delta record for splitting a child node
-    Node_t *old_head = cur_head;
-    while (!page_id->compare_exchange_weak(old_head, split_delta, mo_relax)) {
+    for (auto old_head = cur_head;
+         !page_id->compare_exchange_weak(old_head, split_delta, mo_relax);) {
       if (old_head == cur_head) continue;  // weak CAS may fail even if it can execute
 
       // no CAS retry for split
@@ -817,10 +816,10 @@ class BwTree
     new_root->SetMetadata(1, Metadata{offset, 0, sizeof(Mapping_t *)});
 
     // install a new root page
-    Mapping_t *old_root_page = left_page;
     Mapping_t *new_root_page = mapping_table_.GetNewLogicalID();
     new_root_page->store(new_root, mo_relax);
-    while (!root_.compare_exchange_weak(old_root_page, new_root_page, mo_relax)) {
+    for (auto old_root_page = left_page;
+         !root_.compare_exchange_weak(old_root_page, new_root_page, mo_relax);) {
       if (old_root_page == left_page) continue;  // weak CAS may fail even if it can execute
 
       // another thread has already inserted a new root
