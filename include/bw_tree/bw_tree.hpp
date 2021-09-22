@@ -218,6 +218,7 @@ class BwTree
 
             // traverse to a split right node
             page_id = cur_node->template GetPayload<Mapping_t *>(meta);
+            stack.emplace_back(page_id);
             cur_head = page_id->load(mo_relax);
             cur_node = cur_head;
             delta_chain_length = 0;
