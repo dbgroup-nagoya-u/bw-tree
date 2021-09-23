@@ -794,6 +794,7 @@ class BwTree
     // install a new root page
     Mapping_t *new_root_page = mapping_table_.GetNewLogicalID();
     new_root_page->store(new_root, mo_relax);
+    stack.pop_back();
     for (auto old_root_page = left_page;
          !root_.compare_exchange_weak(old_root_page, new_root_page, mo_relax);) {
       if (old_root_page == left_page) continue;  // weak CAS may fail even if it can execute
@@ -801,8 +802,10 @@ class BwTree
       // another thread has already inserted a new root
       new_root_page->store(nullptr, mo_relax);
       Node_t::DeleteNode(new_root);
+      stack.emplace_back(old_root_page);
       return;
     }
+    stack.emplace_back(new_root_page);
   }
 
  public:
