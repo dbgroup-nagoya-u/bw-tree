@@ -129,9 +129,7 @@ class BwTree
     // traverse a delta chain
     while (true) {
       if (const auto delta_type = cur_node->GetDeltaNodeType();
-          delta_type == DeltaNodeType::kInsert ||  //
-          delta_type == DeltaNodeType::kModify ||  //
-          delta_type == DeltaNodeType::kDelete) {
+          delta_type == DeltaNodeType::kInsert) {
         // check whether this delta record includes a target key
         const auto low_key = cur_node->GetLowKeyAddr(), high_key = cur_node->GetHighKeyAddr();
         if (component::IsInRange<Key, Comp>(key, low_key, !closed, high_key, closed)) {
@@ -140,6 +138,21 @@ class BwTree
           break;
         }
       } else if (delta_type == DeltaNodeType::kNotDelta) {
+        const auto high_key = cur_node->GetHighKeyAddr();
+        if (high_key != nullptr
+            && (component::LT<Key, Comp>(high_key, key)
+                || (!closed && component::LT<Key, Comp>(key, high_key)))) {
+          // traverse to a sibling node
+          page_id = cur_node->GetSiblingNode();
+          cur_node = page_id->load(mo_relax);
+          delta_chain_length = 0;
+
+          // swap a current node in a stack
+          stack.pop_back();
+          stack.emplace_back(page_id);
+          continue;
+        }
+
         // reach a base page
         const auto idx = cur_node->SearchRecord(key, closed).second;
         child_page = cur_node->template GetPayload<Mapping_t *>(cur_node->GetMetadata(idx));
