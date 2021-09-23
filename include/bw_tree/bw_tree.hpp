@@ -547,7 +547,8 @@ class BwTree
       NodeStack_t &stack)
   {
     // remove child nodes from a node stack
-    while (stack.back() != target_page) stack.pop_back();
+    while (!stack.empty() && stack.back() != target_page) stack.pop_back();
+    if (stack.empty()) return;
 
     // check whether the target node is valid (containing a target key and no incomplete SMOs)
     Mapping_t *consol_page = nullptr;
