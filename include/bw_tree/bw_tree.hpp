@@ -375,62 +375,57 @@ class BwTree
     void *sep_key = nullptr;
 
     while (true) {
-      switch (cur_node->GetDeltaNodeType()) {
-        case DeltaNodeType::kInsert:
-        case DeltaNodeType::kModify:
-        case DeltaNodeType::kDelete: {
-          // check whether this delta record is in current key-range
-          const auto meta = cur_node->GetLowMeta();
-          const Record rec{cur_node, meta, cur_node->GetKeyAddr(meta)};
-          if (sep_key == nullptr || component::LT<Key, Comp>(rec.key, sep_key)) {
-            // check whether this delta record has a new key
-            const auto it = std::lower_bound(records.begin(), records.end(), rec);
-            if (it == records.end()) {
-              records.emplace_back(rec);
-            } else if (component::LT<Key, Comp>(rec.key, (*it).key)) {
-              records.insert(it, rec);
-            }
+      if (const auto delta_type = cur_node->GetDeltaNodeType();
+          delta_type == DeltaNodeType::kInsert     //
+          || delta_type == DeltaNodeType::kModify  //
+          || delta_type == DeltaNodeType::kDelete) {
+        // check whether this delta record is in current key-range
+        const auto meta = cur_node->GetLowMeta();
+        const Record rec{cur_node, meta, cur_node->GetKeyAddr(meta)};
+        if (sep_key == nullptr || !component::LT<Key, Comp>(sep_key, rec.key)) {
+          // check whether this delta record has a new key
+          const auto it = std::lower_bound(records.begin(), records.end(), rec);
+          if (it == records.end()) {
+            records.emplace_back(std::move(rec));
+          } else if (component::LT<Key, Comp>(rec.key, (*it).key)) {
+            records.insert(it, std::move(rec));
           }
-
-          break;
         }
-        case DeltaNodeType::kSplit: {
-          if (end_node == nullptr) {
-            // this split delta has a sibling node
-            end_node = cur_node;
-            sep_key = cur_node->GetLowKeyAddr();
-          }
-
-          break;
+      } else if (delta_type == DeltaNodeType::kNotDelta) {
+        if (end_node == nullptr) {
+          // if there are no SMOs, a base node has a sibling node
+          end_node = cur_node;
         }
-        case DeltaNodeType::kMerge: {
-          const auto meta = cur_node->GetLowMeta();
-          auto merged_node = cur_node->template GetPayload<Node_t *>(meta);
-
-          // traverse a merged delta chain recursively
-          const auto [merged_base_node, merged_end_node] = SortDeltaRecords(merged_node, records);
-
-          // add records in a merged base node
-          MergeRecords(GetHighKey(merged_end_node), records, merged_base_node);
-
-          break;
+        break;
+      } else if (delta_type == DeltaNodeType::kSplit) {
+        if (end_node == nullptr) {
+          // this split-delta record has a sibling node
+          end_node = cur_node;
         }
-        case DeltaNodeType::kNotDelta: {
-          if (end_node == nullptr) {
-            // if there are no SMOs, a base node has a sibling node
-            end_node = cur_node;
-          }
-
-          return {cur_node, end_node};
+        if (sep_key == nullptr) {
+          // the last separator key is the most strict one
+          sep_key = cur_node->GetLowKeyAddr();
         }
-        default:
-          // ignore remove-node deltas because consolidated delta chains do not have them
-          break;
+      } else if (delta_type == DeltaNodeType::kMerge) {
+        // traverse a merged delta chain recursively
+        const auto merged_chain = cur_node->template GetPayload<Node_t *>(cur_node->GetLowMeta());
+        const auto [merged_base_node, merged_end_node] = SortDeltaRecords(merged_chain, records);
+
+        // add records in a merged base node
+        const auto high_key = GetHighKey(merged_end_node);
+        MergeRecords(high_key, records, merged_base_node);
+
+        if (end_node == nullptr) {
+          // this merged base node has a sibling node
+          end_node = merged_base_node;
+        }
       }
 
       // go to the next delta record or base node
       cur_node = cur_node->GetNextNode();
     }
+
+    return {cur_node, end_node};
   }
 
   void
