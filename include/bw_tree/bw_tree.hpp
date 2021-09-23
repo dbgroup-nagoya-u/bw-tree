@@ -466,10 +466,8 @@ class BwTree
     size_t page_size = kHeaderLength;
 
     // count the number of active records in a base node
-    size_t base_rec_num;
-    if (end_node == base_node) {
-      base_rec_num = base_node->GetRecordCount();
-    } else {
+    size_t base_rec_num = base_node->GetRecordCount();
+    if (end_node != base_node && base_rec_num > 0) {
       const auto high_key = GetHighKey(end_node);
       const auto [existence, rec_num] = base_node->SearchRecord(high_key, true);
       base_rec_num = (existence == ReturnCode::kKeyExist) ? rec_num + 1 : rec_num;
