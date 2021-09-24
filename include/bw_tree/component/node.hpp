@@ -469,12 +469,12 @@ class Node
     return {rc, begin_idx};
   }
 
-  size_t
+  void
   CopyRecordTo(  //
       Node *copied_node,
-      size_t position,
-      size_t offset,
-      const Metadata meta)
+      const size_t position,
+      size_t &offset,
+      const Metadata meta) const
   {
     const auto total_length = meta.GetTotalLength();
     offset -= total_length;
@@ -486,8 +486,6 @@ class Node
 
     // set record metadata
     copied_node->SetMetadata(position, Metadata{offset, meta.GetKeyLength(), total_length});
-
-    return offset;
   }
 };
 

@@ -516,6 +516,116 @@ class BwTree
     return {page_size, base_rec_num};
   }
 
+  void
+  CopyLeafRecords(  //
+      Node_t *consol_node,
+      size_t offset,
+      const Node_t *base_node,
+      const size_t base_rec_num,
+      const std::vector<Record> &records)
+  {
+    // copy records from a delta chain and base node
+    size_t rec_num = 0;
+    size_t j = 0;
+    for (auto &&[delta, delta_meta, delta_key] : records) {
+      // copy records in a base node
+      void *base_key{};
+      for (; j < base_rec_num; ++j) {
+        const auto meta = base_node->GetMetadata(j);
+        base_key = base_node->GetKeyAddr(meta);
+        if (!component::LT<Key, Comp>(base_key, delta_key)) break;
+        base_node->CopyRecordTo(consol_node, rec_num++, offset, meta);
+      }
+
+      // copy a delta record
+      if (delta->GetDeltaNodeType() != DeltaNodeType::kDelete) {
+        delta->CopyRecordTo(consol_node, rec_num++, offset, delta_meta);
+      }
+      if (j < base_rec_num && !component::LT<Key, Comp>(delta_key, base_key)) {
+        ++j;  // a base node has the same key, so skip it
+      }
+    }
+    // copy remaining records
+    for (; j < base_rec_num; ++j) {
+      base_node->CopyRecordTo(consol_node, rec_num++, offset, base_node->GetMetadata(j));
+    }
+
+    consol_node->SetRecordCount(rec_num);
+  }
+
+  void
+  CopyInternalRecords(  //
+      Node_t *consol_node,
+      size_t offset,
+      const Node_t *base_node,
+      const size_t base_rec_num,
+      const std::vector<Record> &records)
+  {
+    // copy records from a delta chain and base node
+    Metadata meta;
+    void *base_key{};
+    size_t rec_num = 0, j = 0;
+    const auto delta_rec_num = records.size();
+    for (size_t i = 0; i < delta_rec_num; ++i) {
+      auto [delta, delta_meta, delta_key] = records[i];
+
+      // copy records in a base node
+      for (; j < base_rec_num; ++j) {
+        meta = base_node->GetMetadata(j);
+        if (meta.GetKeyLength() == 0) {
+          base_key = nullptr;
+          break;
+        }
+        base_key = base_node->GetKeyAddr(meta);
+        if (!component::LT<Key, Comp>(base_key, delta_key)) break;
+        base_node->CopyRecordTo(consol_node, rec_num++, offset, meta);
+      }
+
+      // copy a delta record
+      if (delta->GetDeltaNodeType() != DeltaNodeType::kDelete) {
+        Node_t *prev_node = const_cast<Node_t *>(base_node);
+        Metadata prev_meta = meta;
+        do {
+          // insert a new index-entry
+          const auto delta_key_len = delta_meta.GetKeyLength();
+          const Mapping_t *ins_page = prev_node->template GetPayload<Mapping_t *>(prev_meta);
+          consol_node->SetPayload(offset, ins_page, sizeof(Mapping_t *));
+          consol_node->SetKey(offset, delta_key, delta_key_len);
+          consol_node->SetMetadata(
+              rec_num++, Metadata{offset, delta_key_len, delta_key_len + sizeof(Mapping_t *)});
+
+          // keep a current delta record for multiple splitting
+          prev_node = delta;
+          prev_meta = delta->GetLowMeta();
+
+          // check the next delta record
+          if (++i >= delta_rec_num) break;
+          delta = records[i].node;
+          delta_meta = records[i].meta;
+          delta_key = records[i].key;
+        } while (meta.GetKeyLength() == 0 || component::LT<Key, Comp>(delta_key, base_key));
+        --i;
+
+        // insert the originally inserted index-entry
+        const auto orig_key = base_node->GetKeyAddr(meta);
+        const auto orig_key_len = meta.GetKeyLength();
+        const auto ins_page = prev_node->template GetPayload<Mapping_t *>(prev_meta);
+        consol_node->SetPayload(offset, ins_page, sizeof(Mapping_t *));
+        consol_node->SetKey(offset, orig_key, orig_key_len);
+        consol_node->SetMetadata(
+            rec_num++, Metadata{offset, orig_key_len, orig_key_len + sizeof(Mapping_t *)});
+        ++j;
+      }
+      if (base_key != nullptr && !component::LT<Key, Comp>(delta_key, base_key)) {
+        ++j;  // a base node has the same key, so skip it
+      }
+    }
+    for (; j < base_rec_num; ++j) {  // copy remaining records
+      base_node->CopyRecordTo(consol_node, rec_num++, offset, base_node->GetMetadata(j));
+    }
+    consol_node->SetRecordCount(rec_num);
+  }
+
   constexpr void *
   GetHighKey(const Node_t *node)
   {
@@ -596,72 +706,12 @@ class BwTree
       consol_node->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
     }
 
-    // copy records from a delta chain and base node
-    Metadata meta;
-    void *base_key{};
-    size_t rec_num = 0, j = 0;
-    const auto delta_rec_num = records.size();
-    for (size_t i = 0; i < delta_rec_num; ++i) {
-      auto [delta, delta_meta, delta_key] = records[i];
-
-      // copy records in a base node
-      for (; j < base_rec_num; ++j) {
-        meta = base_node->GetMetadata(j);
-        base_key = base_node->GetKeyAddr(meta);
-        if (meta.GetKeyLength() != 0 && component::LT<Key, Comp>(base_key, delta_key)) {
-          offset = base_node->CopyRecordTo(consol_node, rec_num++, offset, meta);
-        } else {
-          break;
-        }
-      }
-
-      // copy a delta record
-      if (delta->GetDeltaNodeType() != DeltaNodeType::kDelete) {
-        if (delta->IsLeaf()) {
-          offset = delta->CopyRecordTo(consol_node, rec_num++, offset, delta_meta);
-        } else {
-          Node_t *prev_node = base_node;
-          Metadata prev_meta = meta;
-          do {
-            // insert a new index-entry
-            const void *cur_key = delta->GetLowKeyAddr();
-            const size_t cur_key_len = delta_meta.GetKeyLength();
-            const Mapping_t *ins_page = prev_node->template GetPayload<Mapping_t *>(prev_meta);
-            consol_node->SetPayload(offset, ins_page, sizeof(Mapping_t *));
-            consol_node->SetKey(offset, cur_key, cur_key_len);
-            consol_node->SetMetadata(
-                rec_num++, Metadata{offset, cur_key_len, cur_key_len + sizeof(Mapping_t *)});
-
-            // keep a current delta record for multiple splitting
-            prev_node = delta;
-            prev_meta = delta->GetLowMeta();
-
-            // check the next delta record
-            if (++i >= delta_rec_num) break;
-            delta = records[i].node;
-            delta_meta = records[i].meta;
-            delta_key = records[i].key;
-          } while (meta.GetKeyLength() == 0 || component::LT<Key, Comp>(delta_key, base_key));
-
-          // insert the originally inserted index-entry
-          const auto orig_key = base_node->GetKeyAddr(meta);
-          const auto orig_key_len = meta.GetKeyLength();
-          const auto ins_page = prev_node->template GetPayload<Mapping_t *>(prev_meta);
-          consol_node->SetPayload(offset, ins_page, sizeof(Mapping_t *));
-          consol_node->SetKey(offset, orig_key, orig_key_len);
-          consol_node->SetMetadata(
-              rec_num++, Metadata{offset, orig_key_len, orig_key_len + sizeof(Mapping_t *)});
-          ++j;
-        }
-      }
-      if (j < base_rec_num && !component::LT<Key, Comp>(delta_key, base_key)) {
-        ++j;  // a base node has the same key, so skip it
-      }
+    // copy active records
+    if (node_type == NodeType::kLeaf) {
+      CopyLeafRecords(consol_node, offset, base_node, base_rec_num, records);
+    } else {
+      CopyInternalRecords(consol_node, offset, base_node, base_rec_num, records);
     }
-    for (; j < base_rec_num; ++j) {  // copy remaining records
-      offset = base_node->CopyRecordTo(consol_node, rec_num++, offset, base_node->GetMetadata(j));
-    }
-    consol_node->SetRecordCount(rec_num);
 
     if (need_split) {
       if (HalfSplit(consol_page, cur_head, consol_node, stack)) return;
