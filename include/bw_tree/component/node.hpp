@@ -470,22 +470,39 @@ class Node
   }
 
   void
-  CopyRecordTo(  //
-      Node *copied_node,
+  CopyRecordFrom(  //
       const size_t position,
       size_t &offset,
-      const Metadata meta) const
+      const Node *orig_node,
+      const Metadata meta)
   {
     const auto total_length = meta.GetTotalLength();
     offset -= total_length;
 
     // copy a record
-    auto src_addr = ShiftAddress(this, meta.GetOffset());
-    auto dest_addr = ShiftAddress(copied_node, offset);
+    auto src_addr = ShiftAddress(orig_node, meta.GetOffset());
+    auto dest_addr = ShiftAddress(this, offset);
     memcpy(dest_addr, src_addr, total_length);
 
     // set record metadata
-    copied_node->SetMetadata(position, Metadata{offset, meta.GetKeyLength(), total_length});
+    SetMetadata(position, Metadata{offset, meta.GetKeyLength(), total_length});
+  }
+
+  void
+  CopyRecordFrom(  //
+      const size_t position,
+      size_t &offset,
+      const Node *key_node,
+      const Metadata key_meta,
+      const Node *payload_node,
+      const Metadata payload_meta)
+  {
+    const auto key_len = key_meta.GetKeyLength();
+    const Mapping_t *ins_page = payload_node->template GetPayload<Mapping_t *>(payload_meta);
+
+    SetPayload(offset, ins_page, sizeof(Mapping_t *));
+    SetKey(offset, key_node->GetKeyAddr(key_meta), key_len);
+    SetMetadata(position, Metadata{offset, key_len, key_len + sizeof(Mapping_t *)});
   }
 };
 
