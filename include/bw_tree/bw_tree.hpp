@@ -563,23 +563,26 @@ class BwTree
   {
     Metadata meta = base_node->GetMetadata(0);
     const void *base_key = (meta.GetKeyLength() == 0) ? nullptr : base_node->GetKeyAddr(meta);
+    const Node_t *prev_node = base_node;
+    Metadata prev_meta = meta;
 
     // copy records from a delta chain and base node
-    const Node_t *prev_node = base_node;
-    Metadata prev_meta = base_node->GetMetadata(0);
-
     size_t rec_num = 0, j = 0;
     const auto delta_rec_num = records.size();
     for (size_t i = 0; i < delta_rec_num; ++i) {
       auto [delta, delta_meta, delta_key] = records[i];
 
       while (j < base_rec_num) {
-        if (base_key != nullptr && component::LT<Key, Comp>(base_key, delta_key)) {
-          consol_node->CopyRecordFrom(rec_num++, offset, base_node, meta);
-          meta = base_node->GetMetadata(++j);
+        if (base_key == nullptr || !component::LT<Key, Comp>(base_key, delta_key)) break;
+
+        consol_node->CopyRecordFrom(rec_num++, offset, base_node, meta, prev_node, prev_meta);
+
+        if (++j < base_rec_num) {
+          meta = base_node->GetMetadata(j);
           base_key = (meta.GetKeyLength() == 0) ? nullptr : base_node->GetKeyAddr(meta);
+          prev_node = base_node;
+          prev_meta = meta;
         }
-        break;
       }
 
       // copy a delta record
@@ -590,17 +593,26 @@ class BwTree
         // keep a current delta record for multiple splitting
         prev_node = delta;
         prev_meta = delta->GetLowMeta();
-
-        // insert the originally inserted index-entry
-        consol_node->CopyRecordFrom(rec_num++, offset, base_node, meta, prev_node, prev_meta);
       }
       if (base_key != nullptr && !component::LT<Key, Comp>(delta_key, base_key)) {
-        ++j;  // a base node has the same key, so skip it
+        // a base node has the same key, so skip it
+        if (++j < base_rec_num) {
+          meta = base_node->GetMetadata(j);
+          base_key = (meta.GetKeyLength() == 0) ? nullptr : base_node->GetKeyAddr(meta);
+        }
       }
     }
-    for (; j < base_rec_num; ++j) {  // copy remaining records
-      consol_node->CopyRecordFrom(rec_num++, offset, base_node, base_node->GetMetadata(j));
+    if (prev_node != base_node) {
+      consol_node->CopyRecordFrom(rec_num++, offset, base_node, meta, prev_node, prev_meta);
+      ++j;
     }
+
+    // copy remaining records
+    for (; j < base_rec_num; ++j) {
+      meta = base_node->GetMetadata(j);
+      consol_node->CopyRecordFrom(rec_num++, offset, base_node, meta);
+    }
+
     consol_node->SetRecordCount(rec_num);
   }
 

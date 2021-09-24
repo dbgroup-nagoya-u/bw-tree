@@ -271,16 +271,13 @@ class BwTreeFixture : public testing::Test
  * Preparation for typed testing
  *################################################################################################*/
 
-using KeyPayloadPairs = ::testing::Types<KeyPayload<uint64_t,
-                                                    uint64_t,
-                                                    UInt64Comp,
-                                                    UInt64Comp>>;  //,
-//                                          KeyPayload<char *, uint64_t, CStrComp, UInt64Comp>,
-//                                          KeyPayload<uint64_t, char *, UInt64Comp, CStrComp>,
-//                                          KeyPayload<char *, char *, CStrComp, CStrComp>,
-//                                          KeyPayload<uint32_t, uint64_t, UInt32Comp, UInt64Comp>,
-//                                          KeyPayload<uint32_t, uint32_t, UInt32Comp, UInt32Comp>,
-//                                          KeyPayload<uint64_t, uint64_t *, UInt64Comp, PtrComp>>;
+using KeyPayloadPairs = ::testing::Types<KeyPayload<uint64_t, uint64_t, UInt64Comp, UInt64Comp>,
+                                         KeyPayload<char *, uint64_t, CStrComp, UInt64Comp>,
+                                         KeyPayload<uint64_t, char *, UInt64Comp, CStrComp>,
+                                         KeyPayload<char *, char *, CStrComp, CStrComp>,
+                                         KeyPayload<uint32_t, uint64_t, UInt32Comp, UInt64Comp>,
+                                         KeyPayload<uint32_t, uint32_t, UInt32Comp, UInt32Comp>,
+                                         KeyPayload<uint64_t, uint64_t *, UInt64Comp, PtrComp>>;
 TYPED_TEST_CASE(BwTreeFixture, KeyPayloadPairs);
 
 /*##################################################################################################
