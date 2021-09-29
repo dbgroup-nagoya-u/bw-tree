@@ -97,4 +97,16 @@ constexpr size_t kMaxDeltaNodeNum = 16;
 /// check whether the specified page size is valid
 static_assert(kPageSize % kWordLength == 0);
 
+// tmp
+template <class Key>
+const Key
+GetKey(const void *key_addr)
+{
+  if constexpr (IsVariableLengthData<Key>()) {
+    return reinterpret_cast<const Key>(const_cast<void *>(key_addr));
+  } else {
+    return *reinterpret_cast<const Key *>(key_addr);
+  }
+}
+
 }  // namespace dbgroup::index::bw_tree

@@ -191,7 +191,7 @@ class Node
   {
     const auto total_length = sep_key_len + sizeof(Mapping_t *);
     const Node *split_node = split_page->load(mo_relax);
-    const auto high_meta = split_node->GetSecondMeta();
+    const auto high_meta = split_node->GetHighMeta();
     const auto high_key_len = high_meta.GetKeyLength();
     size_t offset = kHeaderLength + total_length + high_key_len;
 
@@ -256,13 +256,13 @@ class Node
   }
 
   constexpr Metadata
-  GetFirstMeta() const
+  GetLowMeta() const
   {
     return low_meta_;
   }
 
   constexpr Metadata
-  GetSecondMeta() const
+  GetHighMeta() const
   {
     return high_meta_;
   }
@@ -277,20 +277,20 @@ class Node
     return meta_array_[position];
   }
 
-  constexpr Key *
+  constexpr void *
   GetLowKeyAddr() const
   {
     if (low_meta_.GetKeyLength() == 0) return nullptr;
 
-    return reinterpret_cast<Key *>(ShiftAddress(this, low_meta_.GetOffset()));
+    return ShiftAddress(this, low_meta_.GetOffset());
   }
 
-  constexpr Key *
+  constexpr void *
   GetHighKeyAddr() const
   {
     if (high_meta_.GetKeyLength() == 0) return nullptr;
 
-    return reinterpret_cast<Key *>(ShiftAddress(this, high_meta_.GetOffset()));
+    return ShiftAddress(this, high_meta_.GetOffset());
   }
 
   /**
@@ -469,25 +469,40 @@ class Node
     return {rc, begin_idx};
   }
 
-  size_t
-  CopyRecordTo(  //
-      Node *copied_node,
-      size_t position,
-      size_t offset,
+  void
+  CopyRecordFrom(  //
+      const size_t position,
+      size_t &offset,
+      const Node *orig_node,
       const Metadata meta)
   {
     const auto total_length = meta.GetTotalLength();
     offset -= total_length;
 
     // copy a record
-    auto src_addr = ShiftAddress(this, meta.GetOffset());
-    auto dest_addr = ShiftAddress(copied_node, offset);
+    auto src_addr = ShiftAddress(orig_node, meta.GetOffset());
+    auto dest_addr = ShiftAddress(this, offset);
     memcpy(dest_addr, src_addr, total_length);
 
     // set record metadata
-    copied_node->SetMetadata(position, Metadata{offset, meta.GetKeyLength(), total_length});
+    SetMetadata(position, Metadata{offset, meta.GetKeyLength(), total_length});
+  }
 
-    return offset;
+  void
+  CopyRecordFrom(  //
+      const size_t position,
+      size_t &offset,
+      const Node *key_node,
+      const Metadata key_meta,
+      const Node *payload_node,
+      const Metadata payload_meta)
+  {
+    const auto key_len = key_meta.GetKeyLength();
+    const Mapping_t *ins_page = payload_node->template GetPayload<Mapping_t *>(payload_meta);
+
+    SetPayload(offset, ins_page, sizeof(Mapping_t *));
+    SetKey(offset, key_node->GetKeyAddr(key_meta), key_len);
+    SetMetadata(position, Metadata{offset, key_len, key_len + sizeof(Mapping_t *)});
   }
 };
 

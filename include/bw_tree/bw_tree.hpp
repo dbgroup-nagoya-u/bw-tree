@@ -90,180 +90,184 @@ class BwTree
    * Internal utility functions
    *##############################################################################################*/
 
-  Mapping_t *
-  SearchChildNode(  //
-      const void *key,
-      const bool closed,
-      Mapping_t *page_id,
-      Node_t *cur_head,
-      NodeStack_t &stack,
-      Mapping_t *&consol_node)
-  {
-    size_t delta_chain_length = 0;
-
-    // traverse a delta chain
-    while (true) {
-      switch (cur_head->GetDeltaNodeType()) {
-        case DeltaNodeType::kInsert:
-        case DeltaNodeType::kModify:
-        case DeltaNodeType::kDelete: {
-          // check whether this delta record includes a target key
-          const auto low_key = cur_head->GetLowKeyAddr(), high_key = cur_head->GetHighKeyAddr();
-          if (component::IsInRange<Key, Comp>(key, low_key, !closed, high_key, closed)) {
-            page_id = cur_head->template GetPayload<Mapping_t *>(cur_head->GetFirstMeta());
-            ++delta_chain_length;
-            goto found_child_node;
-          }
-          break;
-        }
-        case DeltaNodeType::kRemoveNode: {
-          // this node is deleted, retry until a delete-index-entry delta is inserted
-          page_id = stack.back();
-          stack.pop_back();
-          cur_head = page_id->load(mo_relax);
-          delta_chain_length = 0;
-          continue;
-        }
-        case DeltaNodeType::kSplit: {
-          // check whether a split right (i.e., sibling) node includes a target key
-          const auto meta = cur_head->GetFirstMeta();
-          const auto sep_key = cur_head->GetKeyAddr(meta);
-          if (component::LT<Key, Comp>(sep_key, key)
-              || (!closed && !component::LT<Key, Comp>(key, sep_key))) {
-            // traverse to a split right node
-            page_id = cur_head->template GetPayload<Mapping_t *>(meta);
-            cur_head = page_id->load(mo_relax);
-            delta_chain_length = 0;
-            continue;
-          }
-          break;
-        }
-        case DeltaNodeType::kMerge: {
-          // check whether a merged node includes a target key
-          const auto meta = cur_head->GetFirstMeta();
-          const auto sep_key = cur_head->GetKeyAddr(meta);
-          if (component::LT<Key, Comp>(sep_key, key)
-              || (!closed && !component::LT<Key, Comp>(key, sep_key))) {
-            // traverse to a merged node
-            cur_head = cur_head->template GetPayload<Node_t *>(meta);
-            ++delta_chain_length;
-            continue;
-          }
-          break;
-        }
-        case DeltaNodeType::kNotDelta: {
-          // reach a base page
-          const auto idx = cur_head->SearchRecord(key, closed).second;
-          const auto meta = cur_head->GetMetadata(idx);
-          page_id = cur_head->template GetPayload<Mapping_t *>(meta);
-          goto found_child_node;
-        }
-      }
-
-      // go to the next delta record or base node
-      cur_head = cur_head->GetNextNode();
-      ++delta_chain_length;
-    }
-
-  found_child_node:
-    if (delta_chain_length >= kMaxDeltaNodeNum) {
-      consol_node = stack.back();
-    }
-
-    return page_id;
-  }
-
-  void
+  NodeStack_t
   SearchLeafNode(  //
       const void *key,
       const bool closed,
-      Mapping_t *page_id,
-      NodeStack_t &stack,
       Mapping_t *&consol_node)
   {
-    Node_t *cur_head = page_id->load(mo_relax);
+    NodeStack_t stack;
+    stack.reserve(kExpectedTreeHeight);
+
+    // get a logical page of a root node
+    Mapping_t *page_id = root_.load(mo_relax);
     stack.emplace_back(page_id);
 
     // traverse a Bw-tree
+    Node_t *cur_head = page_id->load(mo_relax);
     while (!cur_head->IsLeaf()) {
       page_id = SearchChildNode(key, closed, page_id, cur_head, stack, consol_node);
       stack.emplace_back(page_id);
       cur_head = page_id->load(mo_relax);
     }
+
+    return stack;
   }
 
-  void
+  Mapping_t *
+  SearchChildNode(  //
+      const void *key,
+      const bool closed,
+      Mapping_t *page_id,
+      Node_t *cur_node,
+      NodeStack_t &stack,
+      Mapping_t *&consol_node)
+  {
+    size_t delta_chain_length = 0;
+    Mapping_t *child_page;
+
+    // traverse a delta chain
+    while (true) {
+      if (const auto delta_type = cur_node->GetDeltaNodeType();
+          delta_type == DeltaNodeType::kInsert) {
+        // check whether this delta record includes a target key
+        const auto low_key = cur_node->GetLowKeyAddr(), high_key = cur_node->GetHighKeyAddr();
+        if (component::IsInRange<Key, Comp>(key, low_key, !closed, high_key, closed)) {
+          child_page = cur_node->template GetPayload<Mapping_t *>(cur_node->GetLowMeta());
+          ++delta_chain_length;
+          break;
+        }
+      } else if (delta_type == DeltaNodeType::kNotDelta) {
+        const auto high_key = cur_node->GetHighKeyAddr();
+        if (high_key != nullptr
+            && (component::LT<Key, Comp>(high_key, key)
+                || (!closed && component::LT<Key, Comp>(key, high_key)))) {
+          // traverse to a sibling node
+          page_id = cur_node->GetSiblingNode();
+          cur_node = page_id->load(mo_relax);
+          delta_chain_length = 0;
+
+          // swap a current node in a stack
+          stack.pop_back();
+          stack.emplace_back(page_id);
+          continue;
+        }
+
+        // reach a base page
+        const auto idx = cur_node->SearchRecord(key, closed).second;
+        child_page = cur_node->template GetPayload<Mapping_t *>(cur_node->GetMetadata(idx));
+        break;
+      } else if (delta_type == DeltaNodeType::kSplit) {
+        // check whether a split right (i.e., sibling) node includes a target key
+        const auto meta = cur_node->GetLowMeta();
+        const auto sep_key = cur_node->GetKeyAddr(meta);
+        if (component::LT<Key, Comp>(sep_key, key)
+            || (!closed && !component::LT<Key, Comp>(key, sep_key))) {
+          // traverse to a split right node
+          page_id = cur_node->template GetPayload<Mapping_t *>(meta);
+          cur_node = page_id->load(mo_relax);
+          delta_chain_length = 0;
+          continue;
+        }
+      } else if (delta_type == DeltaNodeType::kMerge) {
+        // check whether a merged node includes a target key
+        const auto meta = cur_node->GetLowMeta();
+        const auto sep_key = cur_node->GetKeyAddr(meta);
+        if (component::LT<Key, Comp>(sep_key, key)
+            || (!closed && !component::LT<Key, Comp>(key, sep_key))) {
+          // traverse to a merged node
+          cur_node = cur_node->template GetPayload<Node_t *>(meta);
+          ++delta_chain_length;
+          continue;
+        }
+      } else {  // delta_type == DeltaNodeType::kRemoveNode
+        // this node is deleted, so retry until a delete-index-entry delta is inserted
+        page_id = stack.back();
+        stack.pop_back();
+        cur_node = page_id->load(mo_relax);
+        delta_chain_length = 0;
+        continue;
+      }
+
+      // go to the next delta record or base node
+      cur_node = cur_node->GetNextNode();
+      ++delta_chain_length;
+    }
+
+    if (delta_chain_length >= kMaxDeltaNodeNum) {
+      consol_node = page_id;
+    }
+
+    return child_page;
+  }
+
+  Node_t *
   ValidateNode(  //
       const void *key,
       const bool closed,
-      Mapping_t *&page_id,
-      Node_t *&cur_head,
       const Node_t *prev_head,
       NodeStack_t &stack,
       Mapping_t *&consol_node)
   {
-    Node_t *cur_node = cur_head;
+    Mapping_t *page_id = stack.back();
+    Node_t *cur_head = page_id->load(mo_relax);
     size_t delta_chain_length = 0;
 
-    // check whether there are incomplete SMOs
-    while (cur_node != prev_head) {
-      switch (cur_node->GetDeltaNodeType()) {
-        case DeltaNodeType::kSplit: {
-          const auto meta = cur_node->GetFirstMeta();
-          const auto sep_key = cur_node->GetKeyAddr(meta);
-          if (component::LT<Key, Comp>(sep_key, key)
-              || (!closed && !component::LT<Key, Comp>(key, sep_key))) {
-            // there may be incomplete split
-            CompleteSplit(cur_node, stack, consol_node);
-
-            // traverse to a split right node
-            page_id = cur_node->template GetPayload<Mapping_t *>(meta);
-            cur_head = page_id->load(mo_relax);
-            cur_node = cur_head;
-            delta_chain_length = 0;
-            continue;
-          }
-          break;
-        }
-        case DeltaNodeType::kRemoveNode: {
-          // there may be incomplete merging
-          // CompleteMerge();
-
-          // traverse to a merged node
-          const auto parent_node = stack.back();
-          stack.pop_back();
-          page_id = SearchChildNode(key, closed, parent_node, cur_head, stack, consol_node);
+    // check whether there are incomplete SMOs and a target key in this logical page
+    for (Node_t *cur_node = cur_head; cur_node != prev_head;) {
+      if (const auto delta_type = cur_node->GetDeltaNodeType();
+          delta_type == DeltaNodeType::kNotDelta) {
+        // check whether a target key is in this node
+        const auto high_key = cur_node->GetHighKeyAddr();
+        if (high_key != nullptr
+            && (component::LT<Key, Comp>(high_key, key)
+                || (!closed && component::LT<Key, Comp>(key, high_key)))) {
+          // traverse to a sibling node
+          page_id = cur_node->GetSiblingNode();
           cur_head = page_id->load(mo_relax);
           cur_node = cur_head;
           delta_chain_length = 0;
+
+          // swap a current node in a stack
+          stack.pop_back();
+          stack.emplace_back(page_id);
           continue;
         }
-        case DeltaNodeType::kMerge: {
-          // there may be incomplete merging
-          // CompleteMerge();
-          break;
-        }
-        case DeltaNodeType::kNotDelta: {
-          // check whether a target key is in this node
-          const auto high_meta = cur_node->GetSecondMeta();
-          if (high_meta.GetKeyLength() != 0) {
-            const auto high_key = cur_node->GetKeyAddr(high_meta);
-            if (component::LT<Key, Comp>(high_key, key)
-                || (!closed && component::LT<Key, Comp>(key, high_key))) {
-              // traverse to a sibling node
-              page_id = cur_node->GetSiblingNode();
-              cur_head = page_id->load(mo_relax);
-              cur_node = cur_head;
-              delta_chain_length = 0;
-              continue;
-            }
-          }
+        break;
+      } else if (delta_type == DeltaNodeType::kSplit) {
+        // check whether a target key is in a split-right node
+        const auto meta = cur_node->GetLowMeta();
+        const auto sep_key = cur_node->GetKeyAddr(meta);
+        if (component::LT<Key, Comp>(sep_key, key)
+            || (!closed && !component::LT<Key, Comp>(key, sep_key))) {
+          // there may be incomplete split
+          CompleteSplit(cur_node, stack, consol_node);
 
-          // there are no incomplete SMOs
-          goto no_incomplete_smo;
+          // traverse to a split right node
+          page_id = cur_node->template GetPayload<Mapping_t *>(meta);
+          cur_head = page_id->load(mo_relax);
+          cur_node = cur_head;
+          delta_chain_length = 0;
+
+          // insert a new current-level node (an old node was popped in parent-update)
+          stack.emplace_back(page_id);
+          continue;
         }
-        default:
-          break;
+      } else if (delta_type == DeltaNodeType::kMerge) {
+        // there may be incomplete merging
+        // CompleteMerge();
+      } else if (delta_type == DeltaNodeType::kRemoveNode) {
+        // there may be incomplete merging
+        // CompleteMerge();
+
+        // traverse to a merged node
+        const auto parent_node = stack.back();
+        stack.pop_back();
+        page_id = SearchChildNode(key, closed, parent_node, cur_head, stack, consol_node);
+        cur_head = page_id->load(mo_relax);
+        cur_node = cur_head;
+        delta_chain_length = 0;
+        continue;
       }
 
       // go to the next delta record or base node
@@ -271,194 +275,170 @@ class BwTree
       ++delta_chain_length;
     }
 
-  no_incomplete_smo:
     if (delta_chain_length >= kMaxDeltaNodeNum) {
       consol_node = page_id;
     }
+
+    return cur_head;
   }
 
-  ReturnCode
+  std::pair<Node_t *, Metadata>
   CheckExistence(  //
       const void *key,
-      const bool closed,
-      Mapping_t *page_id,
       NodeStack_t &stack,
-      Mapping_t *&consol_node,
-      Payload *payload = nullptr)
+      Mapping_t *&consol_node)
   {
-    // prepare variables to read a record
-    Node_t *cur_head = page_id->load(mo_relax);
-    ReturnCode existence;
     size_t delta_chain_length = 0;
+    Metadata meta;
 
     // traverse a delta chain and a base node
+    Mapping_t *page_id = stack.back();
+    Node_t *cur_node = page_id->load(mo_relax);
     while (true) {
-      switch (cur_head->GetDeltaNodeType()) {
-        case DeltaNodeType::kInsert:
-        case DeltaNodeType::kModify: {
-          // check whether this delta record includes a target key
-          const auto meta = cur_head->GetFirstMeta();
-          const auto rec_key = cur_head->GetKeyAddr(meta);
-          if (component::IsEqual<Key, Comp>(key, rec_key)) {
-            existence = kKeyExist;
-            ++delta_chain_length;
-            if (payload != nullptr) {
-              cur_head->CopyPayload(meta, *payload);
-            }
-            goto found_record;
-          }
+      if (const auto delta_type = cur_node->GetDeltaNodeType();
+          delta_type == DeltaNodeType::kInsert || delta_type == DeltaNodeType::kModify) {
+        // check whether this delta record includes a target key
+        meta = cur_node->GetLowMeta();
+        if (component::IsEqual<Key, Comp>(key, cur_node->GetKeyAddr(meta))) {
+          ++delta_chain_length;
           break;
         }
-        case DeltaNodeType::kDelete: {
-          // check whether this delta record includes a target key
-          const auto meta = cur_head->GetFirstMeta();
-          const auto rec_key = cur_head->GetKeyAddr(meta);
-          if (component::IsEqual<Key, Comp>(key, rec_key)) {
-            existence = kKeyNotExist;
-            ++delta_chain_length;
-            goto found_record;
-          }
-          break;
-        }
-        case DeltaNodeType::kRemoveNode: {
-          // this node is deleted, retry until a delete-index-entry delta is inserted
-          const auto parent_node = stack.back();
-          stack.pop_back();
-          page_id = SearchChildNode(key, closed, parent_node, cur_head, stack, consol_node);
-          cur_head = page_id->load(mo_relax);
+      } else if (delta_type == DeltaNodeType::kNotDelta) {
+        // check whether a target key is in this node
+        const auto high_key = cur_node->GetHighKeyAddr();
+        if (high_key != nullptr && component::LT<Key, Comp>(high_key, key)) {
+          // traverse to a sibling node
+          page_id = cur_node->GetSiblingNode();
+          cur_node = page_id->load(mo_relax);
           delta_chain_length = 0;
+
+          // swap a current node in a stack
+          stack.pop_back();
+          stack.emplace_back(page_id);
           continue;
         }
-        case DeltaNodeType::kSplit: {
-          // check whether a split right (i.e., sibling) node includes a target key
-          const auto meta = cur_head->GetFirstMeta();
-          const auto sep_key = cur_head->GetKeyAddr(meta);
-          if (component::LT<Key, Comp>(sep_key, key)) {
-            // traverse to a split right node
-            page_id = cur_head->template GetPayload<Mapping_t *>(meta);
-            cur_head = page_id->load(mo_relax);
-            delta_chain_length = 0;
-            continue;
-          }
+
+        // search a target key
+        const auto [existence, idx] = cur_node->SearchRecord(key, true);
+        if (existence == kKeyExist) {
+          meta = cur_node->GetMetadata(idx);
+        } else {
+          cur_node = nullptr;
+        }
+        break;
+      } else if (delta_type == DeltaNodeType::kDelete) {
+        // check whether a target key is deleted
+        if (component::IsEqual<Key, Comp>(key, cur_node->GetLowKeyAddr())) {
+          cur_node = nullptr;
+          ++delta_chain_length;
           break;
         }
-        case DeltaNodeType::kMerge: {
-          // check whether a merged node includes a target key
-          const auto meta = cur_head->GetFirstMeta();
-          const auto sep_key = cur_head->GetKeyAddr(meta);
-          if (component::LT<Key, Comp>(sep_key, key)) {
-            // traverse to a merged right node
-            cur_head = cur_head->template GetPayload<Node_t *>(meta);
-            ++delta_chain_length;
-            continue;
-          }
-          break;
+      } else if (delta_type == DeltaNodeType::kSplit) {
+        // check whether a split right (i.e., sibling) node includes a target key
+        meta = cur_node->GetLowMeta();
+        if (component::LT<Key, Comp>(cur_node->GetKeyAddr(meta), key)) {
+          // traverse to a split right node
+          page_id = cur_node->template GetPayload<Mapping_t *>(meta);
+          cur_node = page_id->load(mo_relax);
+          delta_chain_length = 0;
+
+          // swap a current node in a stack
+          stack.pop_back();
+          stack.emplace_back(page_id);
+          continue;
         }
-        case DeltaNodeType::kNotDelta: {
-          // reach a base page
-          size_t idx;
-          std::tie(existence, idx) = cur_head->SearchRecord(key, closed);
-          if (existence == kKeyExist && payload != nullptr) {
-            const auto meta = cur_head->GetMetadata(idx);
-            cur_head->CopyPayload(meta, *payload);
-          }
-          goto found_record;
+      } else if (delta_type == DeltaNodeType::kMerge) {
+        // check whether a merged node includes a target key
+        meta = cur_node->GetLowMeta();
+        if (component::LT<Key, Comp>(cur_node->GetKeyAddr(meta), key)) {
+          // traverse to a merged right node
+          cur_node = cur_node->template GetPayload<Node_t *>(meta);
+          ++delta_chain_length;
+          continue;
         }
+      } else {  // delta_type == DeltaNodeType::kRemoveNode
+        // this node is deleted, retry until a delete-index-entry delta is inserted
+        stack.pop_back();
+        const auto parent_node = stack.back();
+        page_id = SearchChildNode(key, true, parent_node, cur_node, stack, consol_node);
+        stack.emplace_back(page_id);
+        cur_node = page_id->load(mo_relax);
+        delta_chain_length = 0;
+        continue;
       }
 
       // go to the next delta record or base node
-      cur_head = cur_head->GetNextNode();
+      cur_node = cur_node->GetNextNode();
       ++delta_chain_length;
     }
 
-  found_record:
     if (delta_chain_length >= kMaxDeltaNodeNum) {
       consol_node = page_id;
     }
 
-    return existence;
+    return {cur_node, meta};
   }
 
-  std::tuple<void *, Node_t *, Node_t *, Mapping_t *>
+  std::pair<Node_t *, Node_t *>
   SortDeltaRecords(  //
       Node_t *cur_node,
       std::vector<Record> &records)
   {
-    Mapping_t *sib_node;
-    Node_t *last_smo_delta = nullptr;
+    Node_t *end_node = nullptr;
     void *sep_key = nullptr;
 
     while (true) {
-      switch (cur_node->GetDeltaNodeType()) {
-        case DeltaNodeType::kInsert:
-        case DeltaNodeType::kModify:
-        case DeltaNodeType::kDelete: {
-          // check whether this delta record is in current key-range
-          const auto meta = cur_node->GetFirstMeta();
-          const Record rec{cur_node, meta, cur_node->GetKeyAddr(meta)};
-          if (sep_key == nullptr || component::LT<Key, Comp>(rec.key, sep_key)) {
-            // check whether this delta record has a new key
-            const auto it = std::lower_bound(records.begin(), records.end(), rec);
-            if (it == records.end()) {
-              records.emplace_back(rec);
-            } else if (component::LT<Key, Comp>(rec.key, (*it).key)) {
-              records.insert(it, rec);
-            }
+      if (const auto delta_type = cur_node->GetDeltaNodeType();
+          delta_type == DeltaNodeType::kInsert     //
+          || delta_type == DeltaNodeType::kModify  //
+          || delta_type == DeltaNodeType::kDelete) {
+        // check whether this delta record is in current key-range
+        const auto meta = cur_node->GetLowMeta();
+        const Record rec{cur_node, meta, cur_node->GetKeyAddr(meta)};
+        if (sep_key == nullptr || !component::LT<Key, Comp>(sep_key, rec.key)) {
+          // check whether this delta record has a new key
+          const auto it = std::lower_bound(records.begin(), records.end(), rec);
+          if (it == records.end()) {
+            records.emplace_back(std::move(rec));
+          } else if (component::LT<Key, Comp>(rec.key, (*it).key)) {
+            records.insert(it, std::move(rec));
           }
-
-          break;
         }
-        case DeltaNodeType::kSplit: {
-          // get a separator key to ignore out-of-range keys
-          const auto meta = cur_node->GetFirstMeta();
-          sep_key = cur_node->GetKeyAddr(meta);
-
-          if (last_smo_delta == nullptr) {
-            // this split delta has a sibling node
-            last_smo_delta = cur_node;
-            sib_node = cur_node->template GetPayload<Mapping_t *>(meta);
-          }
-
-          break;
+      } else if (delta_type == DeltaNodeType::kNotDelta) {
+        if (end_node == nullptr) {
+          // if there are no SMOs, a base node has a sibling node
+          end_node = cur_node;
         }
-        case DeltaNodeType::kMerge: {
-          const auto meta = cur_node->GetFirstMeta();
-          auto merged_node = cur_node->template GetPayload<Node_t *>(meta);
-
-          // traverse a merged delta chain recursively
-          void *key;
-          Node_t *dummy_node;
-          if (last_smo_delta == nullptr) {
-            // a merged right node has a sibling node
-            last_smo_delta = cur_node;
-            std::tie(key, merged_node, dummy_node, sib_node) =
-                SortDeltaRecords(merged_node, records);
-          } else {
-            Mapping_t *dummy;
-            std::tie(key, merged_node, dummy_node, dummy) = SortDeltaRecords(merged_node, records);
-          }
-
-          // add records in a merged base node
-          MergeRecords(key, records, merged_node);
-
-          break;
+        break;
+      } else if (delta_type == DeltaNodeType::kSplit) {
+        if (end_node == nullptr) {
+          // this split-delta record has a sibling node
+          end_node = cur_node;
         }
-        case DeltaNodeType::kNotDelta: {
-          if (last_smo_delta == nullptr) {
-            // if there are no SMOs, a base node has a sibling node
-            sib_node = cur_node->GetSiblingNode();
-          }
-
-          return {sep_key, cur_node, last_smo_delta, sib_node};
+        if (sep_key == nullptr) {
+          // the last separator key is the most strict one
+          sep_key = cur_node->GetLowKeyAddr();
         }
-        default:
-          // ignore remove-node deltas because consolidated delta chains do not have them
-          break;
+      } else if (delta_type == DeltaNodeType::kMerge) {
+        // traverse a merged delta chain recursively
+        const auto merged_chain = cur_node->template GetPayload<Node_t *>(cur_node->GetLowMeta());
+        const auto [merged_base_node, merged_end_node] = SortDeltaRecords(merged_chain, records);
+
+        // add records in a merged base node
+        const auto high_key = GetHighKey(merged_end_node);
+        MergeRecords(high_key, records, merged_base_node);
+
+        if (end_node == nullptr) {
+          // this merged base node has a sibling node
+          end_node = merged_base_node;
+        }
       }
 
       // go to the next delta record or base node
       cur_node = cur_node->GetNextNode();
     }
+
+    return {cur_node, end_node};
   }
 
   void
@@ -490,17 +470,24 @@ class BwTree
     }
   }
 
-  size_t
+  std::pair<size_t, size_t>
   CalculatePageSize(  //
-      Node_t *base_node,
-      const size_t base_rec_num,
-      std::vector<Record> &records,
-      const Node_t *last_smo_delta)
+      const Node_t *base_node,
+      const Node_t *end_node,
+      const std::vector<Record> &records)
   {
     size_t page_size = kHeaderLength;
 
+    // count the number of active records in a base node
+    size_t base_rec_num = base_node->GetRecordCount();
+    if (end_node != base_node && base_rec_num > 0) {
+      const auto high_key = GetHighKey(end_node);
+      const auto [existence, rec_num] = base_node->SearchRecord(high_key, true);
+      base_rec_num = (existence == ReturnCode::kKeyExist) ? rec_num + 1 : rec_num;
+    }
+
     // add the size of delta records
-    int64_t rec_num = records.size();
+    size_t rec_num = records.size() + base_rec_num;
     for (auto &&rec : records) {
       const auto delta_type = rec.node->GetDeltaNodeType();
       if (delta_type == DeltaNodeType::kInsert) {
@@ -514,16 +501,11 @@ class BwTree
     }
 
     // add the size of metadata
-    rec_num += base_rec_num;
     page_size += rec_num * sizeof(Metadata);
 
     // add the size of records in a base node
-    page_size += base_node->GetFirstMeta().GetTotalLength();
-    if (last_smo_delta == nullptr) {
-      page_size += base_node->GetSecondMeta().GetTotalLength();
-    } else {
-      page_size += last_smo_delta->GetFirstMeta().GetTotalLength();
-    }
+    page_size += base_node->GetLowMeta().GetTotalLength();
+    page_size += GetHighKeyLength(end_node);
     if (base_rec_num > 0) {
       const auto begin_offset = base_node->GetMetadata(base_rec_num - 1).GetOffset();
       const auto end_meta = base_node->GetMetadata(0);
@@ -531,7 +513,137 @@ class BwTree
       page_size += end_offset - begin_offset;
     }
 
-    return page_size;
+    return {page_size, base_rec_num};
+  }
+
+  void
+  CopyLeafRecords(  //
+      Node_t *consol_node,
+      size_t offset,
+      const Node_t *base_node,
+      const size_t base_rec_num,
+      const std::vector<Record> &records)
+  {
+    // copy records from a delta chain and base node
+    size_t rec_num = 0;
+    size_t j = 0;
+    for (auto &&[delta, delta_meta, delta_key] : records) {
+      // copy records in a base node
+      void *base_key{};
+      for (; j < base_rec_num; ++j) {
+        const auto meta = base_node->GetMetadata(j);
+        base_key = base_node->GetKeyAddr(meta);
+        if (!component::LT<Key, Comp>(base_key, delta_key)) break;
+        consol_node->CopyRecordFrom(rec_num++, offset, base_node, meta);
+      }
+
+      // copy a delta record
+      if (delta->GetDeltaNodeType() != DeltaNodeType::kDelete) {
+        consol_node->CopyRecordFrom(rec_num++, offset, delta, delta_meta);
+      }
+      if (j < base_rec_num && !component::LT<Key, Comp>(delta_key, base_key)) {
+        ++j;  // a base node has the same key, so skip it
+      }
+    }
+    // copy remaining records
+    for (; j < base_rec_num; ++j) {
+      consol_node->CopyRecordFrom(rec_num++, offset, base_node, base_node->GetMetadata(j));
+    }
+
+    consol_node->SetRecordCount(rec_num);
+  }
+
+  void
+  CopyInternalRecords(  //
+      Node_t *consol_node,
+      size_t offset,
+      const Node_t *base_node,
+      const size_t base_rec_num,
+      const std::vector<Record> &records)
+  {
+    Metadata meta = base_node->GetMetadata(0);
+    const void *base_key = (meta.GetKeyLength() == 0) ? nullptr : base_node->GetKeyAddr(meta);
+    const Node_t *prev_node = base_node;
+    Metadata prev_meta = meta;
+
+    // copy records from a delta chain and base node
+    size_t rec_num = 0, j = 0;
+    const auto delta_rec_num = records.size();
+    for (size_t i = 0; i < delta_rec_num; ++i) {
+      auto [delta, delta_meta, delta_key] = records[i];
+
+      while (j < base_rec_num) {
+        if (base_key == nullptr || !component::LT<Key, Comp>(base_key, delta_key)) break;
+
+        consol_node->CopyRecordFrom(rec_num++, offset, base_node, meta, prev_node, prev_meta);
+
+        if (++j < base_rec_num) {
+          meta = base_node->GetMetadata(j);
+          base_key = (meta.GetKeyLength() == 0) ? nullptr : base_node->GetKeyAddr(meta);
+          prev_node = base_node;
+          prev_meta = meta;
+        }
+      }
+
+      // copy a delta record
+      if (delta->GetDeltaNodeType() != DeltaNodeType::kDelete) {
+        // insert a new index-entry
+        consol_node->CopyRecordFrom(rec_num++, offset, delta, delta_meta, prev_node, prev_meta);
+
+        // keep a current delta record for multiple splitting
+        prev_node = delta;
+        prev_meta = delta->GetLowMeta();
+      }
+      if (base_key != nullptr && !component::LT<Key, Comp>(delta_key, base_key)) {
+        // a base node has the same key, so skip it
+        if (++j < base_rec_num) {
+          meta = base_node->GetMetadata(j);
+          base_key = (meta.GetKeyLength() == 0) ? nullptr : base_node->GetKeyAddr(meta);
+        }
+      }
+    }
+    if (j < base_rec_num && prev_node != base_node) {
+      consol_node->CopyRecordFrom(rec_num++, offset, base_node, meta, prev_node, prev_meta);
+      ++j;
+    }
+
+    // copy remaining records
+    for (; j < base_rec_num; ++j) {
+      meta = base_node->GetMetadata(j);
+      consol_node->CopyRecordFrom(rec_num++, offset, base_node, meta);
+    }
+
+    consol_node->SetRecordCount(rec_num);
+  }
+
+  constexpr void *
+  GetHighKey(const Node_t *node)
+  {
+    if (node->GetDeltaNodeType() == DeltaNodeType::kNotDelta) {
+      return node->GetHighKeyAddr();
+    }
+    // node->GetDeltaNodeType() == DeltaNodeType::kSplit
+    return node->GetLowKeyAddr();
+  }
+
+  constexpr size_t
+  GetHighKeyLength(const Node_t *node)
+  {
+    if (node->GetDeltaNodeType() == DeltaNodeType::kNotDelta) {
+      return node->GetHighMeta().GetKeyLength();
+    }
+    // node->GetDeltaNodeType() == DeltaNodeType::kSplit
+    return node->GetLowMeta().GetKeyLength();
+  }
+
+  constexpr Mapping_t *
+  GetSiblingPage(const Node_t *node)
+  {
+    if (node->GetDeltaNodeType() == DeltaNodeType::kNotDelta) {
+      return node->GetSiblingNode();
+    }
+    // node->GetDeltaNodeType() == DeltaNodeType::kSplit
+    return node->template GetPayload<Mapping_t *>(node->GetLowMeta());
   }
 
   /*################################################################################################
@@ -540,148 +652,67 @@ class BwTree
 
   void
   Consolidate(  //
-      Mapping_t *page_id,
+      const Mapping_t *target_page,
       const void *key,
       const bool closed,
       NodeStack_t &stack)
   {
     // remove child nodes from a node stack
-    while (stack.back() != page_id) {
-      stack.pop_back();
-    }
-
-    // reserve vectors for delta nodes and base nodes to be consolidated
-    std::vector<Record> records;
-    records.reserve(kMaxDeltaNodeNum * 4);
+    while (!stack.empty() && stack.back() != target_page) stack.pop_back();
+    if (stack.empty()) return;
 
     // check whether the target node is valid (containing a target key and no incomplete SMOs)
-    Mapping_t *dummy;
-    Node_t *cur_head = page_id->load(mo_relax);
-    ValidateNode(key, closed, page_id, cur_head, nullptr, stack, dummy);
+    Mapping_t *consol_page = nullptr;
+    Node_t *cur_head = ValidateNode(key, closed, nullptr, stack, consol_page);
+    if (consol_page != target_page) return;
 
     // collect and sort delta records
-    const auto [sep_key, base_node, last_smo_delta, sib_node] = SortDeltaRecords(cur_head, records);
-
-    // get a base node and the position of a highest key
-    size_t base_rec_num;
-    if (sep_key == nullptr) {
-      base_rec_num = base_node->GetRecordCount();
-    } else {
-      ReturnCode existence;
-      std::tie(existence, base_rec_num) = base_node->SearchRecord(sep_key, true);
-      if (existence == ReturnCode::kKeyExist) ++base_rec_num;
-    }
+    std::vector<Record> records;
+    records.reserve(kMaxDeltaNodeNum * 4);
+    const auto [base_node, end_node] = SortDeltaRecords(cur_head, records);
 
     // reserve a page for a consolidated node
-    auto offset = CalculatePageSize(base_node, base_rec_num, records, last_smo_delta);
-    const bool need_split = (offset > kPageSize) ? true : false;
-    const NodeType node_type = static_cast<NodeType>(cur_head->IsLeaf());
-    Node_t *consol_node = Node_t::CreateNode(offset, node_type, 0UL, sib_node);
+    auto [offset, base_rec_num] = CalculatePageSize(base_node, end_node, records);
+    const auto need_split = (offset > kPageSize) ? true : false;
+    const auto node_type = static_cast<NodeType>(cur_head->IsLeaf());
+    const auto sib_page = GetSiblingPage(end_node);
+    Node_t *consol_node = Node_t::CreateNode(offset, node_type, 0, sib_page);
 
     // copy the lowest/highest keys
-    const Metadata low_meta = base_node->GetFirstMeta();
-    const auto low_key_len = low_meta.GetKeyLength();
-    if (low_key_len == 0) {
-      consol_node->SetLowMeta(low_meta);
+    const auto low_key = base_node->GetLowKeyAddr();
+    if (low_key == nullptr) {
+      consol_node->SetLowMeta(Metadata{0, 0, 0});
     } else {
-      const void *low_key = base_node->GetKeyAddr(low_meta);
+      const auto low_key_len = base_node->GetLowMeta().GetKeyLength();
       consol_node->SetKey(offset, low_key, low_key_len);
       consol_node->SetLowMeta(Metadata{offset, low_key_len, low_key_len});
     }
-    if (last_smo_delta == nullptr) {
-      const Metadata high_meta = base_node->GetSecondMeta();
-      const auto high_key_len = high_meta.GetKeyLength();
-      if (high_key_len == 0) {
-        consol_node->SetHighMeta(high_meta);
-      } else {
-        const void *high_key = base_node->GetKeyAddr(high_meta);
-        consol_node->SetKey(offset, high_key, high_key_len);
-        consol_node->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
-      }
-    } else if (last_smo_delta->GetDeltaNodeType() == DeltaNodeType::kSplit) {
-      const Metadata high_meta = last_smo_delta->GetFirstMeta();
-      const auto high_key_len = high_meta.GetKeyLength();
-      const void *high_key = last_smo_delta->GetKeyAddr(high_meta);
+    const auto high_key = GetHighKey(end_node);
+    if (high_key == nullptr) {
+      consol_node->SetHighMeta(Metadata{0, 0, 0});
+    } else {
+      const auto high_key_len = GetHighKeyLength(end_node);
       consol_node->SetKey(offset, high_key, high_key_len);
       consol_node->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
     }
 
-    // copy records from a delta chain and base node
-    Metadata meta;
-    void *base_key{};
-    size_t rec_num = 0, j = 0;
-    const auto delta_rec_num = records.size();
-    for (size_t i = 0; i < delta_rec_num; ++i) {
-      auto [delta, delta_meta, delta_key] = records[i];
-
-      // copy records in a base node
-      for (; j < base_rec_num; ++j) {
-        meta = base_node->GetMetadata(j);
-        base_key = base_node->GetKeyAddr(meta);
-        if (meta.GetKeyLength() != 0 && component::LT<Key, Comp>(base_key, delta_key)) {
-          offset = base_node->CopyRecordTo(consol_node, rec_num++, offset, meta);
-        } else {
-          break;
-        }
-      }
-
-      // copy a delta record
-      if (delta->GetDeltaNodeType() != DeltaNodeType::kDelete) {
-        if (delta->IsLeaf()) {
-          offset = delta->CopyRecordTo(consol_node, rec_num++, offset, delta_meta);
-        } else {
-          Node_t *prev_node = base_node;
-          Metadata prev_meta = meta;
-          do {
-            // insert a new index-entry
-            const auto cur_key = delta->GetLowKeyAddr();
-            const auto cur_key_len = delta_meta.GetKeyLength();
-            const auto ins_page = prev_node->template GetPayload<Mapping_t *>(prev_meta);
-            consol_node->SetPayload(offset, ins_page, sizeof(Mapping_t *));
-            consol_node->SetKey(offset, cur_key, cur_key_len);
-            consol_node->SetMetadata(
-                rec_num++, Metadata{offset, cur_key_len, cur_key_len + sizeof(Mapping_t *)});
-
-            // keep a current delta record for multiple splitting
-            prev_node = delta;
-            prev_meta = delta->GetFirstMeta();
-
-            // check the next delta record
-            if (++i >= delta_rec_num) break;
-            delta = records[i].node;
-            delta_meta = records[i].meta;
-            delta_key = records[i].key;
-          } while (meta.GetKeyLength() == 0 || component::LT<Key, Comp>(delta_key, base_key));
-
-          // insert the originally inserted index-entry
-          const auto orig_key = base_node->GetKeyAddr(meta);
-          const auto orig_key_len = meta.GetKeyLength();
-          const auto ins_page = prev_node->template GetPayload<Mapping_t *>(prev_meta);
-          consol_node->SetPayload(offset, ins_page, sizeof(Mapping_t *));
-          consol_node->SetKey(offset, orig_key, orig_key_len);
-          consol_node->SetMetadata(
-              rec_num++, Metadata{offset, orig_key_len, orig_key_len + sizeof(Mapping_t *)});
-          ++j;
-        }
-      }
-      if (j < base_rec_num && !component::LT<Key, Comp>(delta_key, base_key)) {
-        ++j;  // a base node has the same key, so skip it
-      }
+    // copy active records
+    if (node_type == NodeType::kLeaf) {
+      CopyLeafRecords(consol_node, offset, base_node, base_rec_num, records);
+    } else {
+      CopyInternalRecords(consol_node, offset, base_node, base_rec_num, records);
     }
-    for (; j < base_rec_num; ++j) {  // copy remaining records
-      offset = base_node->CopyRecordTo(consol_node, rec_num++, offset, base_node->GetMetadata(j));
-    }
-    consol_node->SetRecordCount(rec_num);
 
     if (need_split) {
-      Split(page_id, cur_head, consol_node, key, closed, stack);
+      if (HalfSplit(consol_page, cur_head, consol_node, stack)) return;
+      Consolidate(consol_page, key, closed, stack);  // retry from consolidation
       return;
     }
 
     // install a consolidated node
-    auto tmp_node = cur_head;
-    while (!page_id->compare_exchange_weak(tmp_node, consol_node, mo_relax)) {
-      if (tmp_node == cur_head) continue;  // weak CAS may fail even if it can execute
+    auto old_head = cur_head;
+    while (!consol_page->compare_exchange_weak(old_head, consol_node, mo_relax)) {
+      if (old_head == cur_head) continue;  // weak CAS may fail even if it can execute
 
       // no CAS retry for consolidation
       Node_t::DeleteNode(consol_node);
@@ -690,25 +721,23 @@ class BwTree
     gc_.AddGarbage(cur_head);
   }
 
-  void
-  Split(  //
-      Mapping_t *page_id,
+  bool
+  HalfSplit(  //
+      Mapping_t *split_page,
       Node_t *cur_head,
       Node_t *split_node,
-      const void *key,
-      const bool closed,
       NodeStack_t &stack)
   {
     // get the number of records and metadata of a separator key
-    const size_t rec_num = split_node->GetRecordCount();
-    const size_t left_num = rec_num >> 1;
-    const size_t right_num = rec_num - left_num;
+    const auto total_num = split_node->GetRecordCount();
+    const auto left_num = total_num >> 1;
+    const auto right_num = total_num - left_num;
     const auto sep_meta = split_node->GetMetadata(left_num - 1);
 
     // shift metadata to use a consolidated node as a split-right node
     auto dest_addr = component::ShiftAddress(split_node, kHeaderLength);
-    auto src_addr = component::ShiftAddress(dest_addr, sizeof(Metadata) * left_num);
-    memcpy(dest_addr, src_addr, sizeof(Metadata) * right_num);
+    const auto src_addr = component::ShiftAddress(dest_addr, sizeof(Metadata) * left_num);
+    memmove(dest_addr, src_addr, sizeof(Metadata) * right_num);
 
     // set a separator key as the lowest key
     split_node->SetLowMeta(sep_meta);
@@ -716,104 +745,119 @@ class BwTree
 
     // create a split-delta record
     const auto node_type = static_cast<NodeType>(split_node->IsLeaf());
-    const Key *sep_key = reinterpret_cast<Key *>(split_node->GetKeyAddr(sep_meta));
-    Mapping_t *split_page_id = mapping_table_.GetNewLogicalID();
-    Node_t *split_delta =
-        Node_t::CreateDeltaNode(node_type, DeltaNodeType::kSplit, sep_key, sep_meta.GetKeyLength(),
-                                split_page_id, sizeof(Mapping_t *));
-    split_page_id->store(split_node, mo_relax);
+    const auto sep_key = split_node->GetKeyAddr(sep_meta);
+    Mapping_t *right_page_id = mapping_table_.GetNewLogicalID();
+    Node_t *split_delta = Node_t::CreateDeltaNode(node_type, DeltaNodeType::kSplit,  //
+                                                  sep_key, sep_meta.GetKeyLength(),  //
+                                                  right_page_id, sizeof(Mapping_t *));
     split_delta->SetNextNode(cur_head);
+    right_page_id->store(split_node, mo_relax);
 
     // install the delta record for splitting a child node
-    auto tmp_node = cur_head;
-    while (!page_id->compare_exchange_weak(tmp_node, split_delta, mo_relax)) {
-      if (tmp_node == cur_head) continue;  // weak CAS may fail even if it can execute
+    for (auto old_head = cur_head;
+         !split_page->compare_exchange_weak(old_head, split_delta, mo_relax);) {
+      if (old_head == cur_head) continue;  // weak CAS may fail even if it can execute
 
       // no CAS retry for split
       split_delta->SetNextNode(nullptr);
       Node_t::DeleteNode(split_delta);
       Node_t::DeleteNode(split_node);
-      split_page_id->store(nullptr, mo_relax);
-      return;
+      right_page_id->store(nullptr, mo_relax);
+      return false;
     }
 
-    // execute parent split
-    Mapping_t *consol_node = nullptr;
-    CompleteSplit(split_delta, stack, consol_node);
+    // execute parent update
+    Mapping_t *consol_page = nullptr;
+    CompleteSplit(split_delta, stack, consol_page);
 
-    if (consol_node != nullptr) {
-      Consolidate(consol_node, key, closed, stack);
+    // execute parent consolidation/split if needed
+    if (consol_page != nullptr) {
+      Consolidate(consol_page, sep_key, true, stack);
     }
+
+    return true;
   }
 
   void
   CompleteSplit(  //
       Node_t *split_delta,
       NodeStack_t &stack,
-      Mapping_t *&consol_node)
+      Mapping_t *&consol_page)
   {
     // create an index-entry delta record
-    const auto split_meta = split_delta->GetFirstMeta();
-    const Key *sep_key = reinterpret_cast<Key *>(split_delta->GetKeyAddr(split_meta));
-    Mapping_t *right_page = split_delta->template GetPayload<Mapping_t *>(split_meta);
+    const auto sep_meta = split_delta->GetLowMeta();
+    const auto sep_key_len = sep_meta.GetKeyLength();
+    const auto sep_key = split_delta->GetKeyAddr(sep_meta);
+    Mapping_t *right_page = split_delta->template GetPayload<Mapping_t *>(sep_meta);
 
-    if (stack.size() > 1) {
-      stack.pop_back();
-
-      // insert an index-entry delta record into a parent node
-      Node_t *entry_delta =
-          Node_t::CreateIndexEntryDelta(sep_key, split_meta.GetKeyLength(), right_page);
-      Mapping_t *page_id = stack.back();
-      Node_t *cur_head = page_id->load(mo_relax), *prev_node = nullptr;
-
-      while (true) {
-        // check whether there are no incomplete SMOs
-        ValidateNode(sep_key, true, page_id, cur_head, prev_node, stack, consol_node);
-
-        // check whether another thread has already completed this split
-        if (CheckExistence(sep_key, true, page_id, stack, consol_node) == ReturnCode::kKeyExist) {
-          entry_delta->SetNextNode(nullptr);
-          Node_t::DeleteNode(entry_delta);
-          return;
-        }
-
-        // insert the index-entry delta record
-        entry_delta->SetNextNode(cur_head);
-        prev_node = cur_head;
-        if (page_id->compare_exchange_weak(cur_head, entry_delta, mo_relax)) return;
-      }
-    } else {
-      // create a new root node
-      Mapping_t *left_page = stack.back();
-      const size_t sep_key_len = split_meta.GetKeyLength(),
-                   total_len = sep_key_len + sizeof(Mapping_t *);
-      size_t offset = kHeaderLength + 2 * sizeof(Metadata) + sizeof(Mapping_t *) + total_len;
-      Node_t *new_root = Node_t::CreateNode(offset, NodeType::kInternal, 2, nullptr);
-      new_root->SetLowMeta(Metadata{0, 0, 0});
-      new_root->SetHighMeta(Metadata{0, 0, 0});
-
-      // set a split-left page
-      new_root->SetPayload(offset, left_page, sizeof(Mapping_t *));
-      new_root->SetKey(offset, sep_key, sep_key_len);
-      new_root->SetMetadata(0, Metadata{offset, sep_key_len, total_len});
-
-      // set a split-right page
-      new_root->template SetPayload<Mapping_t *>(offset, right_page, sizeof(Mapping_t *));
-      new_root->SetMetadata(1, Metadata{offset, 0, sizeof(Mapping_t *)});
-
-      // install a new root page
-      Mapping_t *new_root_page = mapping_table_.GetNewLogicalID();
-      new_root_page->store(new_root, mo_relax);
-      auto tmp_page = left_page;
-      while (!root_.compare_exchange_weak(tmp_page, new_root_page, mo_relax)) {
-        if (tmp_page == left_page) continue;  // weak CAS may fail even if it can execute
-
-        // another thread has already inserted a new root
-        new_root_page->store(nullptr, mo_relax);
-        Node_t::DeleteNode(new_root);
-        break;
-      }
+    if (stack.size() <= 1) {
+      // a split node is a root node
+      SplitRoot(sep_key, sep_key_len, right_page, stack);
+      return;
     }
+
+    // create an index-entry delta record to complete split
+    Node_t *entry_delta = Node_t::CreateIndexEntryDelta(sep_key, sep_key_len, right_page);
+
+    // insert the delta record into a parent node
+    stack.pop_back();  // remove a split child node to modify its parent node
+    for (Node_t *prev_node = nullptr; true;) {
+      // check whether there are no incomplete SMOs
+      Node_t *cur_head = ValidateNode(sep_key, true, prev_node, stack, consol_page);
+
+      // check whether another thread has already completed this split
+      if (CheckExistence(sep_key, stack, consol_page).first != nullptr) {
+        entry_delta->SetNextNode(nullptr);
+        Node_t::DeleteNode(entry_delta);
+        return;
+      }
+
+      // try to insert the index-entry delta record
+      entry_delta->SetNextNode(cur_head);
+      prev_node = cur_head;
+      if (stack.back()->compare_exchange_weak(cur_head, entry_delta, mo_relax)) return;
+    }
+  }
+
+  void
+  SplitRoot(  //
+      const void *sep_key,
+      const size_t sep_key_len,
+      Mapping_t *right_page,
+      NodeStack_t &stack)
+  {
+    // create a new root node
+    Mapping_t *left_page = stack.back();  // i.e., the old root node
+    const auto total_len = sep_key_len + sizeof(Mapping_t *);
+    auto offset = kHeaderLength + (2 * sizeof(Metadata)) + sizeof(Mapping_t *) + total_len;
+    Node_t *new_root = Node_t::CreateNode(offset, NodeType::kInternal, 2, nullptr);
+    new_root->SetLowMeta(Metadata{0, 0, 0});
+    new_root->SetHighMeta(Metadata{0, 0, 0});
+
+    // set a split-left page
+    new_root->SetPayload(offset, left_page, sizeof(Mapping_t *));
+    new_root->SetKey(offset, sep_key, sep_key_len);
+    new_root->SetMetadata(0, Metadata{offset, sep_key_len, total_len});
+
+    // set a split-right page
+    new_root->SetPayload(offset, right_page, sizeof(Mapping_t *));
+    new_root->SetMetadata(1, Metadata{offset, 0, sizeof(Mapping_t *)});
+
+    // install a new root page
+    Mapping_t *new_root_page = mapping_table_.GetNewLogicalID();
+    new_root_page->store(new_root, mo_relax);
+    stack.pop_back();
+    for (auto old_root_page = left_page;
+         !root_.compare_exchange_weak(old_root_page, new_root_page, mo_relax);) {
+      if (old_root_page == left_page) continue;  // weak CAS may fail even if it can execute
+
+      // another thread has already inserted a new root
+      new_root_page->store(nullptr, mo_relax);
+      Node_t::DeleteNode(new_root);
+      stack.emplace_back(old_root_page);
+      return;
+    }
+    stack.emplace_back(new_root_page);
   }
 
  public:
@@ -880,25 +924,24 @@ class BwTree
   Read(const Key &key)
   {
     const auto key_addr = component::GetAddr(key);
-
     const auto guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    NodeStack_t stack;
-    stack.reserve(kExpectedTreeHeight);
     Mapping_t *consol_node = nullptr;
-    SearchLeafNode(key_addr, true, root_.load(mo_relax), stack, consol_node);
+    NodeStack_t stack = SearchLeafNode(key_addr, true, consol_node);
 
-    // prepare variables to read a record
-    Mapping_t *page_id = stack.back();
-    Payload payload{};
-    const auto existence = CheckExistence(key_addr, true, page_id, stack, consol_node, &payload);
+    // check whether the leaf node has a target key
+    const auto [target_node, meta] = CheckExistence(key_addr, stack, consol_node);
 
     if (consol_node != nullptr) {
       Consolidate(consol_node, key_addr, true, stack);
     }
 
-    if (existence == kKeyExist) {
+    if (target_node != nullptr) {
+      // get a target payload
+      Payload payload{};
+      target_node->CopyPayload(meta, payload);
+
       if constexpr (IsVariableLengthData<Payload>()) {
         return std::make_pair(ReturnCode::kSuccess, Binary_p{payload});
       } else {
@@ -961,31 +1004,27 @@ class BwTree
       const size_t payload_length = sizeof(Payload))
   {
     const auto key_addr = component::GetAddr(key);
-
     const auto guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    NodeStack_t stack;
     Mapping_t *consol_node = nullptr;
-    SearchLeafNode(key_addr, true, root_.load(mo_relax), stack, consol_node);
+    NodeStack_t stack = SearchLeafNode(key_addr, true, consol_node);
 
-    // prepare variables to insert a new delta record
-    Mapping_t *page_id = stack.back();
-    Node_t *cur_head = page_id->load(mo_relax);
-    Node_t *prev_head = nullptr;
+    // create a delta record to write a key/value pair
     Node_t *delta_node = Node_t::CreateDeltaNode(NodeType::kLeaf, DeltaNodeType::kInsert,  //
                                                  key_addr, key_length, payload, payload_length);
 
-    while (true) {
+    // insert the delta record
+    for (Node_t *prev_head = nullptr; true;) {
       // check whether the target node is valid (containing a target key and no incomplete SMOs)
-      ValidateNode(key_addr, true, page_id, cur_head, prev_head, stack, consol_node);
+      Node_t *cur_head = ValidateNode(key_addr, true, prev_head, stack, consol_node);
 
       // prepare nodes to perform CAS
       delta_node->SetNextNode(cur_head);
       prev_head = cur_head;
 
-      // insert the delta record
-      if (page_id->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
+      // try to insert the delta record
+      if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
     }
 
     if (consol_node != nullptr) {

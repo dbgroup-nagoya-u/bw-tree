@@ -60,7 +60,7 @@ class BwTreeFixture : public testing::Test
   static constexpr size_t kRecordLength = kKeyLength + kPayloadLength;
   static constexpr size_t kMaxRecordNum =
       (kPageSize - component::kHeaderLength) / (kRecordLength + sizeof(Metadata));
-  static constexpr size_t kKeyNumForTest = 10000;  // kMaxRecordNum * kMaxRecordNum + 1;
+  static constexpr size_t kKeyNumForTest = kMaxRecordNum * kMaxRecordNum;
   static constexpr size_t kSmallKeyNum = kMaxDeltaNodeNum - 1;
 
   enum WriteType
@@ -286,7 +286,7 @@ TYPED_TEST_CASE(BwTreeFixture, KeyPayloadPairs);
 
 TYPED_TEST(BwTreeFixture, Write_MultiThreads_ReadWrittenPayloads)
 {  //
-   // TestFixture::VerifyWrite();
+  TestFixture::VerifyWrite();
 }
 
 }  // namespace dbgroup::index::bw_tree::test
