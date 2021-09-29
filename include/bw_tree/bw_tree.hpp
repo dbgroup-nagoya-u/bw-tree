@@ -602,7 +602,7 @@ class BwTree
         }
       }
     }
-    if (prev_node != base_node) {
+    if (j < base_rec_num && prev_node != base_node) {
       consol_node->CopyRecordFrom(rec_num++, offset, base_node, meta, prev_node, prev_meta);
       ++j;
     }
