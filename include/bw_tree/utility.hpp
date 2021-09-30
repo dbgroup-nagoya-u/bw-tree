@@ -84,6 +84,7 @@ constexpr size_t kCacheLineSize = 64;
 /// The page size of each node
 constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
 #else
+/// The page size of each node
 constexpr size_t kPageSize = 8192;
 #endif
 
@@ -91,22 +92,11 @@ constexpr size_t kPageSize = 8192;
 /// The page size of each node
 constexpr size_t kMaxDeltaNodeNum = BW_TREE_MAX_DELTA_NODE_NUM;
 #else
-constexpr size_t kMaxDeltaNodeNum = 16;
+/// The page size of each node
+constexpr size_t kMaxDeltaNodeNum = 8;
 #endif
 
 /// check whether the specified page size is valid
 static_assert(kPageSize % kWordLength == 0);
-
-// tmp
-template <class Key>
-const Key
-GetKey(const void *key_addr)
-{
-  if constexpr (IsVariableLengthData<Key>()) {
-    return reinterpret_cast<const Key>(const_cast<void *>(key_addr));
-  } else {
-    return *reinterpret_cast<const Key *>(key_addr);
-  }
-}
 
 }  // namespace dbgroup::index::bw_tree

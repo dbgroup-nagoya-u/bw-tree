@@ -51,6 +51,20 @@ endif()
 # Add compile options
 #--------------------------------------------------------------------------------------#
 
+if(DEFINED BW_TREE_PAGE_SIZE)
+  target_compile_definitions(
+    bw_tree INTERFACE
+    BW_TREE_PAGE_SIZE=${BW_TREE_PAGE_SIZE}
+  )
+endif()
+
+if(DEFINED BW_TREE_MAX_DELTA_NODE_NUM)
+  target_compile_definitions(
+    bw_tree INTERFACE
+    BW_TREE_MAX_DELTA_NODE_NUM=${BW_TREE_MAX_DELTA_NODE_NUM}
+  )
+endif()
+
 #--------------------------------------------------------------------------------------#
 # Build unit tests
 #--------------------------------------------------------------------------------------#
