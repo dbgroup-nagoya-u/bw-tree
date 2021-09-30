@@ -21,7 +21,7 @@ sudo apt update && sudo apt install -y build-essential cmake
 #### Tuning Parameters
 
 - `BW_TREE_PAGE_SIZE`: invoking a split if the size of a base page exceeds this threshold  (default `8192`).
-- `BW_TREE_MAX_DELTA_NODE_NUM`: invoking consolidation if the number of delta records exceeds this threshold (default `8`).
+- `BW_TREE_MAX_DELTA_NODE_NUM`: invoking consolidation if the number of delta records exceeds this threshold (default `32`).
 
 #### Build Options for Unit Testing
 
