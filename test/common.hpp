@@ -26,7 +26,7 @@ static constexpr size_t kThreadNum = BW_TREE_TEST_THREAD_NUM;
 static constexpr size_t kThreadNum = 8;
 #endif
 
-constexpr size_t kVariableDataLength = 9;
+constexpr size_t kVariableDataLength = 12;
 
 constexpr size_t kRandomSeed = 10;
 
@@ -72,7 +72,7 @@ PrepareTestData(  //
     // variable-length data
     for (size_t i = 0; i < data_num; ++i) {
       auto data = reinterpret_cast<char *>(malloc(kVariableDataLength));
-      snprintf(data, kVariableDataLength, "%08lu", i);
+      snprintf(data, kVariableDataLength, "%011lu", i);
       data_array[i] = reinterpret_cast<T>(data);
     }
   } else if constexpr (std::is_same_v<T, uint64_t *>) {
