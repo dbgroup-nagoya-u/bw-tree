@@ -18,11 +18,6 @@ set(BW_TREE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(MEMORY_MANAGER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/memory-manager")
 
 #--------------------------------------------------------------------------------------#
-# Configure external libraries
-#--------------------------------------------------------------------------------------#
-add_subdirectory("${MEMORY_MANAGER_SOURCE_DIR}")
-
-#--------------------------------------------------------------------------------------#
 # Build targets
 #--------------------------------------------------------------------------------------#
 
@@ -42,11 +37,15 @@ target_compile_options(
 target_include_directories(
   bw_tree INTERFACE
   "${BW_TREE_SOURCE_DIR}/include"
+  "${MEMORY_MANAGER_SOURCE_DIR}/include"
 )
-target_link_libraries(
-  bw_tree INTERFACE
-  memory_manager
-)
+
+if(DEFINED MEMORY_MANAGER_GARBAGE_BUFFER_SIZE)
+  target_compile_definitions(
+    bw_tree INTERFACE
+    MEMORY_MANAGER_GARBAGE_BUFFER_SIZE=${MEMORY_MANAGER_GARBAGE_BUFFER_SIZE}
+  )
+endif()
 
 #--------------------------------------------------------------------------------------#
 # Add compile options
