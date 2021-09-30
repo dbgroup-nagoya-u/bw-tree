@@ -23,7 +23,7 @@ sudo apt update && sudo apt install -y build-essential cmake
 - `BW_TREE_PAGE_SIZE`: invoking a split if the size of a base page exceeds this threshold  (default `8192`).
 - `BW_TREE_MAX_DELTA_NODE_NUM`: invoking consolidation if the number of delta records exceeds this threshold (default `8`).
 
-### Build Options for Unit Testing
+#### Build Options for Unit Testing
 
 - `BW_TREE_BUILD_TESTS`: building unit tests for this library if `ON` (default `OFF`).
 - `BW_TREE_TEST_THREAD_NUM`: the maximum number of threads to perform unit tests (default `8`).
