@@ -7,8 +7,6 @@ buildType:
       long: Include debugging information without optimizations
       buildType: Debug
       settings:
-        BW_TREE_USE_MIMALLOC: OFF
-        BW_TREE_USE_JEMALLOC: OFF
         BW_TREE_BUILD_TESTS: ON
         BW_TREE_TEST_THREAD_NUM: 56
         BW_TREE_TEST_TOTAL_EXEC_NUM: 100000000
@@ -18,8 +16,6 @@ buildType:
       long: Perform optimizations and include debugging informatin
       buildType: RelWithDebInfo
       settings:
-        BW_TREE_USE_MIMALLOC: OFF
-        BW_TREE_USE_JEMALLOC: OFF
         BW_TREE_BUILD_TESTS: ON
         BW_TREE_TEST_THREAD_NUM: 56
         BW_TREE_TEST_TOTAL_EXEC_NUM: 100000000
@@ -29,8 +25,6 @@ buildType:
       long: Perform optimizations and omit debugging informatin
       buildType: Release
       settings:
-        BW_TREE_USE_MIMALLOC: OFF
-        BW_TREE_USE_JEMALLOC: OFF
         BW_TREE_BUILD_TESTS: ON
         BW_TREE_TEST_THREAD_NUM: 56
         BW_TREE_TEST_TOTAL_EXEC_NUM: 100000000
