@@ -10,7 +10,9 @@ buildType:
         BW_TREE_USE_MIMALLOC: OFF
         BW_TREE_USE_JEMALLOC: OFF
         BW_TREE_BUILD_TESTS: ON
-        BW_TREE_TEST_THREAD_NUM: 8
+        BW_TREE_TEST_THREAD_NUM: 56
+        BW_TREE_TEST_TOTAL_EXEC_NUM: 100000000
+        BW_TREE_TEST_USE_JEMALLOC: ON
     relWithDebInfo:
       short: RelWithDebInfo
       long: Perform optimizations and include debugging informatin
@@ -19,7 +21,9 @@ buildType:
         BW_TREE_USE_MIMALLOC: OFF
         BW_TREE_USE_JEMALLOC: OFF
         BW_TREE_BUILD_TESTS: ON
-        BW_TREE_TEST_THREAD_NUM: 8
+        BW_TREE_TEST_THREAD_NUM: 56
+        BW_TREE_TEST_TOTAL_EXEC_NUM: 100000000
+        BW_TREE_TEST_USE_JEMALLOC: ON
     release:
       short: Release
       long: Perform optimizations and omit debugging informatin
@@ -28,4 +32,6 @@ buildType:
         BW_TREE_USE_MIMALLOC: OFF
         BW_TREE_USE_JEMALLOC: OFF
         BW_TREE_BUILD_TESTS: ON
-        BW_TREE_TEST_THREAD_NUM: 8
+        BW_TREE_TEST_THREAD_NUM: 56
+        BW_TREE_TEST_TOTAL_EXEC_NUM: 100000000
+        BW_TREE_TEST_USE_JEMALLOC: ON

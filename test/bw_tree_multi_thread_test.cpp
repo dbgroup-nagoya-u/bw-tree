@@ -60,7 +60,11 @@ class BwTreeFixture : public testing::Test
   static constexpr size_t kRecordLength = kKeyLength + kPayloadLength;
   static constexpr size_t kMaxRecordNum =
       (kPageSize - component::kHeaderLength) / (kRecordLength + sizeof(Metadata));
+#ifdef BW_TREE_TEST_TOTAL_EXEC_NUM
+  static constexpr size_t kKeyNumForTest = BW_TREE_TEST_TOTAL_EXEC_NUM;
+#else
   static constexpr size_t kKeyNumForTest = kMaxRecordNum * kMaxRecordNum;
+#endif
   static constexpr size_t kSmallKeyNum = kMaxDeltaNodeNum - 1;
 
   enum WriteType
