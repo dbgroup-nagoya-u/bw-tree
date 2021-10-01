@@ -24,6 +24,7 @@
 
 #include "component/mapping_table.hpp"
 #include "component/node.hpp"
+#include "component/record_iterator.hpp"
 #include "memory/epoch_based_gc.hpp"
 
 namespace dbgroup::index::bw_tree
@@ -43,6 +44,7 @@ class BwTree
   using NodeReturnCode = component::NodeReturnCode;
   using NodeType = component::NodeType;
   using Node_t = component::Node<Key, Comp>;
+  using RecordIterator_t = component::RecordIterator<Key, Payload, Comp>;
   using Mapping_t = std::atomic<Node_t *>;
   using MappingTable_t = component::MappingTable<Key, Comp>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
@@ -966,14 +968,16 @@ class BwTree
    * @param end_closed a flag to indicate whether the end side of a range is closed.
    * @return RecordIterator_t: an iterator to access target records.
    */
-  void
+  RecordIterator_t
   Scan(  //
-      const Key *begin_key = nullptr,
-      const bool begin_closed = false,
-      const Key *end_key = nullptr,
-      const bool end_closed = false)
+      [[maybe_unused]] const Key *begin_key = nullptr,
+      [[maybe_unused]] const bool begin_closed = false,
+      [[maybe_unused]] const Key *end_key = nullptr,
+      [[maybe_unused]] const bool end_closed = false)
   {
     // not implemented yet
+
+    return RecordIterator_t{};
   }
 
   /*################################################################################################
@@ -1054,10 +1058,10 @@ class BwTree
    */
   ReturnCode
   Insert(  //
-      const Key &key,
-      const Payload &payload,
-      const size_t key_length = sizeof(Key),
-      const size_t payload_length = sizeof(Payload))
+      [[maybe_unused]] const Key &key,
+      [[maybe_unused]] const Payload &payload,
+      [[maybe_unused]] const size_t key_length = sizeof(Key),
+      [[maybe_unused]] const size_t payload_length = sizeof(Payload))
   {
     // not implemented yet
 
@@ -1083,10 +1087,10 @@ class BwTree
    */
   ReturnCode
   Update(  //
-      const Key &key,
-      const Payload &payload,
-      const size_t key_length = sizeof(Key),
-      const size_t payload_length = sizeof(Payload))
+      [[maybe_unused]] const Key &key,
+      [[maybe_unused]] const Payload &payload,
+      [[maybe_unused]] const size_t key_length = sizeof(Key),
+      [[maybe_unused]] const size_t payload_length = sizeof(Payload))
   {
     // not implemented yet
 
@@ -1110,8 +1114,8 @@ class BwTree
    */
   ReturnCode
   Delete(  //
-      const Key &key,
-      const size_t key_length = sizeof(Key))
+      [[maybe_unused]] const Key &key,
+      [[maybe_unused]] const size_t key_length = sizeof(Key))
   {
     // not implemented yet
 

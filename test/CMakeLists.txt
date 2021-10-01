@@ -30,6 +30,13 @@ add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/googletest-src
 # Build Unit Tests
 #--------------------------------------------------------------------------------------#
 
+# prepare je-malloc if needed
+option(BW_TREE_TEST_USE_JEMALLOC "Override entire memory allocation with jemalloc" OFF)
+if(${BW_TREE_TEST_USE_JEMALLOC})
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(JEMALLOC REQUIRED IMPORTED_TARGET jemalloc)
+endif()
+
 # define function to add unit tests in the same format
 function(ADD_BW_TREE_TEST BW_TREE_TEST_TARGET)
   add_executable(
@@ -58,6 +65,24 @@ function(ADD_BW_TREE_TEST BW_TREE_TEST_TARGET)
     target_compile_definitions(
       ${BW_TREE_TEST_TARGET} PRIVATE
       BW_TREE_TEST_THREAD_NUM=${BW_TREE_TEST_THREAD_NUM}
+    )
+  endif()
+
+  if(DEFINED BW_TREE_TEST_TOTAL_EXEC_NUM)
+    target_compile_definitions(
+      ${BW_TREE_TEST_TARGET} PRIVATE
+      BW_TREE_TEST_TOTAL_EXEC_NUM=${BW_TREE_TEST_TOTAL_EXEC_NUM}
+    )
+  endif()
+
+  if(${BW_TREE_TEST_USE_JEMALLOC})
+    target_include_directories(
+      ${BW_TREE_TEST_TARGET} PRIVATE
+      ${JEMALLOC_INCLUDE_DIRS}
+    )
+    target_link_libraries(
+      ${BW_TREE_TEST_TARGET} PRIVATE
+      PkgConfig::JEMALLOC
     )
   endif()
 

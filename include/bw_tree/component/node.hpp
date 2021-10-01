@@ -120,16 +120,7 @@ class Node
    * @brief Destroy the node object.
    *
    */
-  ~Node()
-  {
-    // release nodes recursively until it reaches a base node
-    if (delta_type_ != DeltaNodeType::kNotDelta) {
-      auto next_node = GetNextNode();
-      if (next_node != nullptr) {
-        DeleteNode(next_node);
-      }
-    }
-  }
+  ~Node() = default;
 
   Node(const Node &) = delete;
   Node &operator=(const Node &) = delete;
@@ -153,8 +144,19 @@ class Node
   static void
   DeleteNode(Node *node)
   {
-    node->~Node();
-    ::operator delete(node);
+    // release nodes recursively until it reaches a base node
+    while (node != nullptr && node->GetDeltaNodeType() != DeltaNodeType::kNotDelta) {
+      auto cur_node = node;
+      node = cur_node->GetNextNode();
+
+      cur_node->~Node();
+      ::operator delete(cur_node);
+    }
+
+    if (node != nullptr) {
+      node->~Node();
+      ::operator delete(node);
+    }
   }
 
   /*################################################################################################
