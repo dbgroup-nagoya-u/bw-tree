@@ -24,6 +24,7 @@
 
 #include "component/mapping_table.hpp"
 #include "component/node.hpp"
+#include "component/record_iterator.hpp"
 #include "memory/epoch_based_gc.hpp"
 
 namespace dbgroup::index::bw_tree
@@ -43,6 +44,7 @@ class BwTree
   using NodeReturnCode = component::NodeReturnCode;
   using NodeType = component::NodeType;
   using Node_t = component::Node<Key, Comp>;
+  using RecordIterator_t = component::RecordIterator<Key, Payload, Comp>;
   using Mapping_t = std::atomic<Node_t *>;
   using MappingTable_t = component::MappingTable<Key, Comp>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
@@ -966,7 +968,7 @@ class BwTree
    * @param end_closed a flag to indicate whether the end side of a range is closed.
    * @return RecordIterator_t: an iterator to access target records.
    */
-  void
+  RecordIterator_t
   Scan(  //
       [[maybe_unused]] const Key *begin_key = nullptr,
       [[maybe_unused]] const bool begin_closed = false,
@@ -974,6 +976,8 @@ class BwTree
       [[maybe_unused]] const bool end_closed = false)
   {
     // not implemented yet
+
+    return RecordIterator_t{};
   }
 
   /*################################################################################################
