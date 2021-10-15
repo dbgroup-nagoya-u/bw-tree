@@ -1039,7 +1039,7 @@ class BwTree
   }
 
   /**
-   * @brief Insert a specified kay/payload pair.
+   * @brief Insert a specified key/payload pair.
    *
    * This function performs a uniqueness check in its processing. If a specified key
    * does not exist, this function insert a target payload into the index. If a
@@ -1063,7 +1063,6 @@ class BwTree
       const size_t key_length = sizeof(Key),
       const size_t payload_length = sizeof(Payload))
   {
-    // not implemented yet
     const auto key_addr = component::GetAddr(key);
     const auto guard = gc_.CreateEpochGuard();
     // traverse to a target leaf node
