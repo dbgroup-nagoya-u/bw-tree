@@ -1065,6 +1065,7 @@ class BwTree
   {
     const auto key_addr = component::GetAddr(key);
     const auto guard = gc_.CreateEpochGuard();
+
     // traverse to a target leaf node
     Mapping_t *consol_node = nullptr;
     NodeStack_t stack = SearchLeafNode(key_addr, true, consol_node);
@@ -1079,17 +1080,14 @@ class BwTree
 
       // check target key/value existence
       const auto [target_node, meta] = CheckExistence(key_addr, stack, consol_node);
+      if (target_node != nullptr) return ReturnCode::kKeyExist;
 
-      if (target_node == nullptr) {
-        // prepare nodes to perform CAS
-        delta_node->SetNextNode(cur_head);
-        prev_head = cur_head;
+      // prepare nodes to perform CAS
+      delta_node->SetNextNode(cur_head);
+      prev_head = cur_head;
 
-        // try to insert the delta record
-        if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
-      } else {
-        return ReturnCode::kKeyExist;
-      }
+      // try to insert the delta record
+      if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
     }
 
     if (consol_node != nullptr) {
@@ -1140,18 +1138,16 @@ class BwTree
 
       // check target key/value existence
       const auto [target_node, meta] = CheckExistence(key_addr, stack, consol_node);
+      if (target_node == nullptr) return ReturnCode::kKeyNotExist;
 
-      if (target_node != nullptr) {
-        // prepare nodes to perform CAS
-        delta_node->SetNextNode(cur_head);
-        prev_head = cur_head;
+      // prepare nodes to perform CAS
+      delta_node->SetNextNode(cur_head);
+      prev_head = cur_head;
 
-        // try to insert the delta record
-        if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
-      } else {
-        return ReturnCode::kKeyNotExist;
-      }
+      // try to insert the delta record
+      if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
     }
+
     return ReturnCode::kSuccess;
   }
 
