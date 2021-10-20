@@ -1148,6 +1148,10 @@ class BwTree
       if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
     }
 
+    if (consol_node != nullptr) {
+      Consolidate(consol_node, key_addr, true, stack);
+    }
+
     return ReturnCode::kSuccess;
   }
 
