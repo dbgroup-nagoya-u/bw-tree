@@ -216,7 +216,6 @@ TYPED_TEST(BwTreeFixture, Insert_DuplicateKeys_ReadPreviousValue)
 /*--------------------------------------------------------------------------------------------------
  * Update operation tests
  *------------------------------------------------------------------------------------------------*/
-
 TYPED_TEST(BwTreeFixture, Update_ExistKeys_ReadUpdatedValues)
 {
   const size_t repeat_num = TestFixture::kSmallKeyNum;
@@ -234,6 +233,53 @@ TYPED_TEST(BwTreeFixture, Update_ExistKeys_ReadUpdatedValues)
   }
 }
 
+TYPED_TEST(BwTreeFixture, Update_ExistKeys_WithLeafConsolidate_ReadUpdatedValues)
+{
+  const size_t repeat_num = TestFixture::kMaxRecordNum / 2;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyUpdate(i, i + 1);
+  }
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i + 1);
+  }
+}
+
+TYPED_TEST(BwTreeFixture, Update_ExistKeysAlternately_WithLeafConsolidate_ReadUpdatedValues)
+{
+  const size_t repeat_num = TestFixture::kMaxRecordNum;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+    TestFixture::VerifyUpdate(i, i + 1);
+    TestFixture::VerifyUpdate(i, i + 2);
+  }
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i + 2);
+  }
+}
+
+TYPED_TEST(BwTreeFixture, Update_ExistKeysAlternately_WithLeafSplit_ReadUpdatedValues)
+{
+  const size_t repeat_num = TestFixture::kMaxRecordNum * 2;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+    TestFixture::VerifyUpdate(i, i + 1);
+    TestFixture::VerifyUpdate(i, i + 2);
+  }
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i + 2);
+  }
+}
+
 TYPED_TEST(BwTreeFixture, Update_NotExistKeys)
 {
   const size_t repeat_num = TestFixture::kSmallKeyNum / 2;
@@ -245,6 +291,7 @@ TYPED_TEST(BwTreeFixture, Update_NotExistKeys)
     TestFixture::VerifyRead(i, i, true);
   }
 }
+
 /*--------------------------------------------------------------------------------------------------
  * Write operation tests
  *------------------------------------------------------------------------------------------------*/
