@@ -492,11 +492,8 @@ class BwTree
     size_t rec_num = records.size() + base_rec_num;
     for (auto &&rec : records) {
       const auto delta_type = rec.node->GetDeltaNodeType();
-      if (delta_type == DeltaNodeType::kInsert) {
+      if (delta_type == DeltaNodeType::kInsert || delta_type == DeltaNodeType::kModify) {
         page_size += rec.meta.GetTotalLength();
-      } else if (delta_type == DeltaNodeType::kModify) {
-        page_size += rec.meta.GetPayloadLength();
-        --rec_num;
       } else {
         rec_num -= 2;
       }
