@@ -197,6 +197,29 @@ TYPED_TEST(BwTreeFixture, Insert_UniqueKeys_ReadInsertedValues)
     TestFixture::VerifyRead(i, i);
   }
 }
+TYPED_TEST(BwTreeFixture, Insert_UniqueKeysWithLeafConsolidate_ReadWrittenValues)
+{
+  const size_t repeat_num = TestFixture::kMaxRecordNum;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyInsert(i, i);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i);
+  }
+}
+
+TYPED_TEST(BwTreeFixture, Insert_UniqueKeysWithLeafSplit_ReadWrittenValues)
+{
+  const size_t repeat_num = TestFixture::kMaxRecordNum * 2;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyInsert(i, i);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i);
+  }
+}
 
 TYPED_TEST(BwTreeFixture, Insert_DuplicateKeys_InsertFails)
 {
@@ -264,6 +287,9 @@ TYPED_TEST(BwTreeFixture, Update_ExistKeysRepeatedlyWithLeafConsolidate_ReadUpda
     TestFixture::VerifyRead(i, i + 2);
   }
 }
+
+
+
 
 TYPED_TEST(BwTreeFixture, Update_ExistKeysRepeadtedlyWithLeafSplit_ReadUpdatedValues)
 {
