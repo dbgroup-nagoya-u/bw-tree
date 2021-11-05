@@ -280,7 +280,7 @@ TYPED_TEST(BwTreeFixture, Update_ExistKeysAlternately_WithLeafSplit_ReadUpdatedV
   }
 }
 
-TYPED_TEST(BwTreeFixture, Update_NotExistKeys)
+TYPED_TEST(BwTreeFixture, Update_NotExistKeys_UpdateFails)
 {
   const size_t repeat_num = TestFixture::kSmallKeyNum / 2;
 
