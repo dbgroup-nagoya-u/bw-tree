@@ -198,7 +198,7 @@ TYPED_TEST(BwTreeFixture, Insert_UniqueKeys_ReadInsertedValues)
   }
 }
 
-TYPED_TEST(BwTreeFixture, Insert_DuplicateKeys_ReadPreviousValue)
+TYPED_TEST(BwTreeFixture, Insert_DuplicateKeys_InsertFails)
 {
   const size_t repeat_num = TestFixture::kSmallKeyNum / 2;
 
