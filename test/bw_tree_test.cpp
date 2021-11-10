@@ -47,7 +47,7 @@ class BwTreeFixture : public testing::Test
   using Node_t = component::Node<Key, std::less<Key>>;
   using Metadata = component::Metadata;
   using BwTree_t = BwTree<Key, Payload, KeyComp>;
-
+  using RecordIterator_t = component::RecordIterator<Key, Payload, KeyComp>;
   /*################################################################################################
    * Internal constants
    *##############################################################################################*/
@@ -142,18 +142,47 @@ class BwTreeFixture : public testing::Test
     if (!begin_null) begin_key = &keys[begin_key_id];
     if (!end_null) end_key = &keys[end_key_id];
 
-    auto page = new RecordPage_t{};
     auto rc = bw_tree->Scan(begin_key, begin_closed, end_key, end_closed);
-    RecordIterator_t iter{nullptr, nullptr, false, page, true};
+    RecordIterator_t iter{};
+
+    // result = component::IsEqual<Payload, PayloadComp>(payloads[expected_id], actual.get());
 
     size_t count = 0;
     for (; iter.HasNext(); ++iter, ++count) {
       auto [key, payload] = *iter;
-      EXPECT_TRUE(IsEqual<KeyComp>(keys[expected_keys[count]], key));
-      EXPECT_TRUE(IsEqual<PayloadComp>(payloads[expected_payloads[count]], payload));
-    }
+      bool key_comp_result,payload_comp_result;
+      if constexpr (IsVariableLengthData<Key>()) {
+        key_comp_result = component::IsEqual<Key, KeyComp>(keys[expected_keys[count]], key);
+      } else {
+        key_comp_result =
+            component::IsEqual<Key, KeyComp>(component::GetAddr(keys[expected_keys[count]]), component::GetAddr(key));
+      }
 
+      if constexpr (IsVariableLengthData<Payload>()) {
+         payload_comp_result =
+            component::IsEqual<Payload, PayloadComp>(payloads[expected_payloads[count]], payload);
+      } else {
+        payload_comp_result = component::IsEqual<Payload, PayloadComp>(
+            component::GetAddr(payloads[expected_payloads[count]]), component::GetAddr(payload));
+      }
+      EXPECT_TRUE(key_comp_result);
+      EXPECT_TRUE(payload_comp_result);
+    }
     EXPECT_EQ(expected_keys.size(), count);
+  }
+
+  void
+  VerifyUpdate(  //
+      const size_t key_id,
+      const size_t payload_id,
+      const bool expect_fail = false)
+  {
+    auto rc = bw_tree->Update(keys[key_id], payloads[payload_id], kKeyLength, kPayloadLength);
+    if (expect_fail) {
+      EXPECT_EQ(ReturnCode::kKeyNotExist, rc);
+    } else {
+      EXPECT_EQ(ReturnCode::kSuccess, rc);
+    }
   }
 };
 
@@ -434,7 +463,7 @@ TYPED_TEST(BwTreeFixture, Scan_DuplicateKeysWithLeafSplit_ScanUpdatedRecords)
     TestFixture::VerifyWrite(i, i);
   }
   for (size_t i = 0; i < repeat_num; ++i) {
-    TestFixture::Update(i, i + 1);
+    TestFixture::VerifyUpdate(i, i + 1);
     expected_keys.emplace_back(i);
     expected_payloads.emplace_back(i + 1);
   }

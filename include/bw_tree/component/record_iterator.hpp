@@ -76,7 +76,7 @@ class RecordIterator
   {
     // not implemented yet
 
-    return true;
+    return false;
   }
 
   /**
