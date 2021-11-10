@@ -288,9 +288,6 @@ TYPED_TEST(BwTreeFixture, Update_ExistKeysRepeatedlyWithLeafConsolidate_ReadUpda
   }
 }
 
-
-
-
 TYPED_TEST(BwTreeFixture, Update_ExistKeysRepeadtedlyWithLeafSplit_ReadUpdatedValues)
 {
   const size_t repeat_num = TestFixture::kMaxRecordNum * 2;
