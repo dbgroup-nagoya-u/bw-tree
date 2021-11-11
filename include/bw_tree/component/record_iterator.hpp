@@ -16,7 +16,11 @@
 
 #pragma once
 
+#include <memory>
 #include <utility>
+
+#include "common.hpp"
+#include "record_page.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {
@@ -30,14 +34,69 @@ namespace dbgroup::index::bw_tree::component
 template <class Key, class Payload, class Compare>
 class RecordIterator
 {
+  using BwTree_t = BwTree<Key, Payload, Compare>;
+  using RecordPage_t = RecordPage<Key, Payload>;
+
+ private:
+  /*################################################################################################
+   * Internal member variables
+   *##############################################################################################*/
+
+  /// a pointer to BwTree to perform continuous scan
+  BwTree_t* bwtree_;
+
+  /// the end of range scan
+  const Key* end_key_;
+
+  /// a flag to specify whether the end of range is closed
+  bool end_is_closed_;
+
+  /// an address of a current record
+  std::byte* current_addr_;
+
+  /// an address of the end of this page
+  const std::byte* end_addr_;
+
+  /// the length of a current key
+  uint32_t key_length_;
+
+  /// the length of a current payload
+  uint32_t payload_length_;
+
+  /// a flag to indicate the end of range scan
+  bool scan_finished_;
+
+  /// copied keys and payloads
+  std::unique_ptr<RecordPage_t> page_;
+
  public:
   /*################################################################################################
    * Public constructors/destructors
    *##############################################################################################*/
 
-  constexpr RecordIterator() {}
+  constexpr RecordIterator(
+    BwTree_t* bwtree,
+    const Key* end_key,
+    const bool end_is_closed,
+    RecordPage_t* page,
+    const bool scan_finished)
+    : bwtree_{bwtree},
+      end_key_{end_key},
+      end_is_closed_{end_is_closed},
+      current_addr_{page->GetBeginAddr()},
+      end_addr_{page->GetEndAddr()},
+      key_length_{page->GetBeginPayloadLength()},
+      scan_finished_{scan_finished},
+      page_{page}
+    {
+    }
 
   ~RecordIterator() = default;
+
+  RecordIterator(const RecordIterator&) = delete;
+  RecordIterator& operator=(const RecordIterator&) = delete;
+  constexpr RecordIterator(RecordIterator&&) = default;
+  constexpr RecordIterator& operator=(RecordIterator&&) = default;
 
   /*################################################################################################
    * Public operators for iterators
@@ -59,8 +118,25 @@ class RecordIterator
   void
   operator++()
   {
-    // not implemented yet
+    current_addr_ += GetKeyLength() + GetPayloadLength();
+    if constexpr (IsVariableLengthData<Key>()) {
+      if (current_addr_ != end_addr_) {
+        memcpy(&key_length_, current_addr_, sizeof(uint32_t));
+        current_addr_ += sizeof(uint32_t);
+      }
+    }
+    if constexpr (IsVariableLengthData<Payload>()) {
+      if (current_addr_ != end_addr_) {
+        memcpy(&payload_length_, current_addr_, sizeof(uint32_t));
+        current_addr_ += sizeof(uint32_t);
+      }
+    }
   }
+
+  /*################################################################################################
+   * Public getters/setters
+   *##############################################################################################*/
+
 
   /**
    * @brief Check if there are any records left.
@@ -74,9 +150,17 @@ class RecordIterator
   bool
   HasNext()
   {
-    // not implemented yet
+    if (current_addr_ < end_addr_) return true;
+    if (scan_finished_ || page_->Empty()) return false;
 
-    return true;
+    // search a next leaf node to continue scanning
+    const auto begin_key = page_->GetLastKey();
+    auto page = page_.get();
+    page_.release();  // reuse an allocated page instance
+
+    *this = bwtree_->Scan(&begin_key, false, end_key_, end_is_closed_, page);
+
+    return HasNext();
   }
 
   /**
@@ -85,9 +169,11 @@ class RecordIterator
   constexpr Key
   GetKey() const
   {
-    // not implemented yet
-
-    return Key{};
+    if constexpr (IsVariableLengthData<Key>()) {
+      return Cast<Key>(current_addr_);
+    } else {
+      return *Cast<Key*>(current_addr_);
+    }
   }
 
   /**
@@ -96,9 +182,11 @@ class RecordIterator
   constexpr Payload
   GetPayload() const
   {
-    // not implemented yet
-
-    return Payload{};
+    if constexpr (IsVariableLengthData<Payload>()) {
+      return Cast<Payload>(current_addr_ += GetKeyLength());
+    } else {
+      return *Cast<Payload*>(current_addr_ + GetKeyLength());
+    }
   }
 
   /**
@@ -107,9 +195,11 @@ class RecordIterator
   constexpr size_t
   GetKeyLength() const
   {
-    // not implemented yet
-
-    return sizeof(Key);
+    if constexpr (IsVariableLengthData<Key>()) {
+      return key_length_;
+    } else {
+      return sizeof(Key);
+    }
   }
 
   /**
@@ -118,9 +208,11 @@ class RecordIterator
   constexpr size_t
   GetPayloadLength() const
   {
-    // not implemented yet
-
-    return sizeof(Payload);
+    if constexpr (IsVariableLengthData<Payload>()) {
+      return payload_length_;
+    } else {
+      return sizeof(Payload);
+    }
   }
 };
 
