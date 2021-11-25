@@ -126,6 +126,34 @@ class BwTreeFixture : public testing::Test
 
     EXPECT_EQ(ReturnCode::kSuccess, rc);
   }
+
+  void
+  VerifyInsert(  //
+      const size_t key_id,
+      const size_t payload_id,
+      const bool expect_fail = false)
+  {
+    auto rc = bw_tree->Insert(keys[key_id], payloads[payload_id], kKeyLength, kPayloadLength);
+    if (expect_fail) {
+      EXPECT_EQ(ReturnCode::kKeyExist, rc);
+    } else {
+      EXPECT_EQ(ReturnCode::kSuccess, rc);
+    }
+  }
+
+  void
+  VerifyUpdate(  //
+      const size_t key_id,
+      const size_t payload_id,
+      const bool expect_fail = false)
+  {
+    auto rc = bw_tree->Update(keys[key_id], payloads[payload_id], kKeyLength, kPayloadLength);
+    if (expect_fail) {
+      EXPECT_EQ(ReturnCode::kKeyNotExist, rc);
+    } else {
+      EXPECT_EQ(ReturnCode::kSuccess, rc);
+    }
+  }
 };
 
 /*##################################################################################################
@@ -152,6 +180,139 @@ TYPED_TEST_CASE(BwTreeFixture, KeyPayloadPairs);
 TYPED_TEST(BwTreeFixture, Read_EmptyIndex_ReadFail)
 {  //
   TestFixture::VerifyRead(0, 0, true);
+}
+
+/*--------------------------------------------------------------------------------------------------
+ * Insert operation tests
+ *------------------------------------------------------------------------------------------------*/
+
+TYPED_TEST(BwTreeFixture, Insert_UniqueKeys_ReadInsertedValues)
+{
+  const size_t repeat_num = TestFixture::kSmallKeyNum;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyInsert(i, i, false);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i);
+  }
+}
+TYPED_TEST(BwTreeFixture, Insert_UniqueKeysWithLeafConsolidate_ReadWrittenValues)
+{
+  const size_t repeat_num = TestFixture::kMaxRecordNum;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyInsert(i, i);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i);
+  }
+}
+
+TYPED_TEST(BwTreeFixture, Insert_UniqueKeysWithLeafSplit_ReadWrittenValues)
+{
+  const size_t repeat_num = TestFixture::kMaxRecordNum * 2;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyInsert(i, i);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i);
+  }
+}
+
+TYPED_TEST(BwTreeFixture, Insert_DuplicateKeys_InsertFails)
+{
+  const size_t repeat_num = TestFixture::kSmallKeyNum / 2;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyInsert(i, i, false);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyInsert(i, i + 1, true);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i);
+  }
+}
+
+/*--------------------------------------------------------------------------------------------------
+ * Update operation tests
+ *------------------------------------------------------------------------------------------------*/
+TYPED_TEST(BwTreeFixture, Update_ExistKeys_ReadUpdatedValues)
+{
+  const size_t repeat_num = TestFixture::kSmallKeyNum;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyUpdate(i, i + 1);
+  }
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i + 1);
+  }
+}
+
+TYPED_TEST(BwTreeFixture, Update_ExistKeysWithLeafConsolidate_ReadUpdatedValues)
+{
+  const size_t repeat_num = TestFixture::kMaxRecordNum / 2;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyUpdate(i, i + 1);
+  }
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i + 1);
+  }
+}
+
+TYPED_TEST(BwTreeFixture, Update_ExistKeysRepeatedlyWithLeafConsolidate_ReadUpdatedValues)
+{
+  const size_t repeat_num = TestFixture::kMaxRecordNum;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+    TestFixture::VerifyUpdate(i, i + 1);
+    TestFixture::VerifyUpdate(i, i + 2);
+  }
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i + 2);
+  }
+}
+
+TYPED_TEST(BwTreeFixture, Update_ExistKeysRepeadtedlyWithLeafSplit_ReadUpdatedValues)
+{
+  const size_t repeat_num = TestFixture::kMaxRecordNum * 2;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+    TestFixture::VerifyUpdate(i, i + 1);
+    TestFixture::VerifyUpdate(i, i + 2);
+  }
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i + 2);
+  }
+}
+
+TYPED_TEST(BwTreeFixture, Update_NotExistKeys_UpdateFails)
+{
+  const size_t repeat_num = TestFixture::kSmallKeyNum / 2;
+
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyUpdate(i, i, true);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyRead(i, i, true);
+  }
 }
 
 /*--------------------------------------------------------------------------------------------------
