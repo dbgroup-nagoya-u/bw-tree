@@ -25,6 +25,7 @@
 #include "component/mapping_table.hpp"
 #include "component/node.hpp"
 #include "component/record_iterator.hpp"
+#include "component/record_page.hpp"
 #include "memory/epoch_based_gc.hpp"
 
 namespace dbgroup::index::bw_tree
@@ -45,6 +46,7 @@ class BwTree
   using NodeType = component::NodeType;
   using Node_t = component::Node<Key, Comp>;
   using RecordIterator_t = component::RecordIterator<Key, Payload, Comp>;
+  using RecordPage_t = component::RecordPage<Key, Payload>;
   using Mapping_t = std::atomic<Node_t *>;
   using MappingTable_t = component::MappingTable<Key, Comp>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
@@ -970,16 +972,166 @@ class BwTree
    */
   RecordIterator_t
   Scan(  //
-      [[maybe_unused]] const Key *begin_key = nullptr,
-      [[maybe_unused]] const bool begin_closed = false,
-      [[maybe_unused]] const Key *end_key = nullptr,
-      [[maybe_unused]] const bool end_closed = false)
+      const Key *begin_key = nullptr,
+      const bool begin_closed = false,
+      const Key *end_key = nullptr,
+      const bool end_closed = false,
+      Node_t *page = nullptr)
   {
-    // not implemented yet
+    if (page == nullptr) {
+      page = new Node_t{};
+    }
+    const auto guard = gc_.CreateEpochGuard();
+    Key *zero = 0;
+    Mapping_t *consol_node = nullptr;
+    const auto node_stack = (begin_key == nullptr)
+                                ? SearchLeafNode(zero, true, consol_node)
+                                : SearchLeafNode(begin_key, begin_closed, consol_node);
 
-    return RecordIterator_t{};
+    Mapping_t *page_id = node_stack.back();
+    Node_t *cur_node = page_id->load(mo_relax);
+
+    const auto scan_finished =
+        LeafScan(cur_node, begin_key, begin_closed, end_key, end_closed, &page);
+    return RecordIterator_t{this,       begin_key, begin_closed, end_key,
+                            end_closed, page,      scan_finished};
   }
 
+  /**
+   * @brief Perform a range scan with specified keys.
+   *
+   * If a begin/end key is nullptr, it is treated as negative or positive infinite.
+   *
+   * @tparam Key a target key class.
+   * @tparam Payload a target payload class.
+   * @tparam Compare a comparetor class for keys.
+   * @param node a target node.
+   * @param begin_k the pointer of a begin key of a range scan.
+   * @param begin_closed a flag to indicate whether the begin side of a range is closed.
+   * @param end_k the pointer of an end key of a range scan.
+   * @param end_closed a flag to indicate whether the end side of a range is closed.
+   * @param page a page to copy target keys/payloads. This argument is used internally.
+   * @retval true if scanning finishes.
+   * @retval false if scanning is in progress.
+   */
+
+  bool
+  IsValidKey(void *target_key,
+             const Key *begin_k,
+             const bool begin_closed,
+             const Key *end_k,
+             const bool end_closed)
+  {
+    if (begin_k == nullptr && end_k == nullptr) {
+      return true;
+    } else if (begin_k == nullptr) {
+      return (component::LT<Key, Comp>(target_key, *end_k))
+             || (component::IsEqual<Key, Comp>(target_key, end_k) && (end_closed));
+    } else if (end_k == nullptr) {
+      return (component::LT<Key, Comp>(*begin_k, target_key))
+             || (component::IsEqual<Key, Comp>(target_key, begin_k) && (begin_closed));
+    } else {
+      bool valid_left_sec =
+          (component::LT<Key, Comp>(*begin_k, target_key))
+          || (component::IsEqual<Key, Comp>(target_key, begin_k) && (begin_closed));
+      bool valid_right_sec = (component::LT<Key, Comp>(target_key, *end_k))
+                             || (component::IsEqual<Key, Comp>(target_key, end_k) && (end_closed));
+      return valid_left_sec && valid_right_sec;
+    }
+  }
+
+  bool
+  LeafScan(  //
+      Node_t *target_node,
+      const Key *begin_k,
+      const bool begin_closed,
+      const Key *end_k,
+      const bool end_closed,
+      Node_t **page)
+  {
+    // mak :: consolidate処理に置き換える
+    // collect and sort delta records
+    std::vector<Record> records;
+    records.reserve(kMaxDeltaNodeNum * 4);
+    const auto [base_node, end_node] = SortDeltaRecords(target_node, records);
+
+    // reserve a page for a consolidated node
+    auto [offset, base_rec_num] = CalculatePageSize(base_node, end_node, records);
+    const auto node_type = static_cast<NodeType>(target_node->IsLeaf());
+
+    const auto sib_page = GetSiblingPage(end_node);
+    // 古いぺーじをgcした方が良い
+
+    *page = Node_t::CreateNode(offset, node_type, 0, sib_page);
+
+    // copy the lowest/highest keys
+    const auto low_key = (*page)->GetLowKeyAddr();
+    if (low_key == nullptr) {
+      (*page)->SetLowMeta(Metadata{0, 0, 0});
+    } else {
+      const auto low_key_len = base_node->GetLowMeta().GetKeyLength();
+      (*page)->SetKey(offset, low_key, low_key_len);
+      (*page)->SetLowMeta(Metadata{offset, low_key_len, low_key_len});
+    }
+    const auto high_key = GetHighKey(end_node);
+    if (high_key == nullptr) {
+      (*page)->SetHighMeta(Metadata{0, 0, 0});
+    } else {
+      const auto high_key_len = GetHighKeyLength(end_node);
+      (*page)->SetKey(offset, high_key, high_key_len);
+      (*page)->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
+    }
+    // copy active records
+
+    size_t rec_num = 0;
+    size_t j = 0;
+    for (auto &&[delta, delta_meta, delta_key] : records) {
+      // copy records in a base node
+      void *base_key{};
+      for (; j < base_rec_num; ++j) {
+        const auto meta = base_node->GetMetadata(j);
+        base_key = base_node->GetKeyAddr(meta);
+        if (!component::LT<Key, Comp>(base_key, delta_key)) break;
+        if (IsValidKey(base_key, begin_k, begin_closed, end_k, end_closed)) {
+          (*page)->CopyRecordFrom(rec_num++, offset, base_node, meta);
+        }
+      }
+      // copy a delta record
+      if (delta->GetDeltaNodeType() != DeltaNodeType::kDelete) {
+        if (IsValidKey(delta_key, begin_k, begin_closed, end_k, end_closed)) {
+          (*page)->CopyRecordFrom(rec_num++, offset, delta, delta_meta);
+        }
+        if (j < base_rec_num && !component::LT<Key, Comp>(delta_key, base_key)) {
+          ++j;  // a base node has the same key, so skip it
+        }
+      }
+      // copy remaining records
+      for (; j < base_rec_num; ++j) {
+        if (IsValidKey(base_node->GetKeyAddr(base_node->GetMetadata(j)), begin_k, begin_closed,
+                       end_k, end_closed)) {
+          (*page)->CopyRecordFrom(rec_num++, offset, base_node, base_node->GetMetadata(j));
+        }
+      }
+
+      (*page)->SetRecordCount(rec_num);
+    }
+
+    bool scan_finished = true;
+
+    if (sib_page == nullptr) {
+      scan_finished = true;
+    } else {
+      const auto page_high_key = (*page)->GetHighKeyAddr();
+      if (component::LT<Key, Comp>(page_high_key, *end_k)
+          || (component::IsEqual<Key, Comp>(page_high_key, end_k) && end_closed)) {
+        scan_finished = true;
+      } else {
+        scan_finished = false;
+      }
+    }
+
+    return scan_finished;
+  }
   /*################################################################################################
    * Public write APIs
    *##############################################################################################*/

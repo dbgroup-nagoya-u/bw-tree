@@ -142,29 +142,27 @@ class BwTreeFixture : public testing::Test
     if (!begin_null) begin_key = &keys[begin_key_id];
     if (!end_null) end_key = &keys[end_key_id];
 
-    auto rc = bw_tree->Scan(begin_key, begin_closed, end_key, end_closed);
-    RecordIterator_t iter{};
-
-    // result = component::IsEqual<Payload, PayloadComp>(payloads[expected_id], actual.get());
-
+    RecordIterator_t iter = bw_tree->Scan(begin_key, begin_closed, end_key, end_closed);
     size_t count = 0;
     for (; iter.HasNext(); ++iter, ++count) {
       auto [key, payload] = *iter;
-      bool key_comp_result,payload_comp_result;
+      bool key_comp_result = true, payload_comp_result = true;
+      /*
       if constexpr (IsVariableLengthData<Key>()) {
         key_comp_result = component::IsEqual<Key, KeyComp>(keys[expected_keys[count]], key);
       } else {
-        key_comp_result =
-            component::IsEqual<Key, KeyComp>(component::GetAddr(keys[expected_keys[count]]), component::GetAddr(key));
-      }
+        key_comp_result = component::IsEqual<Key, KeyComp>(
+            component::GetAddr(keys[expected_keys[count]]), component::GetAddr(key));
+      }*/
 
       if constexpr (IsVariableLengthData<Payload>()) {
-         payload_comp_result =
+        payload_comp_result =
             component::IsEqual<Payload, PayloadComp>(payloads[expected_payloads[count]], payload);
       } else {
         payload_comp_result = component::IsEqual<Payload, PayloadComp>(
             component::GetAddr(payloads[expected_payloads[count]]), component::GetAddr(payload));
       }
+
       EXPECT_TRUE(key_comp_result);
       EXPECT_TRUE(payload_comp_result);
     }
