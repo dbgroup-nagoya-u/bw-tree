@@ -494,11 +494,8 @@ class BwTree
     size_t rec_num = records.size() + base_rec_num;
     for (auto &&rec : records) {
       const auto delta_type = rec.node->GetDeltaNodeType();
-      if (delta_type == DeltaNodeType::kInsert) {
+      if (delta_type == DeltaNodeType::kInsert || delta_type == DeltaNodeType::kModify) {
         page_size += rec.meta.GetTotalLength();
-      } else if (delta_type == DeltaNodeType::kModify) {
-        page_size += rec.meta.GetPayloadLength();
-        --rec_num;
       } else {
         rec_num -= 2;
       }
@@ -1191,7 +1188,7 @@ class BwTree
   }
 
   /**
-   * @brief Insert a specified kay/payload pair.
+   * @brief Insert a specified key/payload pair.
    *
    * This function performs a uniqueness check in its processing. If a specified key
    * does not exist, this function insert a target payload into the index. If a
@@ -1210,12 +1207,41 @@ class BwTree
    */
   ReturnCode
   Insert(  //
-      [[maybe_unused]] const Key &key,
-      [[maybe_unused]] const Payload &payload,
-      [[maybe_unused]] const size_t key_length = sizeof(Key),
-      [[maybe_unused]] const size_t payload_length = sizeof(Payload))
+      const Key &key,
+      const Payload &payload,
+      const size_t key_length = sizeof(Key),
+      const size_t payload_length = sizeof(Payload))
   {
-    // not implemented yet
+    const auto key_addr = component::GetAddr(key);
+    const auto guard = gc_.CreateEpochGuard();
+
+    // traverse to a target leaf node
+    Mapping_t *consol_node = nullptr;
+    NodeStack_t stack = SearchLeafNode(key_addr, true, consol_node);
+
+    // create a delta record to write a key/value pair
+    Node_t *delta_node = Node_t::CreateDeltaNode(NodeType::kLeaf, DeltaNodeType::kInsert,  //
+                                                 key_addr, key_length, payload, payload_length);
+    // insert the delta record
+    for (Node_t *prev_head = nullptr; true;) {
+      // check whether the target node is valid (containing a target key and no incomplete SMOs)
+      Node_t *cur_head = ValidateNode(key_addr, true, prev_head, stack, consol_node);
+
+      // check target key/value existence
+      const auto [target_node, meta] = CheckExistence(key_addr, stack, consol_node);
+      if (target_node != nullptr) return ReturnCode::kKeyExist;
+
+      // prepare nodes to perform CAS
+      delta_node->SetNextNode(cur_head);
+      prev_head = cur_head;
+
+      // try to insert the delta record
+      if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
+    }
+
+    if (consol_node != nullptr) {
+      Consolidate(consol_node, key_addr, true, stack);
+    }
 
     return ReturnCode::kSuccess;
   }
@@ -1239,12 +1265,41 @@ class BwTree
    */
   ReturnCode
   Update(  //
-      [[maybe_unused]] const Key &key,
-      [[maybe_unused]] const Payload &payload,
-      [[maybe_unused]] const size_t key_length = sizeof(Key),
-      [[maybe_unused]] const size_t payload_length = sizeof(Payload))
+      const Key &key,
+      const Payload &payload,
+      const size_t key_length = sizeof(Key),
+      const size_t payload_length = sizeof(Payload))
   {
-    // not implemented yet
+    const auto key_addr = component::GetAddr(key);
+    const auto guard = gc_.CreateEpochGuard();
+
+    // traverse to a target leaf node
+    Mapping_t *consol_node = nullptr;
+    NodeStack_t stack = SearchLeafNode(key_addr, true, consol_node);
+
+    // create a delta record to write a key/value pair
+    Node_t *delta_node = Node_t::CreateDeltaNode(NodeType::kLeaf, DeltaNodeType::kModify,  //
+                                                 key_addr, key_length, payload, payload_length);
+    // insert the delta record
+    for (Node_t *prev_head = nullptr; true;) {
+      // check whether the target node is valid (containing a target key and no incomplete SMOs)
+      Node_t *cur_head = ValidateNode(key_addr, true, prev_head, stack, consol_node);
+
+      // check target key/value existence
+      const auto [target_node, meta] = CheckExistence(key_addr, stack, consol_node);
+      if (target_node == nullptr) return ReturnCode::kKeyNotExist;
+
+      // prepare nodes to perform CAS
+      delta_node->SetNextNode(cur_head);
+      prev_head = cur_head;
+
+      // try to insert the delta record
+      if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
+    }
+
+    if (consol_node != nullptr) {
+      Consolidate(consol_node, key_addr, true, stack);
+    }
 
     return ReturnCode::kSuccess;
   }
