@@ -4,7 +4,6 @@
     100
   ],
   "editor.renderWhitespace": "all",
-  "editor.formatOnSave": true,
   "editor.tabSize": 2,
   "files.trimFinalNewlines": true,
   "files.trimTrailingWhitespace": true,

@@ -20,7 +20,7 @@
 #include <utility>
 
 #include "common.hpp"
-#include "record_page.hpp"
+#include "node.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {
@@ -35,9 +35,9 @@ template <class Key, class Payload, class Compare>
 class RecordIterator
 {
   using BwTree_t = BwTree<Key, Payload, Compare>;
-  using RecordPage_t = RecordPage<Key, Payload>;
+  using Node_t = Node<Key, Compare>
 
- private:
+ private :
   /*################################################################################################
    * Internal member variables
    *##############################################################################################*/
@@ -51,23 +51,17 @@ class RecordIterator
   /// a flag to specify whether the end of range is closed
   bool end_is_closed_;
 
-  /// an address of a current record
-  std::byte* current_addr_;
+  /// the number of records in this node.
+  uint16_t record_count_;
 
-  /// an address of the end of this page
-  const std::byte* end_addr_;
+  /// metadata
+  Metadata meta_;
 
-  /// the length of a current key
-  uint32_t key_length_;
+  /// an index of a current record
+  size_t current_idx_;
 
-  /// the length of a current payload
-  uint32_t payload_length_;
-
-  /// a flag to indicate the end of range scan
-  bool scan_finished_;
-
-  /// copied keys and payloads
-  std::unique_ptr<RecordPage_t> page_;
+  /// node
+  Node_t* node_;
 
  public:
   /*################################################################################################
@@ -78,18 +72,15 @@ class RecordIterator
     BwTree_t* bwtree,
     const Key* end_key,
     const bool end_is_closed,
-    RecordPage_t* page,
-    const bool scan_finished)
+    Node_t* node)
     : bwtree_{bwtree},
       end_key_{end_key},
       end_is_closed_{end_is_closed},
-      current_addr_{page->GetBeginAddr()},
-      end_addr_{page->GetEndAddr()},
-      key_length_{page->GetBeginPayloadLength()},
-      scan_finished_{scan_finished},
-      page_{page}
-    {
-    }
+      record_count_{node->GetRecordCount()},
+      current_idx_{node->GetLowKeyAddr()},
+      meta_{node->GetMetadata(current_idx_)}
+  {
+  }
 
   ~RecordIterator() = default;
 
@@ -118,6 +109,7 @@ class RecordIterator
   void
   operator++()
   {
+    current_idx_++;
     current_addr_ += GetKeyLength() + GetPayloadLength();
     if constexpr (IsVariableLengthData<Key>()) {
       if (current_addr_ != end_addr_) {
@@ -137,7 +129,6 @@ class RecordIterator
    * Public getters/setters
    *##############################################################################################*/
 
-
   /**
    * @brief Check if there are any records left.
    *
@@ -150,15 +141,15 @@ class RecordIterator
   bool
   HasNext()
   {
-    if (current_addr_ < end_addr_) return true;
-    if (scan_finished_ || page_->Empty()) return false;
+    if (current_idx_ < meta_.GetKeyLength()) return true;
+    if (node_->GetNextNode() == NULL) return false;
 
     // search a next leaf node to continue scanning
     const auto begin_key = page_->GetLastKey();
-    auto page = page_.get();
-    page_.release();  // reuse an allocated page instance
+    const auto begin_key = node_->GetHighKeyAddr();
+    auto node = node_->GetNextNode();
 
-    *this = bwtree_->Scan(&begin_key, false, end_key_, end_is_closed_, page);
+    *this = bwtree_->Scan(&begin_key, false, end_key_, end_is_closed_, node);
 
     return HasNext();
   }
