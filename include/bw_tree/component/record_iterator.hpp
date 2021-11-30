@@ -51,12 +51,6 @@ class RecordIterator
   /// a flag to specify whether the begin of range is closed
   bool begin_closed_;
 
-  /// the end of range scan
-  const Key* end_key_;
-
-  /// a flag to specify whether the end of range is closed
-  bool end_closed_;
-
   /// the position of iterator cursol
   int64_t cur_position_;
 
@@ -64,7 +58,8 @@ class RecordIterator
   bool scan_finished_;
 
   /// copied keys and payloads
-  std::unique_ptr<Node_t> page_;
+  //std::unique_ptr<Node_t> page_;
+  Node_t *page_;
 
   /// a key of cursol points
   Key cur_key_;
@@ -81,21 +76,15 @@ class RecordIterator
       BwTree_t* bwtree,
       const Key* begin_key,
       const bool begin_closed,
-      const Key* end_key,
-      const bool end_closed,
       Node_t* page,
       const bool scan_finished)
       : bwtree_{bwtree},
         begin_key_{begin_key},
         begin_closed_{begin_closed},
-        end_key_{end_key},
-        end_closed_{end_closed},
         cur_position_{0},
         scan_finished_{scan_finished},
         page_{page}
   {
-    // cur_position_ = 0;
-    // SetCurrentKeyValue();
   }
 
   ~RecordIterator() = default;
@@ -124,13 +113,12 @@ class RecordIterator
   operator++()
   {
     cur_position_++;
-    SetCurrentKeyValue();
   }
 
   /**
    * @brief Check if there are any records left.
    *
-   * Note that a BzTree's scan function copies a target leaf node one by one, so this
+   * Note that a BwTree's scan function copies a target leaf node one by one, so this
    * function may call a scan function internally to get a next leaf node.
    *
    * @retval true if there are any records left.
@@ -142,18 +130,15 @@ class RecordIterator
     if (((int64_t)page_->GetRecordCount() - cur_position_) > 0) return true;
     if (scan_finished_) return false;
 
-    auto page = page_.get();
-    page_.release();  // reuse an allocated page instance
-    auto sib_node = page->GetSiblingNode()->load(mo_relax);
-    if (sib_node == nullptr) {
-      scan_finished_ = true;
-      return false;
-    } else {
-      scan_finished_ = bwtree_->LeafScan(page->GetSiblingNode()->load(mo_relax), begin_key_,
-                                         begin_closed_, end_key_, end_closed_, &page);
-      cur_position_ = 0;
-      return HasNext();
-    }
+
+    auto sib_node = page_->GetSiblingNode()->load(mo_relax);
+    delete page_;
+    //auto page = page_.get();
+    //page_.release();  // reuse an allocated page instance
+    scan_finished_ = bwtree_->LeafScan(sib_node, begin_key_,
+                                         begin_closed_, &page_);
+    cur_position_ = 0;
+    return HasNext();
   }
 
   void
@@ -166,7 +151,7 @@ class RecordIterator
   size_t
   GetRecordCount()
   {
-    return page_->GetRecordCount() + cur_position_;
+    return page_->GetRecordCount();
   }
 
   bool
@@ -178,7 +163,7 @@ class RecordIterator
   int64_t
   Values()
   {
-    return ((int64_t)(page_->GetRecordCount()) - cur_position_ - 1);
+    return ((int64_t)(page_->GetRecordCount()) - cur_position_);
   }
   /**
    * @return Key: a key of a current record
@@ -186,7 +171,11 @@ class RecordIterator
   constexpr Key
   GetKey() const
   {
-    return *reinterpret_cast<Key*>(page_->GetKeyAddr(page_->GetMetadata(cur_position_)));
+    if constexpr (IsVariableLengthData<Key>()) {
+      return reinterpret_cast<const Key>(page_->GetKeyAddr(page_->GetMetadata(cur_position_)));
+    } else {
+      return *reinterpret_cast<const Key *>(page_->GetKeyAddr(page_->GetMetadata(cur_position_)));
+    }
     // return cur_key_;
   }
 
