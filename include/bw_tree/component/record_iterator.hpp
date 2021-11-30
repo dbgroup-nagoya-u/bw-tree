@@ -58,7 +58,6 @@ class RecordIterator
   bool scan_finished_;
 
   /// copied keys and payloads
-  //std::unique_ptr<Node_t> page_;
   Node_t *page_;
 
   /// a key of cursol points
@@ -130,11 +129,9 @@ class RecordIterator
     if (((int64_t)page_->GetRecordCount() - cur_position_) > 0) return true;
     if (scan_finished_) return false;
 
-
     auto sib_node = page_->GetSiblingNode()->load(mo_relax);
     delete page_;
-    //auto page = page_.get();
-    //page_.release();  // reuse an allocated page instance
+
     scan_finished_ = bwtree_->LeafScan(sib_node, begin_key_,
                                          begin_closed_, &page_);
     cur_position_ = 0;
@@ -154,17 +151,6 @@ class RecordIterator
     return page_->GetRecordCount();
   }
 
-  bool
-  IsScanFinished()
-  {
-    return scan_finished_;
-  }
-
-  int64_t
-  Values()
-  {
-    return ((int64_t)(page_->GetRecordCount()) - cur_position_);
-  }
   /**
    * @return Key: a key of a current record
    */
@@ -176,7 +162,6 @@ class RecordIterator
     } else {
       return *reinterpret_cast<const Key *>(page_->GetKeyAddr(page_->GetMetadata(cur_position_)));
     }
-    // return cur_key_;
   }
 
   /**
