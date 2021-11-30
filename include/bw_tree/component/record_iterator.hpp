@@ -54,17 +54,8 @@ class RecordIterator
   /// the position of iterator cursol
   int64_t cur_position_;
 
-  /// a flag to indicate the end of range scan
-  bool scan_finished_;
-
   /// copied keys and payloads
   Node_t *page_;
-
-  /// a key of cursol points
-  Key cur_key_;
-
-  /// a payload of cursol points
-  Payload cur_payload_;
 
  public:
   /*################################################################################################
@@ -75,13 +66,11 @@ class RecordIterator
       BwTree_t* bwtree,
       const Key* begin_key,
       const bool begin_closed,
-      Node_t* page,
-      const bool scan_finished)
+      Node_t* page)
       : bwtree_{bwtree},
         begin_key_{begin_key},
         begin_closed_{begin_closed},
         cur_position_{0},
-        scan_finished_{scan_finished},
         page_{page}
   {
   }
@@ -126,29 +115,19 @@ class RecordIterator
   bool
   HasNext()
   {
-    if (((int64_t)page_->GetRecordCount() - cur_position_) > 0) return true;
-    if (scan_finished_) return false;
+    if (LeftRecordsCount() > 0) return true;
+    if (page_->GetSiblingNode() == nullptr) return false;
 
     auto sib_node = page_->GetSiblingNode()->load(mo_relax);
     delete page_;
 
-    scan_finished_ = bwtree_->LeafScan(sib_node, begin_key_,
-                                         begin_closed_, &page_);
+    page_ = bwtree_->LeafScan(sib_node, begin_key_, begin_closed_);
     cur_position_ = 0;
     return HasNext();
   }
 
-  void
-  SetCurrentKeyValue()
-  {
-    cur_key_ = *reinterpret_cast<Key*>(page_->GetKeyAddr(page_->GetMetadata(cur_position_)));
-    page_->CopyPayload(page_->GetMetadata(cur_position_), cur_payload_);
-  }
-
-  size_t
-  GetRecordCount()
-  {
-    return page_->GetRecordCount();
+  size_t LeftRecordsCount(){
+    return page_->GetRecordCount() - cur_position_;
   }
 
   /**

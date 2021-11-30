@@ -138,6 +138,9 @@ class BwTreeFixture : public testing::Test
       const std::vector<size_t> &expected_keys,
       const std::vector<size_t> &expected_payloads)
   {
+    //
+    //testing::internal::CaptureStdout(); // 標準出力キャプチャ開始
+    //
     const Key *begin_key = nullptr, *end_key = nullptr;
     if (!begin_null) begin_key = &keys[begin_key_id];
     if (!end_null) end_key = &keys[end_key_id];
@@ -147,13 +150,19 @@ class BwTreeFixture : public testing::Test
     for (; iter.HasNext(); ++iter, ++count) {
       const auto [key, payload] = *iter;
       bool key_comp_result = true, payload_comp_result = true;
-      if(end_key != nullptr){
-        if((key > *end_key) || ((*end_key == key) && (!end_closed))){
+      if (end_key != nullptr) {
+        if (component::LT<Key, KeyComp>(*end_key, key)
+            || (component::IsEqual<Key, KeyComp>(end_key, component::GetAddr(key))
+                && (!end_closed)))
           break;
-        }
+      }
+      if constexpr (IsVariableLengthData<Key>()) {
+        key_comp_result = component::IsEqual<Key, KeyComp>(keys[expected_keys[count]], key);
+      } else {
+        key_comp_result = component::IsEqual<Key, KeyComp>(
+            component::GetAddr(keys[expected_keys[count]]), component::GetAddr(key));
       }
 
-      EXPECT_EQ(key, keys[expected_keys[count]]);
       if constexpr (IsVariableLengthData<Payload>()) {
         payload_comp_result =
             component::IsEqual<Payload, PayloadComp>(payloads[expected_payloads[count]], payload);
@@ -166,6 +175,8 @@ class BwTreeFixture : public testing::Test
       EXPECT_TRUE(payload_comp_result);
     }
     EXPECT_EQ(expected_keys.size(), count);
+
+    //EXPECT_STREQ("",testing::internal::GetCapturedStdout().c_str());
   }
 
   void
@@ -536,28 +547,28 @@ TYPED_TEST(BwTreeFixture, Scan_DuplicateKeys_ScanUpdatedRecords)
 
 TYPED_TEST(BwTreeFixture, Scan_LeftOpened_ScanInRangeRecords)
 {  //
-  const size_t repeat_num = TestFixture::kMaxRecordNum / 2;
-
+  const size_t repeat_num = TestFixture::kMaxRecordNum;
+  const size_t half_num = repeat_num / 2;
   std::vector<size_t> expected_ids;
-  for (size_t i = 0; i < TestFixture::kMaxRecordNum; ++i) {
+  for (size_t i = 0; i < repeat_num; ++i) {
     TestFixture::VerifyWrite(i, i);
-    if (i > repeat_num) expected_ids.emplace_back(i);
+    if (i > half_num) expected_ids.emplace_back(i);
   }
 
-  TestFixture::VerifyScan(repeat_num, false, false, 0, true, true, expected_ids, expected_ids);
+  TestFixture::VerifyScan(half_num, false, false, 0, true, true, expected_ids, expected_ids);
 }
 
 TYPED_TEST(BwTreeFixture, Scan_LeftClosed_ScanInRangeRecords)
 {  //
-  const size_t repeat_num = TestFixture::kMaxRecordNum / 2;
-
+  const size_t repeat_num = TestFixture::kMaxRecordNum;
+  const size_t half_num = repeat_num / 2;
   std::vector<size_t> expected_ids;
-  for (size_t i = 0; i < TestFixture::kMaxRecordNum; ++i) {
+  for (size_t i = 0; i < repeat_num; ++i) {
     TestFixture::VerifyWrite(i, i);
-    if (i >= repeat_num) expected_ids.emplace_back(i);
+    if (i >= half_num) expected_ids.emplace_back(i);
   }
 
-  TestFixture::VerifyScan(repeat_num, false, true, 0, true, true, expected_ids, expected_ids);
+  TestFixture::VerifyScan(half_num, false, true, 0, true, true, expected_ids, expected_ids);
 }
 
 TYPED_TEST(BwTreeFixture, Scan_RightOpened_ScanInRangeRecords)
@@ -662,7 +673,7 @@ TYPED_TEST(BwTreeFixture, Scan_RightOpenedWithLeafSplit_ScanInRangeRecords)
 
 TYPED_TEST(BwTreeFixture, Scan_RightClosedWithLeafSplit_ScanInRangeRecords)
 {  //
-    const size_t repeat_num = TestFixture::kMaxRecordNum * 2;
+  const size_t repeat_num = TestFixture::kMaxRecordNum * 2;
   const size_t half_key_num = repeat_num / 2;
 
   std::vector<size_t> expected_ids;
@@ -672,6 +683,24 @@ TYPED_TEST(BwTreeFixture, Scan_RightClosedWithLeafSplit_ScanInRangeRecords)
   }
 
   TestFixture::VerifyScan(0, true, true, half_key_num, false, true, expected_ids, expected_ids);
+}
+
+TYPED_TEST(BwTreeFixture, Scan_DuplicateKeysWithInternalSplit_ScanUpdatedRecords)
+{  //
+  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kMaxRecordNum;
+
+  std::vector<size_t> expected_keys;
+  std::vector<size_t> expected_payloads;
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyUpdate(i, i + 1);
+    expected_keys.emplace_back(i);
+    expected_payloads.emplace_back(i + 1);
+  }
+
+  TestFixture::VerifyScan(0, true, true, 0, true, true, expected_keys, expected_payloads);
 }
 
 }  // namespace dbgroup::index::bw_tree::test

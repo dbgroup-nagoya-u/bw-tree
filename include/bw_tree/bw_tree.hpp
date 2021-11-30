@@ -21,6 +21,7 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#include <iostream> //deb
 
 #include "component/mapping_table.hpp"
 #include "component/node.hpp"
@@ -474,60 +475,62 @@ class BwTree
     }
   }
 
-
   void
   MergeLeafRecords(  //
       Node_t *consol_node,
       size_t offset,
       const Node_t *base_node,
       const size_t base_rec_size,
-      const Key* begin_k,
+      const Key *begin_k,
       const bool begin_closed,
       const std::vector<Record> &records)
   {
-
     size_t rec_num = 0;
     size_t base_cur_num = 0;
     size_t delta_cur_num = 0;
     size_t delta_rec_size = records.size();
 
-    while(base_cur_num < base_rec_size  && delta_cur_num < delta_rec_size){
-      auto *delta_key = records[delta_cur_num].key;
+    while (base_cur_num < base_rec_size && delta_cur_num < delta_rec_size) {
       const auto base_meta = base_node->GetMetadata(base_cur_num);
       void *base_key = base_node->GetKeyAddr(base_meta);
-      if(!component::LT<Key, Comp>(base_key,records[delta_cur_num].key)){
-        if(component::IsInRange<Key, Comp>(delta_key, begin_k, begin_closed, nullptr, true)){
-          consol_node->CopyRecordFrom(rec_num++, offset, records[delta_cur_num].node, records[delta_cur_num].meta);
+      if (!component::LT<Key, Comp>(base_key, records[delta_cur_num].key)) {
+        if (component::IsInRange<Key, Comp>(records[delta_cur_num].key, begin_k, begin_closed, nullptr, true)) {
+          consol_node->CopyRecordFrom(rec_num++, offset, records[delta_cur_num].node,
+                                      records[delta_cur_num].meta);
         }
-        if(!component::LT<Key, Comp>(records[delta_cur_num].key,base_key)){
+        if (!component::LT<Key, Comp>(records[delta_cur_num].key, base_key)) {
           ++base_cur_num;
         }
         ++delta_cur_num;
-      }else{
-        if(component::IsInRange<Key, Comp>(base_key, begin_k, begin_closed, nullptr, true)){
-          consol_node->CopyRecordFrom(rec_num++, offset,base_node , base_meta);
+      } else {
+        if (component::IsInRange<Key, Comp>(base_key, begin_k, begin_closed, nullptr, true)) {
+          consol_node->CopyRecordFrom(rec_num++, offset, base_node, base_meta);
         }
         ++base_cur_num;
       }
     }
+    std::cout << "debug" << std::endl;
 
-    while(delta_cur_num < delta_rec_size){
-        if(component::IsInRange<Key, Comp>(records[delta_cur_num].key, begin_k, begin_closed, nullptr, true)){
-          consol_node->CopyRecordFrom(rec_num++, offset, records[delta_cur_num].node, records[delta_cur_num].meta);
-        }
-        ++delta_cur_num;
+    while (delta_cur_num < delta_rec_size) {
+      if (component::IsInRange<Key, Comp>(records[delta_cur_num].key, begin_k, begin_closed,
+                                          nullptr, true)) {
+        consol_node->CopyRecordFrom(rec_num++, offset, records[delta_cur_num].node,
+                                    records[delta_cur_num].meta);
+      }
+      ++delta_cur_num;
     }
 
-    while(base_cur_num < base_rec_size){
+    while (base_cur_num < base_rec_size) {
       const auto base_meta = base_node->GetMetadata(base_cur_num);
       void *base_key = base_node->GetKeyAddr(base_meta);
-      if(component::IsInRange<Key, Comp>(base_key, begin_k, begin_closed, nullptr, true)){
-          consol_node->CopyRecordFrom(rec_num++, offset,base_node , base_meta);
-        }
-        ++base_cur_num;
+      if (component::IsInRange<Key, Comp>(base_key, begin_k, begin_closed, nullptr, true)) {
+        consol_node->CopyRecordFrom(rec_num++, offset, base_node, base_meta);
+      }
+      ++base_cur_num;
     }
 
     consol_node->SetRecordCount(rec_num);
+    // consol_node->SetRecordCount(base_rec_size);
   }
 
   std::pair<size_t, size_t>
@@ -1026,26 +1029,18 @@ class BwTree
   RecordIterator_t
   Scan(  //
       const Key *begin_key = nullptr,
-      const bool begin_closed = false,
-      Node_t *page = nullptr)
+      const bool begin_closed = false)
   {
     const auto guard = gc_.CreateEpochGuard();
-
-    Key minimum_key = 0;
+    Key minimum_key =  std::numeric_limits<Key>::min();
     const auto minimum_key_addr = component::GetAddr(minimum_key);
     Mapping_t *consol_node = nullptr;
-
     const auto node_stack = (begin_key == nullptr)
                                 ? SearchLeafNode(minimum_key_addr, true, consol_node)
                                 : SearchLeafNode(begin_key, begin_closed, consol_node);
-
     Mapping_t *page_id = node_stack.back();
-    Node_t *cur_node = page_id->load(mo_relax);
-
-    const bool scan_finished =
-        LeafScan(cur_node, begin_key, begin_closed, &page);
-
-    return RecordIterator_t{this,begin_key, begin_closed, page, scan_finished};
+    Node_t *page = LeafScan(page_id->load(mo_relax), begin_key, begin_closed);
+    return RecordIterator_t{this, begin_key, begin_closed, page};
   }
 
   /**
@@ -1059,17 +1054,15 @@ class BwTree
    * @param node a target node.
    * @param begin_k the pointer of a begin key of a range scan.
    * @param begin_closed a flag to indicate whether the begin side of a range is closed.
-   * @param page a page to copy target keys/payloads. This argument is used internally.
    * @retval true if scanning finishes.
    * @retval false if scanning is in progress.
    */
 
-  bool
+  Node_t *
   LeafScan(  //
       Node_t *target_node,
       const Key *begin_k,
-      const bool begin_closed,
-      Node_t **page)
+      const bool begin_closed)
   {
     // collect and sort delta records
     std::vector<Record> records;
@@ -1082,34 +1075,29 @@ class BwTree
 
     const auto sib_page = GetSiblingPage(end_node);
 
-    *page = Node_t::CreateNode(offset, node_type, 0, sib_page);
+    Node_t *page = Node_t::CreateNode(offset, node_type, 0, sib_page);
 
     // copy the lowest/highest keys
     const auto low_key = target_node->GetLowKeyAddr();
     if (low_key == nullptr) {
-      (*page)->SetLowMeta(Metadata{0, 0, 0});
+      page->SetLowMeta(Metadata{0, 0, 0});
     } else {
       const auto low_key_len = base_node->GetLowMeta().GetKeyLength();
-      (*page)->SetKey(offset, low_key, low_key_len);
-      (*page)->SetLowMeta(Metadata{offset, low_key_len, low_key_len});
+      page->SetKey(offset, low_key, low_key_len);
+      page->SetLowMeta(Metadata{offset, low_key_len, low_key_len});
     }
     const auto high_key = GetHighKey(end_node);
     if (high_key == nullptr) {
-      (*page)->SetHighMeta(Metadata{0, 0, 0});
+      page->SetHighMeta(Metadata{0, 0, 0});
     } else {
       const auto high_key_len = GetHighKeyLength(end_node);
-      (*page)->SetKey(offset, high_key, high_key_len);
-      (*page)->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
+      page->SetKey(offset, high_key, high_key_len);
+      page->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
     }
     // copy active records
-    MergeLeafRecords((*page),offset,base_node,base_rec_num,begin_k,begin_closed,records);
 
-    bool scan_finished = false;
-
-    if (sib_page == nullptr) {
-      scan_finished = true;
-    }
-    return scan_finished;
+    MergeLeafRecords(page, offset, base_node, base_rec_num, begin_k, begin_closed, records);
+    return page;
   }
 
   /*################################################################################################
