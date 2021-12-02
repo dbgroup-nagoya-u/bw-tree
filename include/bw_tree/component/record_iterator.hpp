@@ -45,12 +45,6 @@ class RecordIterator
   /// a pointer to BwTree to perform continuous scan
   BwTree_t* bwtree_;
 
-  /// the end of range scan
-  const Key* end_key_;
-
-  /// a flag to specify whether the end of range is closed
-  bool end_is_closed_;
-
   /// the number of records in this node.
   uint16_t record_count_;
 
@@ -63,6 +57,10 @@ class RecordIterator
   /// node
   Node_t* node_;
 
+  const Key* begin_key_;
+
+  bool begin_closed_;
+
  public:
   /*################################################################################################
    * Public constructors/destructors
@@ -70,15 +68,16 @@ class RecordIterator
 
   constexpr RecordIterator(
     BwTree_t* bwtree,
-    const Key* end_key,
-    const bool end_is_closed,
+    const Key* begin_key,
+    const bool begin_closed,
     Node_t* node)
     : bwtree_{bwtree},
-      end_key_{end_key},
-      end_is_closed_{end_is_closed},
-      record_count_{node->GetRecordCount()},
-      current_idx_{node->GetLowKeyAddr()},
-      meta_{node->GetMetadata(current_idx_)}
+      node_{node},
+      record_count_{node_->GetRecordCount()},
+      current_idx_{0},
+      meta_{node->GetMetadata(current_idx_)},
+      begin_key_{begin_key},
+      begin_closed_{begin_closed}
   {
   }
 
@@ -110,19 +109,6 @@ class RecordIterator
   operator++()
   {
     current_idx_++;
-    current_addr_ += GetKeyLength() + GetPayloadLength();
-    if constexpr (IsVariableLengthData<Key>()) {
-      if (current_addr_ != end_addr_) {
-        memcpy(&key_length_, current_addr_, sizeof(uint32_t));
-        current_addr_ += sizeof(uint32_t);
-      }
-    }
-    if constexpr (IsVariableLengthData<Payload>()) {
-      if (current_addr_ != end_addr_) {
-        memcpy(&payload_length_, current_addr_, sizeof(uint32_t));
-        current_addr_ += sizeof(uint32_t);
-      }
-    }
   }
 
   /*################################################################################################
@@ -132,26 +118,23 @@ class RecordIterator
   /**
    * @brief Check if there are any records left.
    *
-   * Note that a BzTree's scan function copies a target leaf node one by one, so this
    * function may call a scan function internally to get a next leaf node.
    *
-   * @retval true if there are any records left.
-   * @retval false if there are no records left.
+   * @retval true if there are any records or next node left.
+   * @retval false if there are no records and node left.
    */
   bool
   HasNext()
   {
-    if (current_idx_ < meta_.GetKeyLength()) return true;
-    if (node_->GetNextNode() == NULL) return false;
-
-    // search a next leaf node to continue scanning
-    const auto begin_key = page_->GetLastKey();
-    const auto begin_key = node_->GetHighKeyAddr();
-    auto node = node_->GetNextNode();
-
-    *this = bwtree_->Scan(&begin_key, false, end_key_, end_is_closed_, node);
-
-    return HasNext();
+    if (current_idx_ < record_count_) return true;
+    else if (node_->GetNextNode() != nullptr) {
+      node_ = bw_tree_->LeafScan(node_->GetNextNode(), begin_key_, begin_closed_);
+      record_count_ = node_->GetRecordCount();
+      current_idx_ = 0;
+      meta_ = node_->GetMetadata(current_idx_);
+      return HasNext();
+    }
+    else return false;
   }
 
   /**
@@ -160,10 +143,11 @@ class RecordIterator
   constexpr Key
   GetKey() const
   {
+    meta_ = node_->GetMetadata(current_idx_);
     if constexpr (IsVariableLengthData<Key>()) {
-      return Cast<Key>(current_addr_);
+      return Cast<Key>(node_->GetKeyAddr(meta_));
     } else {
-      return *Cast<Key*>(current_addr_);
+      return *Cast<Key*>(node_->GetKeyAddr(meta_));
     }
   }
 
@@ -173,36 +157,11 @@ class RecordIterator
   constexpr Payload
   GetPayload() const
   {
+    meta_ = node_->GetMetadata(current_idx_);
     if constexpr (IsVariableLengthData<Payload>()) {
-      return Cast<Payload>(current_addr_ += GetKeyLength());
+      return Cast<Payload>(node_->GetPayload(meta_));
     } else {
-      return *Cast<Payload*>(current_addr_ + GetKeyLength());
-    }
-  }
-
-  /**
-   * @return size_t: the length of a current kay
-   */
-  constexpr size_t
-  GetKeyLength() const
-  {
-    if constexpr (IsVariableLengthData<Key>()) {
-      return key_length_;
-    } else {
-      return sizeof(Key);
-    }
-  }
-
-  /**
-   * @return size_t: the length of a current payload
-   */
-  constexpr size_t
-  GetPayloadLength() const
-  {
-    if constexpr (IsVariableLengthData<Payload>()) {
-      return payload_length_;
-    } else {
-      return sizeof(Payload);
+      return *Cast<Payload*>(node_->GetPayload(meta_));
     }
   }
 };
