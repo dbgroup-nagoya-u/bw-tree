@@ -22,7 +22,11 @@
 #include "common.hpp"
 #include "node.hpp"
 
-namespace dbgroup::index::bw_tree::component
+namespace dbgroup::index::bw_tree
+{
+template <class Key, class Payload, class Compare>
+class BwTree;
+namespace component
 {
 /**
  * @brief A class to represent a iterator for scan results.
@@ -35,7 +39,7 @@ template <class Key, class Payload, class Compare>
 class RecordIterator
 {
   using BwTree_t = BwTree<Key, Payload, Compare>;
-  using Node_t = Node<Key, Compare>
+  using Node_t = Node<Key, Compare>;
 
  private :
   /*################################################################################################
@@ -47,9 +51,6 @@ class RecordIterator
 
   /// the number of records in this node.
   uint16_t record_count_;
-
-  /// metadata
-  Metadata meta_;
 
   /// an index of a current record
   size_t current_idx_;
@@ -75,7 +76,6 @@ class RecordIterator
       node_{node},
       record_count_{node_->GetRecordCount()},
       current_idx_{0},
-      meta_{node->GetMetadata(current_idx_)},
       begin_key_{begin_key},
       begin_closed_{begin_closed}
   {
@@ -128,10 +128,9 @@ class RecordIterator
   {
     if (current_idx_ < record_count_) return true;
     else if (node_->GetNextNode() != nullptr) {
-      node_ = bw_tree_->LeafScan(node_->GetNextNode(), begin_key_, begin_closed_);
+      node_ = bwtree_->LeafScan(node_->GetNextNode(), begin_key_, begin_closed_);
       record_count_ = node_->GetRecordCount();
       current_idx_ = 0;
-      meta_ = node_->GetMetadata(current_idx_);
       return HasNext();
     }
     else return false;
@@ -143,11 +142,10 @@ class RecordIterator
   constexpr Key
   GetKey() const
   {
-    meta_ = node_->GetMetadata(current_idx_);
     if constexpr (IsVariableLengthData<Key>()) {
-      return Cast<Key>(node_->GetKeyAddr(meta_));
+      return Cast<Key>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
     } else {
-      return *Cast<Key*>(node_->GetKeyAddr(meta_));
+      return *Cast<Key*>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
     }
   }
 
@@ -157,13 +155,10 @@ class RecordIterator
   constexpr Payload
   GetPayload() const
   {
-    meta_ = node_->GetMetadata(current_idx_);
-    if constexpr (IsVariableLengthData<Payload>()) {
-      return Cast<Payload>(node_->GetPayload(meta_));
-    } else {
-      return *Cast<Payload*>(node_->GetPayload(meta_));
-    }
+    Payload payload{};
+    node_->CopyPayload(node_->GetMetadata(current_idx_), payload);
+    return payload;
   }
 };
-
+}
 }  // namespace dbgroup::index::bw_tree::component
