@@ -137,7 +137,9 @@ class BwTree
           delta_type == DeltaNodeType::kInsert) {
         // check whether this delta record includes a target key
         const auto low_key = cur_node->GetLowKeyAddr(), high_key = cur_node->GetHighKeyAddr();
+
         if (component::IsInRange<Key, Comp>(key, low_key, !closed, high_key, closed)) {
+
           child_page = cur_node->template GetPayload<Mapping_t *>(cur_node->GetLowMeta());
           ++delta_chain_length;
           break;
@@ -146,7 +148,7 @@ class BwTree
         const auto high_key = cur_node->GetHighKeyAddr();
         if (high_key != nullptr
             && (component::LT<Key, Comp>(high_key, key)
-                || (!closed && component::LT<Key, Comp>(key, high_key)))) {
+                || (!closed && component::LT<Key, Comp>(key, high_key)))) {//???
           // traverse to a sibling node
           page_id = cur_node->GetSiblingNode();
           cur_node = page_id->load(mo_relax);
@@ -403,6 +405,7 @@ class BwTree
         if (sep_key == nullptr || !component::LT<Key, Comp>(sep_key, rec.key)) {
           // check whether this delta record has a new key
           const auto it = std::lower_bound(records.begin(), records.end(), rec);
+          //std::cout << reinterpret_cast<char*>(rec.key) << "//";//deb
           if (it == records.end()) {
             records.emplace_back(std::move(rec));
           } else if (component::LT<Key, Comp>(rec.key, (*it).key)) {
@@ -485,6 +488,7 @@ class BwTree
       const bool begin_closed,
       const std::vector<Record> &records)
   {
+    Key* begin_key = const_cast<Key*>(begin_k);
     size_t rec_num = 0;
     size_t base_cur_num = 0;
     size_t delta_cur_num = 0;
@@ -493,27 +497,33 @@ class BwTree
     while (base_cur_num < base_rec_size && delta_cur_num < delta_rec_size) {
       const auto base_meta = base_node->GetMetadata(base_cur_num);
       void *base_key = base_node->GetKeyAddr(base_meta);
+
+      //std::cout << reinterpret_cast<char*>(base_key) << " ";
+      //std::cout << reinterpret_cast<char*>(records[delta_cur_num].key) << "::";
+      //if(begin_k)
+      //  std::cout << (*begin_key) << "||";
       if (!component::LT<Key, Comp>(base_key, records[delta_cur_num].key)) {
-        if (component::IsInRange<Key, Comp>(records[delta_cur_num].key, begin_k, begin_closed, nullptr, true)) {
+        if (!begin_key || component::LT<Key, Comp>(*begin_key, records[delta_cur_num].key) || (!component::LT<Key, Comp>(records[delta_cur_num].key, *begin_key) && begin_closed)) {
           consol_node->CopyRecordFrom(rec_num++, offset, records[delta_cur_num].node,
                                       records[delta_cur_num].meta);
+
         }
-        if (!component::LT<Key, Comp>(records[delta_cur_num].key, base_key)) {
+        if (!begin_key || !component::LT<Key, Comp>(records[delta_cur_num].key, base_key)) {
           ++base_cur_num;
         }
         ++delta_cur_num;
       } else {
-        if (component::IsInRange<Key, Comp>(base_key, begin_k, begin_closed, nullptr, true)) {
+        if (!begin_key || component::LT<Key, Comp>(*begin_key, base_key) || (!component::LT<Key, Comp>(base_key, *begin_key) && begin_closed)) {
           consol_node->CopyRecordFrom(rec_num++, offset, base_node, base_meta);
         }
         ++base_cur_num;
       }
     }
-    std::cout << "debug" << std::endl;
+
 
     while (delta_cur_num < delta_rec_size) {
-      if (component::IsInRange<Key, Comp>(records[delta_cur_num].key, begin_k, begin_closed,
-                                          nullptr, true)) {
+
+     if (!begin_key || component::LT<Key, Comp>(*begin_key, records[delta_cur_num].key) || (!component::LT<Key, Comp>(records[delta_cur_num].key, *begin_key) && begin_closed)) {
         consol_node->CopyRecordFrom(rec_num++, offset, records[delta_cur_num].node,
                                     records[delta_cur_num].meta);
       }
@@ -523,14 +533,13 @@ class BwTree
     while (base_cur_num < base_rec_size) {
       const auto base_meta = base_node->GetMetadata(base_cur_num);
       void *base_key = base_node->GetKeyAddr(base_meta);
-      if (component::IsInRange<Key, Comp>(base_key, begin_k, begin_closed, nullptr, true)) {
+      if (!begin_key || component::LT<Key, Comp>(*begin_key, base_key) || (!component::LT<Key, Comp>(base_key, *begin_key) && begin_closed)) {
         consol_node->CopyRecordFrom(rec_num++, offset, base_node, base_meta);
       }
       ++base_cur_num;
     }
 
     consol_node->SetRecordCount(rec_num);
-    // consol_node->SetRecordCount(base_rec_size);
   }
 
   std::pair<size_t, size_t>
@@ -1029,16 +1038,29 @@ class BwTree
   RecordIterator_t
   Scan(  //
       const Key *begin_key = nullptr,
-      const bool begin_closed = false)
+      bool begin_closed = true)
   {
+    Key *minimum_key_addr;
+    Key minimum_key_num = 0;
+    const char* minimum_key_char = "";
+    if(begin_key == nullptr){
+      begin_closed = true;
+      if(IsVariableLengthData<Key>()){
+
+        minimum_key_addr = reinterpret_cast<Key*>((void*)&minimum_key_char);
+      }else{
+        minimum_key_addr = &minimum_key_num;
+      }
+    }
+
     const auto guard = gc_.CreateEpochGuard();
-    Key minimum_key =  std::numeric_limits<Key>::min();
-    const auto minimum_key_addr = component::GetAddr(minimum_key);
+
     Mapping_t *consol_node = nullptr;
     const auto node_stack = (begin_key == nullptr)
-                                ? SearchLeafNode(minimum_key_addr, true, consol_node)
-                                : SearchLeafNode(begin_key, begin_closed, consol_node);
+                                ? SearchLeafNode(component::GetAddr(*minimum_key_addr), true, consol_node)
+                                : SearchLeafNode(component::GetAddr(*begin_key), begin_closed, consol_node);
     Mapping_t *page_id = node_stack.back();
+
     Node_t *page = LeafScan(page_id->load(mo_relax), begin_key, begin_closed);
     return RecordIterator_t{this, begin_key, begin_closed, page};
   }
@@ -1078,7 +1100,7 @@ class BwTree
     Node_t *page = Node_t::CreateNode(offset, node_type, 0, sib_page);
 
     // copy the lowest/highest keys
-    const auto low_key = target_node->GetLowKeyAddr();
+    const auto low_key = base_node->GetLowKeyAddr();
     if (low_key == nullptr) {
       page->SetLowMeta(Metadata{0, 0, 0});
     } else {

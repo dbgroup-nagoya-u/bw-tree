@@ -127,6 +127,22 @@ class BwTreeFixture : public testing::Test
     EXPECT_EQ(ReturnCode::kSuccess, rc);
   }
 
+  //deb
+  void
+  VerifyTest(){
+
+    char *a,*b,*begin;
+      a = reinterpret_cast<char *>(malloc(kVariableDataLength));
+      b = reinterpret_cast<char *>(malloc(kVariableDataLength));
+      begin = reinterpret_cast<char *>(malloc(kVariableDataLength));
+      snprintf(a, kVariableDataLength, "%011lu", 1UL);
+      snprintf(b, kVariableDataLength, "%011lu", 2UL);
+      snprintf(begin, kVariableDataLength, "%011lu", 0UL);
+    EXPECT_TRUE((component::IsInRange<Key, KeyComp>(a, begin, true, nullptr, true)));
+    EXPECT_TRUE((component::IsInRange<Key, KeyComp>(b, begin, true, nullptr, true)));
+
+  }
+
   void
   VerifyScan(  //
       const size_t begin_key_id,
@@ -138,24 +154,23 @@ class BwTreeFixture : public testing::Test
       const std::vector<size_t> &expected_keys,
       const std::vector<size_t> &expected_payloads)
   {
-    //
-    //testing::internal::CaptureStdout(); // 標準出力キャプチャ開始
-    //
     const Key *begin_key = nullptr, *end_key = nullptr;
     if (!begin_null) begin_key = &keys[begin_key_id];
     if (!end_null) end_key = &keys[end_key_id];
 
     RecordIterator_t iter = bw_tree->Scan(begin_key, begin_closed);
     size_t count = 0;
+
     for (; iter.HasNext(); ++iter, ++count) {
       const auto [key, payload] = *iter;
       bool key_comp_result = true, payload_comp_result = true;
       if (end_key != nullptr) {
         if (component::LT<Key, KeyComp>(*end_key, key)
-            || (component::IsEqual<Key, KeyComp>(end_key, component::GetAddr(key))
+            || ((!component::LT<Key, KeyComp>(key, *end_key))
                 && (!end_closed)))
           break;
       }
+
       if constexpr (IsVariableLengthData<Key>()) {
         key_comp_result = component::IsEqual<Key, KeyComp>(keys[expected_keys[count]], key);
       } else {
@@ -176,7 +191,6 @@ class BwTreeFixture : public testing::Test
     }
     EXPECT_EQ(expected_keys.size(), count);
 
-    //EXPECT_STREQ("",testing::internal::GetCapturedStdout().c_str());
   }
 
   void
@@ -701,6 +715,13 @@ TYPED_TEST(BwTreeFixture, Scan_DuplicateKeysWithInternalSplit_ScanUpdatedRecords
   }
 
   TestFixture::VerifyScan(0, true, true, 0, true, true, expected_keys, expected_payloads);
+}
+
+//deb
+TYPED_TEST(BwTreeFixture, Mytest)
+{  //
+
+  TestFixture::VerifyTest();
 }
 
 }  // namespace dbgroup::index::bw_tree::test
