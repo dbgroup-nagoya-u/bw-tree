@@ -74,7 +74,7 @@ class RecordIterator
     Node_t* node)
     : bwtree_{bwtree},
       node_{node},
-      record_count_{node_->GetRecordCount()},
+      record_count_{node->GetRecordCount()},
       current_idx_{0},
       begin_key_{begin_key},
       begin_closed_{begin_closed}
@@ -128,7 +128,9 @@ class RecordIterator
   {
     if (current_idx_ < record_count_) return true;
     else if (node_->GetNextNode() != nullptr) {
-      node_ = bwtree_->LeafScan(node_->GetNextNode(), begin_key_, begin_closed_);
+      auto next_node = node_->GetNextNode();
+      delete(node_);
+      node_ = bwtree_->LeafScan(next_node->GetNextNode(), begin_key_, begin_closed_);
       record_count_ = node_->GetRecordCount();
       current_idx_ = 0;
       return HasNext();
