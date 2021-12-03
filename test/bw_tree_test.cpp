@@ -127,22 +127,6 @@ class BwTreeFixture : public testing::Test
     EXPECT_EQ(ReturnCode::kSuccess, rc);
   }
 
-  //deb
-  void
-  VerifyTest(){
-
-    char *a,*b,*begin;
-      a = reinterpret_cast<char *>(malloc(kVariableDataLength));
-      b = reinterpret_cast<char *>(malloc(kVariableDataLength));
-      begin = reinterpret_cast<char *>(malloc(kVariableDataLength));
-      snprintf(a, kVariableDataLength, "%011lu", 1UL);
-      snprintf(b, kVariableDataLength, "%011lu", 2UL);
-      snprintf(begin, kVariableDataLength, "%011lu", 0UL);
-    EXPECT_TRUE((component::IsInRange<Key, KeyComp>(a, begin, true, nullptr, true)));
-    EXPECT_TRUE((component::IsInRange<Key, KeyComp>(b, begin, true, nullptr, true)));
-
-  }
-
   void
   VerifyScan(  //
       const size_t begin_key_id,
@@ -715,13 +699,6 @@ TYPED_TEST(BwTreeFixture, Scan_DuplicateKeysWithInternalSplit_ScanUpdatedRecords
   }
 
   TestFixture::VerifyScan(0, true, true, 0, true, true, expected_keys, expected_payloads);
-}
-
-//deb
-TYPED_TEST(BwTreeFixture, Mytest)
-{  //
-
-  TestFixture::VerifyTest();
 }
 
 }  // namespace dbgroup::index::bw_tree::test

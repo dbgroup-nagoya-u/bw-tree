@@ -21,7 +21,6 @@
 #include <tuple>
 #include <utility>
 #include <vector>
-#include <iostream> //deb
 
 #include "component/mapping_table.hpp"
 #include "component/node.hpp"
@@ -148,7 +147,7 @@ class BwTree
         const auto high_key = cur_node->GetHighKeyAddr();
         if (high_key != nullptr
             && (component::LT<Key, Comp>(high_key, key)
-                || (!closed && component::LT<Key, Comp>(key, high_key)))) {//???
+                || (!closed && component::LT<Key, Comp>(key, high_key)))) {
           // traverse to a sibling node
           page_id = cur_node->GetSiblingNode();
           cur_node = page_id->load(mo_relax);
