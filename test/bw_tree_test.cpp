@@ -150,8 +150,7 @@ class BwTreeFixture : public testing::Test
       bool key_comp_result = true, payload_comp_result = true;
       if (end_key != nullptr) {
         if (component::LT<Key, KeyComp>(*end_key, key)
-            || ((!component::LT<Key, KeyComp>(key, *end_key))
-                && (!end_closed)))
+            || ((!component::LT<Key, KeyComp>(key, *end_key)) && (!end_closed)))
           break;
       }
 
@@ -174,7 +173,6 @@ class BwTreeFixture : public testing::Test
       EXPECT_TRUE(payload_comp_result);
     }
     EXPECT_EQ(expected_keys.size(), count);
-
   }
 
   void

@@ -41,7 +41,7 @@ class RecordIterator
   using BwTree_t = BwTree<Key, Payload, Compare>;
   using Node_t = Node<Key, Compare>;
 
-// private :
+ private:
   /*################################################################################################
    * Internal member variables
    *##############################################################################################*/
@@ -58,26 +58,13 @@ class RecordIterator
   /// an index of a current record
   size_t current_idx_;
 
-  const Key* begin_key_;
-
-  bool begin_closed_;
-
  public:
   /*################################################################################################
    * Public constructors/destructors
    *##############################################################################################*/
 
-  constexpr RecordIterator(
-    BwTree_t* bwtree,
-    const Key* begin_key,
-    const bool begin_closed,
-    Node_t* node)
-    : bwtree_{bwtree},
-      node_{node},
-      record_count_{node->GetRecordCount()},
-      current_idx_{0},
-      begin_key_{begin_key},
-      begin_closed_{begin_closed}
+  constexpr RecordIterator(BwTree_t* bwtree, Node_t* node)
+      : bwtree_{bwtree}, node_{node}, record_count_{node->GetRecordCount()}, current_idx_{0}
   {
   }
 
@@ -126,29 +113,17 @@ class RecordIterator
   bool
   HasNext()
   {
-    if (current_idx_ < record_count_) return true;
+    if (current_idx_ < record_count_)
+      return true;
     else if (node_->GetSiblingNode() == nullptr) {
       return false;
     }
     auto next_node = node_->GetSiblingNode()->load(mo_relax);
-    delete(node_);
-    node_ = bwtree_->LeafScan(next_node, begin_key_, begin_closed_);
+    delete (node_);
+    node_ = bwtree_->LeafScan(next_node);
     record_count_ = node_->GetRecordCount();
     current_idx_ = 0;
     return HasNext();
-
-    /*
-    if (current_idx_ < record_count_) return true;
-    else if (node_->GetNextNode() != nullptr) {
-      auto next_node = node_->GetNextNode();
-      delete(node_);
-      node_ = bwtree_->LeafScan(next_node->GetNextNode(), begin_key_, begin_closed_);
-      record_count_ = node_->GetRecordCount();
-      current_idx_ = 0;
-      return HasNext();
-    }
-    else return false;
-    */
   }
 
   /**
@@ -160,7 +135,7 @@ class RecordIterator
     if constexpr (IsVariableLengthData<Key>()) {
       return reinterpret_cast<const Key>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
     } else {
-      return *reinterpret_cast<const Key *>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
+      return *reinterpret_cast<const Key*>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
     }
   }
 
@@ -175,5 +150,5 @@ class RecordIterator
     return payload;
   }
 };
-}
-}  // namespace dbgroup::index::bw_tree::component
+}  // namespace component
+}  // namespace dbgroup::index::bw_tree
