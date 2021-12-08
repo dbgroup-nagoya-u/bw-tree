@@ -41,7 +41,7 @@ class RecordIterator
   using BwTree_t = BwTree<Key, Payload, Compare>;
   using Node_t = Node<Key, Compare>;
 
- private :
+// private :
   /*################################################################################################
    * Internal member variables
    *##############################################################################################*/
@@ -49,14 +49,14 @@ class RecordIterator
   /// a pointer to BwTree to perform continuous scan
   BwTree_t* bwtree_;
 
+  /// node
+  Node_t* node_;
+
   /// the number of records in this node.
-  uint16_t record_count_;
+  size_t record_count_;
 
   /// an index of a current record
   size_t current_idx_;
-
-  /// node
-  Node_t* node_;
 
   const Key* begin_key_;
 
@@ -127,6 +127,18 @@ class RecordIterator
   HasNext()
   {
     if (current_idx_ < record_count_) return true;
+    else if (node_->GetSiblingNode() == nullptr) {
+      return false;
+    }
+    auto next_node = node_->GetSiblingNode()->load(mo_relax);
+    delete(node_);
+    node_ = bwtree_->LeafScan(next_node, begin_key_, begin_closed_);
+    record_count_ = node_->GetRecordCount();
+    current_idx_ = 0;
+    return HasNext();
+
+    /*
+    if (current_idx_ < record_count_) return true;
     else if (node_->GetNextNode() != nullptr) {
       auto next_node = node_->GetNextNode();
       delete(node_);
@@ -136,6 +148,7 @@ class RecordIterator
       return HasNext();
     }
     else return false;
+    */
   }
 
   /**
@@ -145,9 +158,9 @@ class RecordIterator
   GetKey() const
   {
     if constexpr (IsVariableLengthData<Key>()) {
-      return Cast<Key>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
+      return reinterpret_cast<const Key>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
     } else {
-      return *Cast<Key*>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
+      return *reinterpret_cast<const Key *>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
     }
   }
 
