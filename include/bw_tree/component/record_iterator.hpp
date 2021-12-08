@@ -16,9 +16,17 @@
 
 #pragma once
 
+#include <memory>
 #include <utility>
 
-namespace dbgroup::index::bw_tree::component
+#include "common.hpp"
+#include "node.hpp"
+
+namespace dbgroup::index::bw_tree
+{
+template <class Key, class Payload, class Compare>
+class BwTree;
+namespace component
 {
 /**
  * @brief A class to represent a iterator for scan results.
@@ -30,14 +38,42 @@ namespace dbgroup::index::bw_tree::component
 template <class Key, class Payload, class Compare>
 class RecordIterator
 {
+  using BwTree_t = BwTree<Key, Payload, Compare>;
+  using Node_t = Node<Key, Compare>;
+
+ private:
+  /*################################################################################################
+   * Internal member variables
+   *##############################################################################################*/
+
+  /// a pointer to BwTree to perform continuous scan
+  BwTree_t* bwtree_;
+
+  /// node
+  Node_t* node_;
+
+  /// the number of records in this node.
+  size_t record_count_;
+
+  /// an index of a current record
+  size_t current_idx_;
+
  public:
   /*################################################################################################
    * Public constructors/destructors
    *##############################################################################################*/
 
-  constexpr RecordIterator() {}
+  constexpr RecordIterator(BwTree_t* bwtree, Node_t* node)
+      : bwtree_{bwtree}, node_{node}, record_count_{node->GetRecordCount()}, current_idx_{0}
+  {
+  }
 
   ~RecordIterator() = default;
+
+  RecordIterator(const RecordIterator&) = delete;
+  RecordIterator& operator=(const RecordIterator&) = delete;
+  constexpr RecordIterator(RecordIterator&&) = default;
+  constexpr RecordIterator& operator=(RecordIterator&&) = default;
 
   /*################################################################################################
    * Public operators for iterators
@@ -59,24 +95,35 @@ class RecordIterator
   void
   operator++()
   {
-    // not implemented yet
+    current_idx_++;
   }
+
+  /*################################################################################################
+   * Public getters/setters
+   *##############################################################################################*/
 
   /**
    * @brief Check if there are any records left.
    *
-   * Note that a BzTree's scan function copies a target leaf node one by one, so this
    * function may call a scan function internally to get a next leaf node.
    *
-   * @retval true if there are any records left.
-   * @retval false if there are no records left.
+   * @retval true if there are any records or next node left.
+   * @retval false if there are no records and node left.
    */
   bool
   HasNext()
   {
-    // not implemented yet
-
-    return true;
+    if (current_idx_ < record_count_) {
+      return true;
+    } else if (node_->GetSiblingNode() == nullptr) {
+      return false;
+    }
+    auto next_node = node_->GetSiblingNode()->load(mo_relax);
+    delete (node_);
+    node_ = bwtree_->LeafScan(next_node);
+    record_count_ = node_->GetRecordCount();
+    current_idx_ = 0;
+    return HasNext();
   }
 
   /**
@@ -85,9 +132,11 @@ class RecordIterator
   constexpr Key
   GetKey() const
   {
-    // not implemented yet
-
-    return Key{};
+    if constexpr (IsVariableLengthData<Key>()) {
+      return reinterpret_cast<const Key>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
+    } else {
+      return *reinterpret_cast<const Key*>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
+    }
   }
 
   /**
@@ -96,32 +145,10 @@ class RecordIterator
   constexpr Payload
   GetPayload() const
   {
-    // not implemented yet
-
-    return Payload{};
-  }
-
-  /**
-   * @return size_t: the length of a current kay
-   */
-  constexpr size_t
-  GetKeyLength() const
-  {
-    // not implemented yet
-
-    return sizeof(Key);
-  }
-
-  /**
-   * @return size_t: the length of a current payload
-   */
-  constexpr size_t
-  GetPayloadLength() const
-  {
-    // not implemented yet
-
-    return sizeof(Payload);
+    Payload payload{};
+    node_->CopyPayload(node_->GetMetadata(current_idx_), payload);
+    return payload;
   }
 };
-
-}  // namespace dbgroup::index::bw_tree::component
+}  // namespace component
+}  // namespace dbgroup::index::bw_tree

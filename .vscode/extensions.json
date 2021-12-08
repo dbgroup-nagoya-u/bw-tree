@@ -1,0 +1,18 @@
+{
+  "recommendations": [
+    "ms-vscode-remote.vscode-remote-extensionpack",
+    "visualstudioexptteam.vscodeintellicode",
+    "ms-vscode.cpptools",
+    "ms-vscode.cmake-tools",
+    "twxs.cmake",
+    "ms-vscode.test-adapter-converter",
+    "hbenl.vscode-test-explorer",
+    "matepek.vscode-catch2-test-adapter",
+    "cschlosser.doxdocgen",
+    "jeff-hykin.better-cpp-syntax",
+    "donjayamanne.githistory",
+    "eamodio.gitlens",
+    "yzhang.markdown-all-in-one",
+    "streetsidesoftware.code-spell-checker",
+  ]
+}

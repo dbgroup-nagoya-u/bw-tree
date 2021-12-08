@@ -134,6 +134,7 @@ class BwTree
           delta_type == DeltaNodeType::kInsert) {
         // check whether this delta record includes a target key
         const auto low_key = cur_node->GetLowKeyAddr(), high_key = cur_node->GetHighKeyAddr();
+
         if (component::IsInRange<Key, Comp>(key, low_key, !closed, high_key, closed)) {
           child_page = cur_node->template GetPayload<Mapping_t *>(cur_node->GetLowMeta());
           ++delta_chain_length;
@@ -472,6 +473,78 @@ class BwTree
     }
   }
 
+  void
+  MergeLeafRecords(  //
+      Node_t *consol_node,
+      size_t offset,
+      const Node_t *base_node,
+      const size_t base_rec_size,
+      const Key *begin_key,
+      const bool begin_closed,
+      const std::vector<Record> &records)
+  {
+    size_t rec_num = 0;
+    size_t base_cur_num = 0;
+    size_t delta_cur_num = 0;
+    size_t delta_rec_size = records.size();
+
+    if (records.size() > 0) {
+      while (begin_key
+             && (component::LT<Key, Comp>(records[delta_cur_num].key, *begin_key)
+                 || (!component::LT<Key, Comp>(*begin_key, records[delta_cur_num].key)
+                     && !begin_closed))) {
+        delta_cur_num++;
+        if (delta_cur_num == delta_rec_size) break;
+      }
+    }
+
+    if (base_rec_size > 0) {
+      while (1) {
+        const auto base_meta = base_node->GetMetadata(base_cur_num);
+        void *base_key = base_node->GetKeyAddr(base_meta);
+        if (begin_key
+            && (component::LT<Key, Comp>(base_key, *begin_key)
+                || (!component::LT<Key, Comp>(*begin_key, base_key) && !begin_closed))) {
+          base_cur_num++;
+          if (base_cur_num == base_rec_size) break;
+        } else {
+          break;
+        }
+      }
+    }
+
+    while (base_cur_num < base_rec_size && delta_cur_num < delta_rec_size) {
+      const auto base_meta = base_node->GetMetadata(base_cur_num);
+      void *base_key = base_node->GetKeyAddr(base_meta);
+
+      if (!component::LT<Key, Comp>(base_key, records[delta_cur_num].key)) {
+        consol_node->CopyRecordFrom(rec_num++, offset, records[delta_cur_num].node,
+                                    records[delta_cur_num].meta);
+        if (!begin_key || !component::LT<Key, Comp>(records[delta_cur_num].key, base_key)) {
+          ++base_cur_num;
+        }
+        ++delta_cur_num;
+      } else {
+        consol_node->CopyRecordFrom(rec_num++, offset, base_node, base_meta);
+        ++base_cur_num;
+      }
+    }
+
+    while (delta_cur_num < delta_rec_size) {
+      consol_node->CopyRecordFrom(rec_num++, offset, records[delta_cur_num].node,
+                                  records[delta_cur_num].meta);
+      ++delta_cur_num;
+    }
+
+    while (base_cur_num < base_rec_size) {
+      const auto base_meta = base_node->GetMetadata(base_cur_num);
+      consol_node->CopyRecordFrom(rec_num++, offset, base_node, base_meta);
+      ++base_cur_num;
+    }
+
+    consol_node->SetRecordCount(rec_num);
+  }
+
   std::pair<size_t, size_t>
   CalculatePageSize(  //
       const Node_t *base_node,
@@ -492,11 +565,8 @@ class BwTree
     size_t rec_num = records.size() + base_rec_num;
     for (auto &&rec : records) {
       const auto delta_type = rec.node->GetDeltaNodeType();
-      if (delta_type == DeltaNodeType::kInsert) {
+      if (delta_type == DeltaNodeType::kInsert || delta_type == DeltaNodeType::kModify) {
         page_size += rec.meta.GetTotalLength();
-      } else if (delta_type == DeltaNodeType::kModify) {
-        page_size += rec.meta.GetPayloadLength();
-        --rec_num;
       } else {
         rec_num -= 2;
       }
@@ -960,24 +1030,58 @@ class BwTree
   /**
    * @brief Perform a range scan with specified keys.
    *
-   * If a begin/end key is nullptr, it is treated as negative or positive infinite.
+   * If a begin is nullptr, it is treated as negative infinite.
    *
    * @param begin_key the pointer of a begin key of a range scan.
    * @param begin_closed a flag to indicate whether the begin side of a range is closed.
-   * @param end_key the pointer of an end key of a range scan.
-   * @param end_closed a flag to indicate whether the end side of a range is closed.
    * @return RecordIterator_t: an iterator to access target records.
    */
   RecordIterator_t
   Scan(  //
-      [[maybe_unused]] const Key *begin_key = nullptr,
-      [[maybe_unused]] const bool begin_closed = false,
-      [[maybe_unused]] const Key *end_key = nullptr,
-      [[maybe_unused]] const bool end_closed = false)
+      const Key *begin_key = nullptr,
+      bool begin_closed = true)
   {
-    // not implemented yet
+    const auto guard = gc_.CreateEpochGuard();
+    Mapping_t *consol_node = nullptr;
+    const auto node_stack =
+        (begin_key == nullptr)
+            ? SearchLeafNode(component::GetAddr(component::GetMinimum<Key>()), true, consol_node)
+            : SearchLeafNode(component::GetAddr(*begin_key), begin_closed, consol_node);
+    Mapping_t *page_id = node_stack.back();
+    Node_t *page = LeafScan(page_id->load(mo_relax), begin_key, begin_closed);
+    return RecordIterator_t{this, page};
+  }
 
-    return RecordIterator_t{};
+  /**
+   * @brief Consolidate leaf node for range scan
+   *
+   * If a begin is nullptr, it is treated as negative or positive infinite.
+   *
+   * @param node a target node.
+   * @param begin_k the pointer of a begin key of a range scan.
+   * @param begin_closed a flag to indicate whether the begin side of a range is closed.
+   * @retval pointer to consolidated leaf node
+   */
+
+  Node_t *
+  LeafScan(  //
+      Node_t *target_node,
+      const Key *begin_k = nullptr,
+      const bool begin_closed = true)
+  {
+    // collect and sort delta records
+    std::vector<Record> records;
+    records.reserve(kMaxDeltaNodeNum * 4);
+    const auto [base_node, end_node] = SortDeltaRecords(target_node, records);
+
+    // reserve a page for a consolidated node
+    auto [offset, base_rec_num] = CalculatePageSize(base_node, end_node, records);
+
+    const auto sib_page = GetSiblingPage(end_node);
+    Node_t *page = Node_t::CreateNode(offset, component::NodeType::kLeaf, 0, sib_page);
+    // copy active records
+    MergeLeafRecords(page, offset, base_node, base_rec_num, begin_k, begin_closed, records);
+    return page;
   }
 
   /*################################################################################################
@@ -1039,7 +1143,7 @@ class BwTree
   }
 
   /**
-   * @brief Insert a specified kay/payload pair.
+   * @brief Insert a specified key/payload pair.
    *
    * This function performs a uniqueness check in its processing. If a specified key
    * does not exist, this function insert a target payload into the index. If a
@@ -1058,12 +1162,41 @@ class BwTree
    */
   ReturnCode
   Insert(  //
-      [[maybe_unused]] const Key &key,
-      [[maybe_unused]] const Payload &payload,
-      [[maybe_unused]] const size_t key_length = sizeof(Key),
-      [[maybe_unused]] const size_t payload_length = sizeof(Payload))
+      const Key &key,
+      const Payload &payload,
+      const size_t key_length = sizeof(Key),
+      const size_t payload_length = sizeof(Payload))
   {
-    // not implemented yet
+    const auto key_addr = component::GetAddr(key);
+    const auto guard = gc_.CreateEpochGuard();
+
+    // traverse to a target leaf node
+    Mapping_t *consol_node = nullptr;
+    NodeStack_t stack = SearchLeafNode(key_addr, true, consol_node);
+
+    // create a delta record to write a key/value pair
+    Node_t *delta_node = Node_t::CreateDeltaNode(NodeType::kLeaf, DeltaNodeType::kInsert,  //
+                                                 key_addr, key_length, payload, payload_length);
+    // insert the delta record
+    for (Node_t *prev_head = nullptr; true;) {
+      // check whether the target node is valid (containing a target key and no incomplete SMOs)
+      Node_t *cur_head = ValidateNode(key_addr, true, prev_head, stack, consol_node);
+
+      // check target key/value existence
+      const auto [target_node, meta] = CheckExistence(key_addr, stack, consol_node);
+      if (target_node != nullptr) return ReturnCode::kKeyExist;
+
+      // prepare nodes to perform CAS
+      delta_node->SetNextNode(cur_head);
+      prev_head = cur_head;
+
+      // try to insert the delta record
+      if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
+    }
+
+    if (consol_node != nullptr) {
+      Consolidate(consol_node, key_addr, true, stack);
+    }
 
     return ReturnCode::kSuccess;
   }
@@ -1087,12 +1220,41 @@ class BwTree
    */
   ReturnCode
   Update(  //
-      [[maybe_unused]] const Key &key,
-      [[maybe_unused]] const Payload &payload,
-      [[maybe_unused]] const size_t key_length = sizeof(Key),
-      [[maybe_unused]] const size_t payload_length = sizeof(Payload))
+      const Key &key,
+      const Payload &payload,
+      const size_t key_length = sizeof(Key),
+      const size_t payload_length = sizeof(Payload))
   {
-    // not implemented yet
+    const auto key_addr = component::GetAddr(key);
+    const auto guard = gc_.CreateEpochGuard();
+
+    // traverse to a target leaf node
+    Mapping_t *consol_node = nullptr;
+    NodeStack_t stack = SearchLeafNode(key_addr, true, consol_node);
+
+    // create a delta record to write a key/value pair
+    Node_t *delta_node = Node_t::CreateDeltaNode(NodeType::kLeaf, DeltaNodeType::kModify,  //
+                                                 key_addr, key_length, payload, payload_length);
+    // insert the delta record
+    for (Node_t *prev_head = nullptr; true;) {
+      // check whether the target node is valid (containing a target key and no incomplete SMOs)
+      Node_t *cur_head = ValidateNode(key_addr, true, prev_head, stack, consol_node);
+
+      // check target key/value existence
+      const auto [target_node, meta] = CheckExistence(key_addr, stack, consol_node);
+      if (target_node == nullptr) return ReturnCode::kKeyNotExist;
+
+      // prepare nodes to perform CAS
+      delta_node->SetNextNode(cur_head);
+      prev_head = cur_head;
+
+      // try to insert the delta record
+      if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
+    }
+
+    if (consol_node != nullptr) {
+      Consolidate(consol_node, key_addr, true, stack);
+    }
 
     return ReturnCode::kSuccess;
   }

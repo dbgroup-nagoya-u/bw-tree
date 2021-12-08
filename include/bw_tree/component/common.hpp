@@ -212,6 +212,24 @@ IsInRange(  //
 }
 
 /**
+ * @brief Get minimum value of T
+ *
+ * @return a value which less others in T.
+ */
+
+template <class T>
+const T
+GetMinimum()
+{
+  if constexpr (IsVariableLengthData<T>()) {
+    const char *minimum_key = "";
+    return *reinterpret_cast<T *>(reinterpret_cast<void *>(&minimum_key));
+  } else {
+    return std::numeric_limits<T>::min();
+  }
+}
+
+/**
  * @brief Shift a memory address by byte offsets.
  *
  * @param addr an original address.
