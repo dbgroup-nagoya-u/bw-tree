@@ -113,9 +113,9 @@ class RecordIterator
   bool
   HasNext()
   {
-    if (current_idx_ < record_count_)
+    if (current_idx_ < record_count_) {
       return true;
-    else if (node_->GetSiblingNode() == nullptr) {
+    } else if (node_->GetSiblingNode() == nullptr) {
       return false;
     }
     auto next_node = node_->GetSiblingNode()->load(mo_relax);

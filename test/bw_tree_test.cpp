@@ -148,11 +148,10 @@ class BwTreeFixture : public testing::Test
     for (; iter.HasNext(); ++iter, ++count) {
       const auto [key, payload] = *iter;
       bool key_comp_result = true, payload_comp_result = true;
-      if (end_key != nullptr) {
-        if (component::LT<Key, KeyComp>(*end_key, key)
-            || ((!component::LT<Key, KeyComp>(key, *end_key)) && (!end_closed)))
-          break;
-      }
+      if (end_key
+          && (component::LT<Key, KeyComp>(*end_key, key)
+              || ((!component::LT<Key, KeyComp>(key, *end_key)) && (!end_closed))))
+        break;
 
       if constexpr (IsVariableLengthData<Key>()) {
         key_comp_result = component::IsEqual<Key, KeyComp>(keys[expected_keys[count]], key);
@@ -681,6 +680,20 @@ TYPED_TEST(BwTreeFixture, Scan_RightClosedWithLeafSplit_ScanInRangeRecords)
   TestFixture::VerifyScan(0, true, true, half_key_num, false, true, expected_ids, expected_ids);
 }
 
+TYPED_TEST(BwTreeFixture, Scan_UniqueKeysWithInternalSplit_ScanInsertedRecords)
+{  //
+  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kMaxRecordNum;
+
+  std::vector<size_t> expected_keys;
+  std::vector<size_t> expected_payloads;
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+    expected_keys.emplace_back(i);
+  }
+
+  TestFixture::VerifyScan(0, true, true, 0, true, true, expected_keys, expected_keys);
+}
+
 TYPED_TEST(BwTreeFixture, Scan_DuplicateKeysWithInternalSplit_ScanUpdatedRecords)
 {  //
   const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kMaxRecordNum;
@@ -696,6 +709,21 @@ TYPED_TEST(BwTreeFixture, Scan_DuplicateKeysWithInternalSplit_ScanUpdatedRecords
     expected_payloads.emplace_back(i + 1);
   }
 
+  TestFixture::VerifyScan(0, true, true, 0, true, true, expected_keys, expected_payloads);
+}
+
+TYPED_TEST(BwTreeFixture, Scan_DuplicateKeysRepeatedlyWithInternalSplit_ScanUpdatedRecords)
+{  //
+  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kMaxRecordNum;
+
+  std::vector<size_t> expected_keys;
+  std::vector<size_t> expected_payloads;
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+    TestFixture::VerifyUpdate(i, i + 1);
+    expected_keys.emplace_back(i);
+    expected_payloads.emplace_back(i + 1);
+  }
   TestFixture::VerifyScan(0, true, true, 0, true, true, expected_keys, expected_payloads);
 }
 
