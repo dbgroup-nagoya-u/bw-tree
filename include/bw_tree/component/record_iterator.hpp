@@ -64,7 +64,10 @@ class RecordIterator
    *##############################################################################################*/
 
   constexpr RecordIterator(BwTree_t* bwtree, Node_t* node, size_t current_idx)
-      : bwtree_{bwtree}, node_{node}, record_count_{node->GetRecordCount()}, current_idx_{current_idx}
+      : bwtree_{bwtree},
+        node_{node},
+        record_count_{node->GetRecordCount()},
+        current_idx_{current_idx}
   {
   }
 

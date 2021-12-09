@@ -712,6 +712,62 @@ TYPED_TEST(BwTreeFixture, Scan_DuplicateKeysWithInternalSplit_ScanUpdatedRecords
   TestFixture::VerifyScan(0, true, true, 0, true, true, expected_keys, expected_payloads);
 }
 
+TYPED_TEST(BwTreeFixture, Scan_LeftOpenedWithInternalSplit_ScanInRangeRecords)
+{  //
+  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kMaxRecordNum;
+  const size_t half_key_num = repeat_num / 2;
+
+  std::vector<size_t> expected_ids;
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+    if (i > half_key_num) expected_ids.emplace_back(i);
+  }
+
+  TestFixture::VerifyScan(half_key_num, false, false, 0, true, true, expected_ids, expected_ids);
+}
+
+TYPED_TEST(BwTreeFixture, Scan_LeftClosedWithInternalSplit_ScanInRangeRecords)
+{  //
+  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kMaxRecordNum;
+  const size_t half_key_num = repeat_num / 2;
+
+  std::vector<size_t> expected_ids;
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+    if (i >= half_key_num) expected_ids.emplace_back(i);
+  }
+
+  TestFixture::VerifyScan(half_key_num, false, true, 0, true, true, expected_ids, expected_ids);
+}
+
+TYPED_TEST(BwTreeFixture, Scan_RightOpenedWithInternalSplit_ScanInRangeRecords)
+{  //
+  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kMaxRecordNum;
+  const size_t half_key_num = repeat_num / 2;
+
+  std::vector<size_t> expected_ids;
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+    if (i < half_key_num) expected_ids.emplace_back(i);
+  }
+
+  TestFixture::VerifyScan(0, true, true, half_key_num, false, false, expected_ids, expected_ids);
+}
+
+TYPED_TEST(BwTreeFixture, Scan_RightClosedWithInternalSplit_ScanInRangeRecords)
+{  //
+  const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kMaxRecordNum;
+  const size_t half_key_num = repeat_num / 2;
+
+  std::vector<size_t> expected_ids;
+  for (size_t i = 0; i < repeat_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+    if (i <= half_key_num) expected_ids.emplace_back(i);
+  }
+
+  TestFixture::VerifyScan(0, true, true, half_key_num, false, true, expected_ids, expected_ids);
+}
+
 TYPED_TEST(BwTreeFixture, Scan_DuplicateKeysRepeatedlyWithInternalSplit_ScanUpdatedRecords)
 {  //
   const size_t repeat_num = TestFixture::kMaxRecordNum * TestFixture::kMaxRecordNum;

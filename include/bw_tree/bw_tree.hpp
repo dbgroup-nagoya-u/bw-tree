@@ -116,6 +116,33 @@ class BwTree
     return stack;
   }
 
+  NodeStack_t
+  SearchLeftEdgeLeaf()
+  {
+    NodeStack_t stack;
+    stack.reserve(kExpectedTreeHeight);
+
+    // get a logical page of a root node
+    Mapping_t *page_id = root_.load(mo_relax);
+    stack.emplace_back(page_id);
+
+    // traverse a Bw-tree
+    Node_t *cur_node = page_id->load(mo_relax);
+    while (!cur_node->IsLeaf()) {
+      if (cur_node->GetDeltaNodeType() == DeltaNodeType::kNotDelta) {
+        // reach a base page and get left edge node
+        Mapping_t *child_page =
+            cur_node->template GetPayload<Mapping_t *>(cur_node->GetMetadata(0));
+        stack.emplace_back(child_page);
+        cur_node = child_page->load(mo_relax);
+      } else {
+        // go to the next delta record or base node
+        cur_node = cur_node->GetNextNode();
+      }
+    }
+    return stack;
+  }
+
   Mapping_t *
   SearchChildNode(  //
       const void *key,
@@ -971,23 +998,22 @@ class BwTree
   {
     const auto guard = gc_.CreateEpochGuard();
     Mapping_t *consol_node = nullptr;
-    const auto node_stack =
-        (begin_key == nullptr)
-            ? SearchLeafNode(component::GetAddr(component::GetMinimum<Key>()), true, consol_node)
-            : SearchLeafNode(component::GetAddr(*begin_key), begin_closed, consol_node);
+    const auto node_stack = begin_key == nullptr ? SearchLeftEdgeLeaf()
+                                                 : SearchLeafNode(component::GetAddr(*begin_key),
+                                                                  begin_closed, consol_node);
     Mapping_t *page_id = node_stack.back();
     Node_t *page = LeafScan(page_id->load(mo_relax));
-    return begin_key != nullptr ? RecordIterator_t{this, page, page->SearchRecord(component::GetAddr(*begin_key),begin_closed).second} : RecordIterator_t{this, page,0};
+    return begin_key != nullptr
+               ? RecordIterator_t{this, page,
+                                  page->SearchRecord(component::GetAddr(*begin_key), begin_closed)
+                                      .second}
+               : RecordIterator_t{this, page, 0};
   }
 
   /**
    * @brief Consolidate leaf node for range scan
    *
-   * If a begin is nullptr, it is treated as negative or positive infinite.
-   *
    * @param node a target node.
-   * @param begin_k the pointer of a begin key of a range scan.
-   * @param begin_closed a flag to indicate whether the begin side of a range is closed.
    * @retval pointer to consolidated leaf node
    */
 
