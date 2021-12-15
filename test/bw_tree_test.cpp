@@ -47,7 +47,7 @@ class BwTreeFixture : public testing::Test
   using Node_t = component::Node<Key, std::less<Key>>;
   using Metadata = component::Metadata;
   using BwTree_t = BwTree<Key, Payload, KeyComp>;
-  using RecordIterator_t = component::RecordIterator<Key, Payload, KeyComp>;
+  using RecordIterator_t = typename BwTree<Key, Payload, KeyComp>::RecordIterator;
   /*################################################################################################
    * Internal constants
    *##############################################################################################*/

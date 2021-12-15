@@ -24,7 +24,6 @@
 
 #include "component/mapping_table.hpp"
 #include "component/node.hpp"
-#include "component/record_iterator.hpp"
 #include "memory/epoch_based_gc.hpp"
 
 namespace dbgroup::index::bw_tree
@@ -44,7 +43,6 @@ class BwTree
   using NodeReturnCode = component::NodeReturnCode;
   using NodeType = component::NodeType;
   using Node_t = component::Node<Key, Comp>;
-  using RecordIterator_t = component::RecordIterator<Key, Payload, Comp>;
   using Mapping_t = std::atomic<Node_t *>;
   using MappingTable_t = component::MappingTable<Key, Comp>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
@@ -889,6 +887,135 @@ class BwTree
 
  public:
   /*################################################################################################
+   * Public classes
+   *##############################################################################################*/
+
+  /**
+   * @brief A class to represent a iterator for scan results.
+   *
+   * @tparam Key a target key class
+   * @tparam Payload a target payload class
+   * @tparam Compare a key-comparator class
+   */
+
+  class RecordIterator
+  {
+    using BwTree_t = BwTree<Key, Payload, Comp>;
+
+   private:
+    /*################################################################################################
+     * Internal member variables
+     *##############################################################################################*/
+
+    /// a pointer to BwTree to perform continuous scan
+    BwTree_t *bwtree_;
+
+    /// node
+    Node_t *node_;
+
+    /// the number of records in this node.
+    size_t record_count_;
+
+    /// an index of a current record
+    size_t current_idx_;
+
+   public:
+    /*################################################################################################
+     * Public constructors/destructors
+     *##############################################################################################*/
+    constexpr RecordIterator() {}
+    constexpr RecordIterator(BwTree_t *bwtree, Node_t *node, size_t current_idx)
+        : bwtree_{bwtree},
+          node_{node},
+          record_count_{node->GetRecordCount()},
+          current_idx_{current_idx}
+    {
+    }
+
+    ~RecordIterator() = default;
+
+    RecordIterator(const RecordIterator &) = delete;
+    RecordIterator &operator=(const RecordIterator &) = delete;
+    constexpr RecordIterator(RecordIterator &&) = default;
+    constexpr RecordIterator &operator=(RecordIterator &&) = default;
+
+    /*################################################################################################
+     * Public operators for iterators
+     *##############################################################################################*/
+
+    /**
+     * @return std::pair<Key, Payload>: a current key and payload pair
+     */
+    constexpr std::pair<Key, Payload>
+    operator*() const
+    {
+      return {GetKey(), GetPayload()};
+    }
+
+    /**
+     * @brief Forward an iterator.
+     *
+     */
+    void
+    operator++()
+    {
+      current_idx_++;
+    }
+
+    /*################################################################################################
+     * Public getters/setters
+     *##############################################################################################*/
+
+    /**
+     * @brief Check if there are any records left.
+     *
+     * function may call a scan function internally to get a next leaf node.
+     *
+     * @retval true if there are any records or next node left.
+     * @retval false if there are no records and node left.
+     */
+    bool
+    HasNext()
+    {
+      if (current_idx_ < record_count_)
+        return true;
+      else if (node_->GetSiblingNode() == nullptr)
+        return false;
+
+      auto *next_node = node_->GetSiblingNode()->load(mo_relax);
+      delete (node_);
+      node_ = bwtree_->LeafScan(next_node);
+      record_count_ = node_->GetRecordCount();
+      current_idx_ = 0;
+      return HasNext();
+    }
+
+    /**
+     * @return Key: a key of a current record
+     */
+    constexpr Key
+    GetKey() const
+    {
+      if constexpr (IsVariableLengthData<Key>()) {
+        return reinterpret_cast<const Key>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
+      } else {
+        return *reinterpret_cast<const Key *>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
+      }
+    }
+
+    /**
+     * @return Payload: a payload of a current record
+     */
+    constexpr Payload
+    GetPayload() const
+    {
+      Payload payload{};
+      node_->CopyPayload(node_->GetMetadata(current_idx_), payload);
+      return payload;
+    }
+  };
+
+  /*################################################################################################
    * Public constructor/destructor
    *##############################################################################################*/
 
@@ -989,9 +1116,9 @@ class BwTree
    *
    * @param begin_key the pointer of a begin key of a range scan.
    * @param begin_closed a flag to indicate whether the begin side of a range is closed.
-   * @return RecordIterator_t: an iterator to access target records.
+   * @return RecordIterator: an iterator to access target records.
    */
-  RecordIterator_t
+  RecordIterator
   Scan(  //
       const Key &begin_key,
       bool begin_closed = false)
@@ -1002,30 +1129,30 @@ class BwTree
         SearchLeafNode(component::GetAddr(begin_key), begin_closed, consol_node);
     Mapping_t *page_id = node_stack.back();
     Node_t *page = LeafScan(page_id->load(mo_relax));
-    return RecordIterator_t{this, page,
-                            page->SearchRecord(component::GetAddr(begin_key), begin_closed).second};
+    return RecordIterator{this, page,
+                          page->SearchRecord(component::GetAddr(begin_key), begin_closed).second};
   }
 
   /**
    * @brief Perform a range scan from left edge.
    *
-   * @return RecordIterator_t: an iterator to access target records.
+   * @return RecordIterator: an iterator to access target records.
    */
-  RecordIterator_t
+  RecordIterator
   Begin()
   {
     const auto guard = gc_.CreateEpochGuard();
     const auto node_stack = SearchLeftEdgeLeaf();
     Mapping_t *page_id = node_stack.back();
     Node_t *page = LeafScan(page_id->load(mo_relax));
-    return RecordIterator_t{this, page, 0};
+    return RecordIterator{this, page, 0};
   }
 
   /**
    * @brief Consolidate leaf node for range scan
    *
    * @param node a target node.
-   * @retval pointer to consolidated leaf node
+   * @retval a pointer to consolidated leaf node
    */
 
   Node_t *
