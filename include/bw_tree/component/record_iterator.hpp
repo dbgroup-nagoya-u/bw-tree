@@ -121,7 +121,7 @@ class RecordIterator
     } else if (node_->GetSiblingNode() == nullptr) {
       return false;
     }
-    auto next_node = node_->GetSiblingNode()->load(mo_relax);
+    auto *next_node = node_->GetSiblingNode()->load(mo_relax);
     delete (node_);
     node_ = bwtree_->LeafScan(next_node);
     record_count_ = node_->GetRecordCount();
