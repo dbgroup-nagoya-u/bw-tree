@@ -142,7 +142,7 @@ class BwTreeFixture : public testing::Test
     if (!begin_null) begin_key = &keys[begin_key_id];
     if (!end_null) end_key = &keys[end_key_id];
 
-    RecordIterator_t iter = bw_tree->Scan(begin_key, begin_closed);
+    RecordIterator_t iter = begin_null ? bw_tree->Begin() : bw_tree->Scan(*begin_key, begin_closed);
     size_t count = 0;
 
     for (; iter.HasNext(); ++iter, ++count) {

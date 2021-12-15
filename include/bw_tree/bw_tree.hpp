@@ -993,21 +993,32 @@ class BwTree
    */
   RecordIterator_t
   Scan(  //
-      const Key *begin_key = nullptr,
-      bool begin_closed = true)
+      const Key &begin_key,
+      bool begin_closed = false)
   {
     const auto guard = gc_.CreateEpochGuard();
     Mapping_t *consol_node = nullptr;
-    const auto node_stack = begin_key == nullptr ? SearchLeftEdgeLeaf()
-                                                 : SearchLeafNode(component::GetAddr(*begin_key),
-                                                                  begin_closed, consol_node);
+    const auto node_stack =
+        SearchLeafNode(component::GetAddr(begin_key), begin_closed, consol_node);
     Mapping_t *page_id = node_stack.back();
     Node_t *page = LeafScan(page_id->load(mo_relax));
-    return begin_key != nullptr
-               ? RecordIterator_t{this, page,
-                                  page->SearchRecord(component::GetAddr(*begin_key), begin_closed)
-                                      .second}
-               : RecordIterator_t{this, page, 0};
+    return RecordIterator_t{this, page,
+                            page->SearchRecord(component::GetAddr(begin_key), begin_closed).second};
+  }
+
+  /**
+   * @brief Perform a range scan from left edge.
+   *
+   * @return RecordIterator_t: an iterator to access target records.
+   */
+  RecordIterator_t
+  Begin()
+  {
+    const auto guard = gc_.CreateEpochGuard();
+    const auto node_stack = SearchLeftEdgeLeaf();
+    Mapping_t *page_id = node_stack.back();
+    Node_t *page = LeafScan(page_id->load(mo_relax));
+    return RecordIterator_t{this, page, 0};
   }
 
   /**
