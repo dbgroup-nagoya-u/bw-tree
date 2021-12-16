@@ -977,10 +977,8 @@ class BwTree
     bool
     HasNext()
     {
-      if (current_idx_ < record_count_)
-        return true;
-      else if (node_->GetSiblingNode() == nullptr)
-        return false;
+      if (current_idx_ < record_count_) return true;
+      if (node_->GetSiblingNode() == nullptr) return false;
 
       auto *next_node = node_->GetSiblingNode()->load(mo_relax);
       delete (node_);
