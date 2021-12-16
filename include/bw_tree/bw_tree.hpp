@@ -1110,8 +1110,6 @@ class BwTree
   /**
    * @brief Perform a range scan with specified keys.
    *
-   * If a begin is nullptr, it is treated as negative infinite.
-   *
    * @param begin_key the pointer of a begin key of a range scan.
    * @param begin_closed a flag to indicate whether the begin side of a range is closed.
    * @return RecordIterator: an iterator to access target records.
@@ -1123,12 +1121,13 @@ class BwTree
   {
     const auto guard = gc_.CreateEpochGuard();
     Mapping_t *consol_node = nullptr;
+    const auto *key_addr = component::GetAddr(begin_key);
     const auto node_stack =
-        SearchLeafNode(component::GetAddr(begin_key), begin_closed, consol_node);
+        SearchLeafNode(key_addr, begin_closed, consol_node);
     Mapping_t *page_id = node_stack.back();
     Node_t *page = LeafScan(page_id->load(mo_relax));
     return RecordIterator{this, page,
-                          page->SearchRecord(component::GetAddr(begin_key), begin_closed).second};
+                          page->SearchRecord(key_addr, begin_closed).second};
   }
 
   /**
@@ -1149,8 +1148,8 @@ class BwTree
   /**
    * @brief Consolidate leaf node for range scan
    *
-   * @param node a target node.
-   * @retval a pointer to consolidated leaf node
+   * @param node the target node.
+   * @retval the pointer to consolidated leaf node
    */
 
   Node_t *
