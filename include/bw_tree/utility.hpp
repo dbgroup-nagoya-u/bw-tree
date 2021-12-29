@@ -96,6 +96,13 @@ constexpr size_t kMaxDeltaNodeNum = BW_TREE_MAX_DELTA_NODE_NUM;
 constexpr size_t kMaxDeltaNodeNum = 32;
 #endif
 
+#ifdef BW_TREE_MAX_VARIABLE_DATA_SIZE
+/// the maximun size of variable-length data
+constexpr size_t kMaxVariableSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
+#else
+/// the maximun size of variable-length data
+constexpr size_t kMaxVariableSize = 128;
+#endif
 /// check whether the specified page size is valid
 static_assert(kPageSize % kWordLength == 0);
 

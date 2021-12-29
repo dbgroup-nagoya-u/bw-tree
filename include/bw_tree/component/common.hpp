@@ -77,6 +77,82 @@ constexpr size_t kHeaderLength = 28;
  * Internal utility functions
  *################################################################################################*/
 
+template <class Key, class Payload>
+constexpr auto
+GetMaxDeltaSize()  //
+    -> size_t
+{
+  auto key_length = (IsVariableLengthData<Key>()) ? kMaxVariableSize : sizeof(Key);
+  auto pay_length = (IsVariableLengthData<Payload>()) ? kMaxVariableSize : sizeof(Payload);
+  auto [l_k_len, l_p_len, l_rec] = Align<Key, Payload>(key_length, pay_length);
+  auto [i_k_len, i_p_len, i_rec] = Align<Key, uintptr_t>(key_length, sizeof(uintptr_t));
+
+  auto max_leaf_delta = l_k_len + l_p_len;
+  auto max_internal_delta = 2 * i_k_len + i_p_len;
+
+  return (max_leaf_delta > max_internal_delta) ? max_leaf_delta : max_internal_delta;
+}
+
+/**
+ * @brief Compute padded key/payload/total lengths for alignment.
+ *
+ * @tparam Key a class of keys.
+ * @tparam Payload a class of payloads.
+ * @param key_len the length of a target key.
+ * @param pay_len the length of a target payload.
+ * @return the tuple of key/payload/total lengths.
+ */
+template <class Key, class Payload>
+constexpr auto
+Align(  //
+    size_t key_len,
+    size_t pay_len)  //
+    -> std::tuple<size_t, size_t, size_t>
+{
+  if constexpr (IsVariableLengthData<Key>() && IsVariableLengthData<Payload>()) {
+    // record alignment is not required
+    return {key_len, pay_len, key_len + pay_len};
+  } else if constexpr (IsVariableLengthData<Key>()) {
+    // dynamic alignment is required
+    const size_t align_len = alignof(Payload) - key_len % alignof(Payload);
+    if (align_len == alignof(Payload)) {
+      // alignment is not required
+      return {key_len, pay_len, key_len + pay_len};
+    }
+    return {key_len, pay_len, align_len + key_len + pay_len};
+  } else if constexpr (IsVariableLengthData<Payload>()) {
+    const size_t align_len = alignof(Key) - pay_len % alignof(Key);
+    if (align_len != alignof(Key)) {
+      // dynamic alignment is required
+      key_len += align_len;
+    }
+    return {key_len, pay_len, key_len + pay_len};
+  } else if constexpr (alignof(Key) < alignof(Payload)) {
+    constexpr size_t kAlignLen = alignof(Payload) - sizeof(Key) % alignof(Payload);
+    if constexpr (kAlignLen == alignof(Payload)) {
+      // alignment is not required
+      return {key_len, pay_len, key_len + pay_len};
+    } else {
+      // fixed-length alignment is required
+      constexpr size_t kKeyLen = sizeof(Key) + kAlignLen;
+      return {kKeyLen, pay_len, kKeyLen + pay_len};
+    }
+  } else if constexpr (alignof(Key) > alignof(Payload)) {
+    constexpr size_t kAlignLen = alignof(Key) - sizeof(Payload) % alignof(Key);
+    if constexpr (kAlignLen == alignof(Key)) {
+      // alignment is not required
+      return {key_len, pay_len, key_len + pay_len};
+    } else {
+      // fixed-length alignment is required
+      constexpr size_t kPayLen = sizeof(Payload) + kAlignLen;
+      return {key_len, kPayLen, key_len + kPayLen};
+    }
+  } else {
+    // alignment is not required
+    return {key_len, pay_len, key_len + pay_len};
+  }
+}
+
 template <class T>
 constexpr const void *
 GetAddr(const T &obj)
