@@ -57,6 +57,106 @@ class BwTree
   using Binary_t = std::remove_pointer_t<Payload>;
   using Binary_p = std::unique_ptr<Binary_t, component::PayloadDeleter<Binary_t>>;
 
+ public:
+  /*####################################################################################
+   * Public constructors and assignment operators
+   *##################################################################################*/
+
+  BwTree(const BwTree &) = delete;
+  BwTree &operator=(const BwTree &) = delete;
+  BwTree(BwTree &&) = delete;
+  BwTree &operator=(BwTree &&) = delete;
+
+  /*####################################################################################
+   * Public destructors
+   *##################################################################################*/
+
+  /**
+   * @brief Destroy the BwTree object.
+   *
+   */
+  ~BwTree() = default;
+
+  /*####################################################################################
+   * Public read APIs
+   *##################################################################################*/
+
+  /**
+   * @brief Read a payload of a specified key if it exists.
+   *
+   * This function returns two return codes: kSuccess and kKeyNotExist. If a return code
+   * is kSuccess, a returned pair contains a target payload. If a return code is
+   * kKeyNotExist, the value of a returned payload is undefined.
+   *
+   * @param key a target key.
+   * @return a read payload or std::nullopt.
+   */
+  auto
+  Read(const Key &key)  //
+      -> std::optional<Payload>
+  {
+    const auto &guard = gc_.CreateEpochGuard();
+
+    // traverse to a target leaf node
+    consol_node_ = nullptr;
+    auto &&stack = SearchLeafNode(key, kClosed);
+
+    // check whether the leaf node has a target key
+    auto [ptr, rc] = CheckExistence(key, stack);
+    if (consol_node_ != nullptr) {
+      // if a long delta-chain is found, consolidate it
+      Consolidate(consol_node_, key, kClosed, stack);
+    }
+
+    if (rc == NodeRC::kKeyNotExist) return std::nullopt;
+
+    Payload payload{};
+    if (rc == NodeRC::kKeyInDelta) {
+      auto *delta = reinterpret_cast<DeltaRecord_t *>(ptr);
+      delta->CopyPayload(payload);
+    } else {
+      auto *node = reinterpret_cast<Node_t *>(ptr);
+      auto meta = node->GetMetadata(rc);
+      node->CopyPayload(meta, payload);
+    }
+
+    return std::make_optional(payload);
+  }
+
+  /*####################################################################################
+   * Public write APIs
+   *##################################################################################*/
+
+  /**
+   * @brief Delete a target kay from the index.
+   *
+   * This function performs a uniqueness check in its processing. If a specified key
+   * exist, this function deletes it. If a specified key does not exist in the index,
+   * this function does nothing and returns kKeyNotExist as a return code.
+   *
+   * Note that if a target key is binary data, it is required to specify its length in
+   * bytes.
+   *
+   * @param key a target key to be written.
+   * @param key_length the length of a target key.
+   * @retval kSuccess if deleted.
+   * @retval kKeyNotExist if a specified key does not exist.
+   */
+  auto
+  Delete(  //
+      [[maybe_unused]] const Key &key,
+      [[maybe_unused]] const size_t key_length = sizeof(Key))  //
+      -> ReturnCode
+  {
+    // not implemented yet
+
+    return ReturnCode::kSuccess;
+  }
+
+  /*####################################################################################
+   * Not refactored yet......
+   *##################################################################################*/
+
   struct Record {
     Node_t *node;
     Metadata meta;
@@ -70,83 +170,6 @@ class BwTree
   };
 
  private:
-  /*################################################################################################
-   * Internal constants
-   *##############################################################################################*/
-
-  static constexpr auto mo_relax = component::mo_relax;
-
-  static constexpr auto kHeaderLength = component::kHeaderLength;
-
-  static constexpr size_t kExpectedTreeHeight = 8;
-
-  static constexpr bool kClosed = true;
-
-  /*################################################################################################
-   * Internal member variables
-   *##############################################################################################*/
-
-  /// a root node of Bw-tree
-  std::atomic<Mapping_t *> root_;
-
-  /// a mapping table
-  MappingTable_t mapping_table_;
-
-  /// garbage collector
-  NodeGC_t gc_;
-
-  /*################################################################################################
-   * Internal utility functions
-   *##############################################################################################*/
-
-  auto
-  SearchLeafNode(  //
-      const Key &key,
-      const bool closed,
-      const std::atomic_uintptr_t *&consol_node)  //
-      -> NodeStack
-  {
-    NodeStack stack{};
-    stack.reserve(kExpectedTreeHeight);
-
-    // get a logical page of a root node
-    auto [page_id, height] = root_.load(std::memory_order_relaxed);
-
-    // traverse a Bw-tree
-    for (size_t i = 0; i < height; ++i) {
-      auto [ptr, rc] = DeltaRecord_t::SearchChildNode(key, closed, page_id);
-      switch (rc) {
-        case DeltaRC::kRecordFound:
-          stack.emplace_back(page_id);
-          page_id = reinterpret_cast<std::atomic_uintptr_t *>(ptr);
-          break;
-
-        case DeltaRC::kNodeRemoved:
-          page_id = stack.back();
-          stack.pop_back();
-          --i;
-          continue;
-
-        case DeltaRC::kReachBase:
-        default:
-          stack.emplace_back(page_id);
-          if (rc >= kMaxDeltaNodeNum) {
-            consol_node = page_id;
-          }
-
-          // search a child node in a base node
-          Node_t *base_node = reinterpret_cast<Node_t *>(ptr);
-          auto pos = base_node->SearchChild(key, closed);
-          auto meta = base_node->GetMetadata(pos);
-          page_id = base_node->template GetPayload<std::atomic_uintptr_t *>(meta);
-          break;
-      }
-    }
-    stack.emplace_back(page_id);
-
-    return stack;
-  }
-
   NodeStack
   SearchLeftEdgeLeaf()
   {
@@ -172,71 +195,6 @@ class BwTree
       }
     }
     return stack;
-  }
-
-  auto
-  ValidateNode(  //
-      const Key &key,
-      const bool closed,
-      const uintptr_t prev_head,
-      NodeStack &stack,
-      const std::atomic_uintptr_t *&consol_node)  //
-      -> uintptr_t
-  {
-    auto *page_id = stack.back();
-    while (true) {
-      auto [ptr, rc] = DeltaRecord_t::Validate(key, closed, page_id, prev_head);
-      switch (rc) {
-        case DeltaRC::kSplitMayIncomplete:
-          // complete splitting and traverse to a sibling node
-          CompleteSplit(ptr, stack, consol_node);
-          auto *rec = reinterpret_cast<DeltaRecord_t *>(ptr);
-          page_id = rec->template GetPayload<std::atomic_uintptr_t *>();
-
-          // insert a new current-level node (an old node was popped in parent-update)
-          stack.emplace_back(page_id);
-          break;
-
-        case DeltaRC::kMergeMayIncomplete:
-          // ...not implemented yet
-          break;
-
-        case DeltaRC::kNodeRemoved:
-          // ...not implemented yet
-          break;
-
-        case DeltaRC::kReachBase:
-        default:
-          if (rc >= kMaxDeltaNodeNum) {
-            consol_node = page_id;
-          }
-          return ptr;
-      }
-    }
-  }
-
-  auto
-  CheckExistence(  //
-      const Key &key,
-      NodeStack &stack,
-      const std::atomic_uintptr_t *&consol_node)  //
-      -> std::pair<uintptr_t, NodeRC>
-  {
-    auto [ptr, rc] = DeltaRecord_t::SearchRecord(key, stack);
-    switch (rc) {
-      case DeltaRC::kRecordFound:
-        return {ptr, NodeRC::kKeyInDelta};
-
-      case DeltaRC::kRecordDeleted:
-        return {uintptr_t{}, NodeRC::kKeyNotExist};
-
-      case DeltaRC::kReachBase:
-      default:
-        // search a target key
-        auto *node = reinterpret_cast<Node_t *>(ptr);
-        auto pos = node->SearchRecord(key);
-        return {ptr, pos};
-    }
   }
 
   std::pair<Node_t *, Node_t *>
@@ -503,9 +461,9 @@ class BwTree
     return node->template GetPayload<Mapping_t *>(node->GetLowMeta());
   }
 
-  /*################################################################################################
+  /*####################################################################################
    * Internal structure modification functoins
-   *##############################################################################################*/
+   *##################################################################################*/
 
   void
   Consolidate(  //
@@ -718,9 +676,9 @@ class BwTree
   }
 
  public:
-  /*################################################################################################
+  /*####################################################################################
    * Public classes
-   *##############################################################################################*/
+   *##################################################################################*/
 
   /**
    * @brief A class to represent a iterator for scan results.
@@ -735,12 +693,12 @@ class BwTree
     using BwTree_t = BwTree<Key, Payload, Comp>;
 
    private:
-    /*################################################################################################
+    /*##################################################################################
      * Internal member variables
-     *##############################################################################################*/
+     *################################################################################*/
 
     /// a pointer to BwTree to perform continuous scan
-    BwTree_t *bwtree_;
+    BwTree_t *bw_tree_;
 
     /// node
     Node_t *node_;
@@ -752,12 +710,12 @@ class BwTree
     size_t current_idx_;
 
    public:
-    /*################################################################################################
+    /*##################################################################################
      * Public constructors/destructors
-     *##############################################################################################*/
+     *################################################################################*/
     constexpr RecordIterator() {}
-    constexpr RecordIterator(BwTree_t *bwtree, Node_t *node, size_t current_idx)
-        : bwtree_{bwtree},
+    constexpr RecordIterator(BwTree_t *bw_tree, Node_t *node, size_t current_idx)
+        : bw_tree_{bw_tree},
           node_{node},
           record_count_{node->GetRecordCount()},
           current_idx_{current_idx}
@@ -771,9 +729,9 @@ class BwTree
     constexpr RecordIterator(RecordIterator &&) = default;
     constexpr RecordIterator &operator=(RecordIterator &&) = default;
 
-    /*################################################################################################
+    /*##################################################################################
      * Public operators for iterators
-     *##############################################################################################*/
+     *################################################################################*/
 
     /**
      * @return std::pair<Key, Payload>: a current key and payload pair
@@ -794,9 +752,9 @@ class BwTree
       current_idx_++;
     }
 
-    /*################################################################################################
+    /*##################################################################################
      * Public getters/setters
-     *##############################################################################################*/
+     *################################################################################*/
 
     /**
      * @brief Check if there are any records left.
@@ -814,7 +772,7 @@ class BwTree
 
       auto *next_node = node_->GetSiblingNode()->load(mo_relax);
       delete (node_);
-      node_ = bwtree_->LeafScan(next_node);
+      node_ = bw_tree_->LeafScan(next_node);
       record_count_ = node_->GetRecordCount();
       current_idx_ = 0;
       return HasNext();
@@ -845,9 +803,9 @@ class BwTree
     }
   };
 
-  /*################################################################################################
+  /*####################################################################################
    * Public constructor/destructor
-   *##############################################################################################*/
+   *##################################################################################*/
 
   /**
    * @brief Construct a new BwTree object.
@@ -877,63 +835,6 @@ class BwTree
 
     // start garbage collector for removed nodes
     gc_.StartGC();
-  }
-
-  /**
-   * @brief Destroy the BwTree object.
-   *
-   */
-  ~BwTree() = default;
-
-  BwTree(const BwTree &) = delete;
-  BwTree &operator=(const BwTree &) = delete;
-  BwTree(BwTree &&) = delete;
-  BwTree &operator=(BwTree &&) = delete;
-
-  /*################################################################################################
-   * Public read APIs
-   *##############################################################################################*/
-
-  /**
-   * @brief Read a payload of a specified key if it exists.
-   *
-   * This function returns two return codes: kSuccess and kKeyNotExist. If a return code
-   * is kSuccess, a returned pair contains a target payload. If a return code is
-   * kKeyNotExist, the value of a returned payload is undefined.
-   *
-   * @param key a target key.
-   * @return std::pair<ReturnCode, Payload>: a return code and payload pair.
-   */
-  auto
-  Read(const Key &key)  //
-      -> std::optional<Payload>
-  {
-    const auto &guard = gc_.CreateEpochGuard();
-
-    // traverse to a target leaf node
-    std::atomic_uintptr_t *consol_node = nullptr;
-    auto &&stack = SearchLeafNode(key, kClosed, consol_node);
-
-    // check whether the leaf node has a target key
-    auto [ptr, rc] = CheckExistence(key, stack, consol_node);
-    if (consol_node != nullptr) {
-      // if a long delta-chain is found, consolidate it
-      Consolidate(consol_node, key, kClosed, stack);
-    }
-
-    if (rc == NodeRC::kKeyNotExist) return std::nullopt;
-
-    Payload payload{};
-    if (rc == NodeRC::kKeyInDelta) {
-      auto *delta = reinterpret_cast<DeltaRecord_t *>(ptr);
-      delta->CopyPayload(paylaod);
-    } else {
-      auto *node = reinterpret_cast<Node_t *>(ptr);
-      auto meta = node->GetMetadata(rc);
-      node->CopyPayload(meta, payload);
-    }
-
-    return std::make_optional(payload);
   }
 
   /**
@@ -998,9 +899,9 @@ class BwTree
     return page;
   }
 
-  /*################################################################################################
+  /*####################################################################################
    * Public write APIs
-   *##############################################################################################*/
+   *##################################################################################*/
 
   /**
    * @brief Write (i.e., upsert) a specified kay/payload pair.
@@ -1173,30 +1074,155 @@ class BwTree
     return ReturnCode::kSuccess;
   }
 
-  /**
-   * @brief Delete a target kay from the index.
-   *
-   * This function performs a uniqueness check in its processing. If a specified key
-   * exist, this function deletes it. If a specified key does not exist in the index,
-   * this function does nothing and returns kKeyNotExist as a return code.
-   *
-   * Note that if a target key is binary data, it is required to specify its length in
-   * bytes.
-   *
-   * @param key a target key to be written.
-   * @param key_length the length of a target key.
-   * @retval kSuccess if deleted.
-   * @retval kKeyNotExist if a specified key does not exist.
-   */
-  ReturnCode
-  Delete(  //
-      [[maybe_unused]] const Key &key,
-      [[maybe_unused]] const size_t key_length = sizeof(Key))
-  {
-    // not implemented yet
+  /*####################################################################################
+   * ......Not refactored yet
+   *##################################################################################*/
 
-    return ReturnCode::kSuccess;
+ private:
+  /*####################################################################################
+   * Internal constants
+   *##################################################################################*/
+
+  static constexpr auto mo_relax = component::mo_relax;
+
+  static constexpr auto kHeaderLength = component::kHeaderLength;
+
+  static constexpr size_t kExpectedTreeHeight = 8;
+
+  static constexpr bool kClosed = true;
+
+  /*####################################################################################
+   * Internal utility functions
+   *##################################################################################*/
+
+  auto
+  SearchLeafNode(  //
+      const Key &key,
+      const bool closed)  //
+      -> NodeStack
+  {
+    NodeStack stack{};
+    stack.reserve(kExpectedTreeHeight);
+
+    // get a logical page of a root node
+    auto [page_id, height] = root_.load(std::memory_order_relaxed);
+
+    // traverse a Bw-tree
+    for (size_t i = 0; i < height; ++i) {
+      auto [ptr, rc] = DeltaRecord_t::SearchChildNode(key, closed, page_id);
+      switch (rc) {
+        case DeltaRC::kRecordFound:
+          stack.emplace_back(page_id);
+          page_id = reinterpret_cast<std::atomic_uintptr_t *>(ptr);
+          break;
+
+        case DeltaRC::kNodeRemoved:
+          page_id = stack.back();
+          stack.pop_back();
+          --i;
+          continue;
+
+        case DeltaRC::kReachBase:
+        default:
+          stack.emplace_back(page_id);
+          if (rc >= kMaxDeltaNodeNum) {
+            consol_node_ = page_id;
+          }
+
+          // search a child node in a base node
+          Node_t *base_node = reinterpret_cast<Node_t *>(ptr);
+          auto pos = base_node->SearchChild(key, closed);
+          auto meta = base_node->GetMetadata(pos);
+          page_id = base_node->template GetPayload<std::atomic_uintptr_t *>(meta);
+          break;
+      }
+    }
+    stack.emplace_back(page_id);
+
+    return stack;
   }
+
+  auto
+  ValidateNode(  //
+      const Key &key,
+      const bool closed,
+      const uintptr_t prev_head,
+      NodeStack &stack)  //
+      -> uintptr_t
+  {
+    auto *page_id = stack.back();
+    while (true) {
+      auto [ptr, rc] = DeltaRecord_t::Validate(key, closed, page_id, prev_head);
+      switch (rc) {
+        case DeltaRC::kSplitMayIncomplete:
+          // complete splitting and traverse to a sibling node
+          CompleteSplit(ptr, stack);
+          auto *rec = reinterpret_cast<DeltaRecord_t *>(ptr);
+          page_id = rec->template GetPayload<std::atomic_uintptr_t *>();
+
+          // insert a new current-level node (an old node was popped in parent-update)
+          stack.emplace_back(page_id);
+          break;
+
+        case DeltaRC::kMergeMayIncomplete:
+          // ...not implemented yet
+          break;
+
+        case DeltaRC::kNodeRemoved:
+          // ...not implemented yet
+          break;
+
+        case DeltaRC::kReachBase:
+        default:
+          if (rc >= kMaxDeltaNodeNum) {
+            consol_node_ = page_id;
+          }
+          return ptr;
+      }
+    }
+  }
+
+  auto
+  CheckExistence(  //
+      const Key &key,
+      NodeStack &stack)  //
+      -> std::pair<uintptr_t, NodeRC>
+  {
+    auto [ptr, rc] = DeltaRecord_t::SearchRecord(key, stack);
+    switch (rc) {
+      case DeltaRC::kRecordFound:
+        return {ptr, NodeRC::kKeyInDelta};
+
+      case DeltaRC::kRecordDeleted:
+        return {uintptr_t{}, NodeRC::kKeyNotExist};
+
+      case DeltaRC::kReachBase:
+      default:
+        if (rc >= kMaxDeltaNodeNum) {
+          consol_node_ = stack.back();
+        }
+        // search a target key
+        auto *node = reinterpret_cast<Node_t *>(ptr);
+        auto pos = node->SearchRecord(key);
+        return {ptr, pos};
+    }
+  }
+
+  /*####################################################################################
+   * Internal member variables
+   *##################################################################################*/
+
+  /// a root node of Bw-tree
+  std::atomic<std::pair<std::atomic_uintptr_t *, size_t>> root_;
+
+  /// a mapping table
+  MappingTable_t mapping_table_;
+
+  /// garbage collector
+  NodeGC_t gc_;
+
+  /// a page ID to be consolidated
+  inline thread_local std::atomic_uintptr_t *consol_node_{};
 };
 
 }  // namespace dbgroup::index::bw_tree
