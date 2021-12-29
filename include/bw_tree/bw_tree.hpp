@@ -168,85 +168,45 @@ class BwTree
     return stack;
   }
 
-  Node_t *
+  auto
   ValidateNode(  //
-      const void *key,
+      const Key &key,
       const bool closed,
-      const Node_t *prev_head,
+      const uintptr_t prev_head,
       NodeStack &stack,
-      Mapping_t *&consol_node)
+      const std::atomic_uintptr_t *&consol_node)  //
+      -> uintptr_t
   {
-    Mapping_t *page_id = stack.back();
-    Node_t *cur_head = page_id->load(mo_relax);
-    size_t delta_chain_length = 0;
-
-    // check whether there are incomplete SMOs and a target key in this logical page
-    for (Node_t *cur_node = cur_head; cur_node != prev_head;) {
-      if (const auto delta_type = cur_node->GetDeltaNodeType();
-          delta_type == DeltaType::kNotDelta) {
-        // check whether a target key is in this node
-        const auto high_key = cur_node->GetHighKeyAddr();
-        if (high_key != nullptr
-            && (component::LT<Key, Comp>(high_key, key)
-                || (!closed && component::LT<Key, Comp>(key, high_key)))) {
-          // traverse to a sibling node
-          page_id = cur_node->GetSiblingNode();
-          cur_head = page_id->load(mo_relax);
-          cur_node = cur_head;
-          delta_chain_length = 0;
-
-          // swap a current node in a stack
-          stack.pop_back();
-          stack.emplace_back(page_id);
-          continue;
-        }
-        break;
-      } else if (delta_type == DeltaType::kSplit) {
-        // check whether a target key is in a split-right node
-        const auto meta = cur_node->GetLowMeta();
-        const auto sep_key = cur_node->GetKeyAddr(meta);
-        if (component::LT<Key, Comp>(sep_key, key)
-            || (!closed && !component::LT<Key, Comp>(key, sep_key))) {
-          // there may be incomplete split
-          CompleteSplit(cur_node, stack, consol_node);
-
-          // traverse to a split right node
-          page_id = cur_node->template GetPayload<Mapping_t *>(meta);
-          cur_head = page_id->load(mo_relax);
-          cur_node = cur_head;
-          delta_chain_length = 0;
+    auto *page_id = stack.back();
+    while (true) {
+      auto [ptr, rc] = DeltaRecord_t::Validate(key, closed, page_id, prev_head);
+      switch (rc) {
+        case DeltaRC::kSplitMayIncomplete:
+          // complete splitting and traverse to a sibling node
+          CompleteSplit(ptr, stack, consol_node);
+          auto *rec = reinterpret_cast<DeltaRecord_t *>(ptr);
+          page_id = rec->template GetPayload<std::atomic_uintptr_t *>();
 
           // insert a new current-level node (an old node was popped in parent-update)
           stack.emplace_back(page_id);
-          continue;
-        }
-      } else if (delta_type == DeltaType::kMerge) {
-        // there may be incomplete merging
-        // CompleteMerge();
-      } else if (delta_type == DeltaType::kRemoveNode) {
-        // there may be incomplete merging
-        // CompleteMerge();
+          break;
 
-        // traverse to a merged node
-        const auto parent_node = stack.back();
-        stack.pop_back();
-        page_id = SearchChildNode(key, closed, parent_node, cur_head, stack, consol_node);
-        cur_head = page_id->load(mo_relax);
-        cur_node = cur_head;
-        delta_chain_length = 0;
-        continue;
+        case DeltaRC::kMergeMayIncomplete:
+          // ...not implemented yet
+          break;
+
+        case DeltaRC::kNodeRemoved:
+          // ...not implemented yet
+          break;
+
+        case DeltaRC::kSuccess:
+        default:
+          if (rc >= kMaxDeltaNodeNum) {
+            consol_node = page_id;
+          }
+          return ptr;
       }
-
-      // go to the next delta record or base node
-      cur_node = cur_node->GetNextNode();
-      ++delta_chain_length;
     }
-
-    if (delta_chain_length >= kMaxDeltaNodeNum) {
-      consol_node = page_id;
-    }
-
-    return cur_head;
   }
 
   std::pair<Node_t *, Metadata>

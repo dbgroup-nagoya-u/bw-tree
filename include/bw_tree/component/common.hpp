@@ -45,7 +45,9 @@ enum NodeReturnCode
 enum DeltaRC
 {
   kChildFound = -100,
+  kSplitMayIncomplete,
   kNodeRemoved,
+  kMergeMayIncomplete,
   kSuccess = 0
 };
 

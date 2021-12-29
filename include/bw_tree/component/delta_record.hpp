@@ -213,6 +213,62 @@ class DeltaRecord
     }
   }
 
+  static auto
+  Validate(  //
+      const Key &key,
+      const bool closed,
+      const std::atomic_uintptr_t *&page_id,
+      const uintptr_t prev_head)  //
+      -> std::pair<uintptr_t, DeltaRC>
+  {
+    DeltaRC delta_chain_length = 0;
+    auto head = page_id->load(std::memory_order_acquire);
+    auto ptr = head;
+    DeltaRecord *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+
+    // traverse a delta chain
+    while (ptr != prev_head) {
+      switch (cur_rec->delta_type_) {
+        case DeltaType::kSplit:
+          const auto &sep_key = cur_rec->GetKey(cur_rec->meta_);
+          if (Comp{}(sep_key, key) || (!closed && !Comp{key, sep_key})) {
+            // there may be incomplete split
+            return {ptr, kSplitMayIncomplete};
+          }
+          break;
+
+        case DeltaType::kNotDelta:
+          if (cur_rec->high_key_meta_.GetKeyLength() > 0) {
+            // this base node has a sibling node
+            const auto &high_key = cur_rec->GetKey(cur_rec->high_key_meta_);
+            if (Comp{}(high_key, key) || (!closed && !Comp{key, high_key})) {
+              // a sibling node includes a target key
+              page_id = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
+              head = page_id->load(std::memory_order_acquire);
+              ptr = head;
+              cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+              delta_chain_length = 0;
+              continue;
+            }
+          }
+          // reach a base page
+          return {head, delta_chain_length};
+
+        case DeltaType::kMerge:
+          // ...not implemented yet
+          break;
+
+        case DeltaType::kRemoveNode:
+          // ...not implemented yet
+          break;
+
+        default:
+          break;
+      }
+
+      // go to the next delta record or base node
+      ptr = cur_rec->next_;
+      cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
       ++delta_chain_length;
     }
   }
