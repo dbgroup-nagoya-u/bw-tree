@@ -31,11 +31,11 @@ namespace dbgroup::index::bw_tree::component
  * @brief Internal return codes to represent results of node modification.
  *
  */
-enum NodeReturnCode
+enum NodeRC
 {
-  kSuccess = 0,
-  kKeyNotExist,
-  kKeyExist
+  kKeyNotExist = -100,
+  kKeyInDelta,
+  kKeyExist = 0
 };
 
 /**
@@ -44,11 +44,12 @@ enum NodeReturnCode
  */
 enum DeltaRC
 {
-  kChildFound = -100,
+  kRecordFound = -100,
+  kRecordDeleted,
   kSplitMayIncomplete,
   kNodeRemoved,
   kMergeMayIncomplete,
-  kSuccess = 0
+  kReachBase = 0
 };
 
 /**

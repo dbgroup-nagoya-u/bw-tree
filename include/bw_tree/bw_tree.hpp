@@ -39,9 +39,13 @@ namespace dbgroup::index::bw_tree
 template <class Key, class Payload, class Comp = ::std::less<Key>>
 class BwTree
 {
+  /*####################################################################################
+   * Type aliases
+   *##################################################################################*/
+
   using DeltaType = component::DeltaType;
   using Metadata = component::Metadata;
-  using NodeReturnCode = component::NodeReturnCode;
+  using NodeRC = component::NodeRC;
   using DeltaRC = component::DeltaRC;
   using NodeType = component::NodeType;
   using Node_t = component::Node<Key, Comp>;
@@ -75,6 +79,8 @@ class BwTree
   static constexpr auto kHeaderLength = component::kHeaderLength;
 
   static constexpr size_t kExpectedTreeHeight = 8;
+
+  static constexpr bool kClosed = true;
 
   /*################################################################################################
    * Internal member variables
@@ -110,7 +116,7 @@ class BwTree
     for (size_t i = 0; i < height; ++i) {
       auto [ptr, rc] = DeltaRecord_t::SearchChildNode(key, closed, page_id);
       switch (rc) {
-        case DeltaRC::kChildFound:
+        case DeltaRC::kRecordFound:
           stack.emplace_back(page_id);
           page_id = reinterpret_cast<std::atomic_uintptr_t *>(ptr);
           break;
@@ -121,7 +127,7 @@ class BwTree
           --i;
           continue;
 
-        case DeltaRC::kSuccess:
+        case DeltaRC::kReachBase:
         default:
           stack.emplace_back(page_id);
           if (rc >= kMaxDeltaNodeNum) {
@@ -130,8 +136,8 @@ class BwTree
 
           // search a child node in a base node
           Node_t *base_node = reinterpret_cast<Node_t *>(ptr);
-          auto idx = base_node->SearchRecord(key, closed).second;
-          auto meta = base_node->GetMetadata(idx);
+          auto pos = base_node->SearchChild(key, closed);
+          auto meta = base_node->GetMetadata(pos);
           page_id = base_node->template GetPayload<std::atomic_uintptr_t *>(meta);
           break;
       }
@@ -199,7 +205,7 @@ class BwTree
           // ...not implemented yet
           break;
 
-        case DeltaRC::kSuccess:
+        case DeltaRC::kReachBase:
         default:
           if (rc >= kMaxDeltaNodeNum) {
             consol_node = page_id;
@@ -209,101 +215,28 @@ class BwTree
     }
   }
 
-  std::pair<Node_t *, Metadata>
+  auto
   CheckExistence(  //
-      const void *key,
+      const Key &key,
       NodeStack &stack,
-      Mapping_t *&consol_node)
+      const std::atomic_uintptr_t *&consol_node)  //
+      -> std::pair<uintptr_t, NodeRC>
   {
-    size_t delta_chain_length = 0;
-    Metadata meta;
+    auto [ptr, rc] = DeltaRecord_t::SearchRecord(key, stack);
+    switch (rc) {
+      case DeltaRC::kRecordFound:
+        return {ptr, NodeRC::kKeyInDelta};
 
-    // traverse a delta chain and a base node
-    Mapping_t *page_id = stack.back();
-    Node_t *cur_node = page_id->load(mo_relax);
-    while (true) {
-      if (const auto delta_type = cur_node->GetDeltaNodeType();
-          delta_type == DeltaType::kInsert || delta_type == DeltaType::kModify) {
-        // check whether this delta record includes a target key
-        meta = cur_node->GetLowMeta();
-        if (component::IsEqual<Key, Comp>(key, cur_node->GetKeyAddr(meta))) {
-          ++delta_chain_length;
-          break;
-        }
-      } else if (delta_type == DeltaType::kNotDelta) {
-        // check whether a target key is in this node
-        const auto high_key = cur_node->GetHighKeyAddr();
-        if (high_key != nullptr && component::LT<Key, Comp>(high_key, key)) {
-          // traverse to a sibling node
-          page_id = cur_node->GetSiblingNode();
-          cur_node = page_id->load(mo_relax);
-          delta_chain_length = 0;
+      case DeltaRC::kRecordDeleted:
+        return {uintptr_t{}, NodeRC::kKeyNotExist};
 
-          // swap a current node in a stack
-          stack.pop_back();
-          stack.emplace_back(page_id);
-          continue;
-        }
-
+      case DeltaRC::kReachBase:
+      default:
         // search a target key
-        const auto [existence, idx] = cur_node->SearchRecord(key, true);
-        if (existence == kKeyExist) {
-          meta = cur_node->GetMetadata(idx);
-        } else {
-          cur_node = nullptr;
-        }
-        break;
-      } else if (delta_type == DeltaType::kDelete) {
-        // check whether a target key is deleted
-        if (component::IsEqual<Key, Comp>(key, cur_node->GetLowKeyAddr())) {
-          cur_node = nullptr;
-          ++delta_chain_length;
-          break;
-        }
-      } else if (delta_type == DeltaType::kSplit) {
-        // check whether a split right (i.e., sibling) node includes a target key
-        meta = cur_node->GetLowMeta();
-        if (component::LT<Key, Comp>(cur_node->GetKeyAddr(meta), key)) {
-          // traverse to a split right node
-          page_id = cur_node->template GetPayload<Mapping_t *>(meta);
-          cur_node = page_id->load(mo_relax);
-          delta_chain_length = 0;
-
-          // swap a current node in a stack
-          stack.pop_back();
-          stack.emplace_back(page_id);
-          continue;
-        }
-      } else if (delta_type == DeltaType::kMerge) {
-        // check whether a merged node includes a target key
-        meta = cur_node->GetLowMeta();
-        if (component::LT<Key, Comp>(cur_node->GetKeyAddr(meta), key)) {
-          // traverse to a merged right node
-          cur_node = cur_node->template GetPayload<Node_t *>(meta);
-          ++delta_chain_length;
-          continue;
-        }
-      } else {  // delta_type == DeltaType::kRemoveNode
-        // this node is deleted, retry until a delete-index-entry delta is inserted
-        stack.pop_back();
-        const auto parent_node = stack.back();
-        page_id = SearchChildNode(key, true, parent_node, cur_node, stack, consol_node);
-        stack.emplace_back(page_id);
-        cur_node = page_id->load(mo_relax);
-        delta_chain_length = 0;
-        continue;
-      }
-
-      // go to the next delta record or base node
-      cur_node = cur_node->GetNextNode();
-      ++delta_chain_length;
+        auto *node = reinterpret_cast<Node_t *>(ptr);
+        auto pos = node->SearchRecord(key);
+        return {ptr, pos};
     }
-
-    if (delta_chain_length >= kMaxDeltaNodeNum) {
-      consol_node = page_id;
-    }
-
-    return {cur_node, meta};
   }
 
   std::pair<Node_t *, Node_t *>
@@ -972,38 +905,35 @@ class BwTree
    * @return std::pair<ReturnCode, Payload>: a return code and payload pair.
    */
   auto
-  Read(const Key &key)
+  Read(const Key &key)  //
+      -> std::optional<Payload>
   {
-    const auto key_addr = component::GetAddr(key);
-    const auto guard = gc_.CreateEpochGuard();
+    const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    Mapping_t *consol_node = nullptr;
-    NodeStack stack = SearchLeafNode(key_addr, true, consol_node);
+    std::atomic_uintptr_t *consol_node = nullptr;
+    auto &&stack = SearchLeafNode(key, kClosed, consol_node);
 
     // check whether the leaf node has a target key
-    const auto [target_node, meta] = CheckExistence(key_addr, stack, consol_node);
-
+    auto [ptr, rc] = CheckExistence(key, stack, consol_node);
     if (consol_node != nullptr) {
-      Consolidate(consol_node, key_addr, true, stack);
+      // if a long delta-chain is found, consolidate it
+      Consolidate(consol_node, key, kClosed, stack);
     }
 
-    if (target_node != nullptr) {
-      // get a target payload
-      Payload payload{};
-      target_node->CopyPayload(meta, payload);
+    if (rc == NodeRC::kKeyNotExist) return std::nullopt;
 
-      if constexpr (IsVariableLengthData<Payload>()) {
-        return std::make_pair(ReturnCode::kSuccess, Binary_p{payload});
-      } else {
-        return std::make_pair(ReturnCode::kSuccess, std::move(payload));
-      }
-    }
-    if constexpr (IsVariableLengthData<Payload>()) {
-      return std::make_pair(ReturnCode::kKeyNotExist, Binary_p{});
+    Payload payload{};
+    if (rc == NodeRC::kKeyInDelta) {
+      auto *delta = reinterpret_cast<DeltaRecord_t *>(ptr);
+      delta->CopyPayload(paylaod);
     } else {
-      return std::make_pair(ReturnCode::kKeyNotExist, Payload{});
+      auto *node = reinterpret_cast<Node_t *>(ptr);
+      auto meta = node->GetMetadata(rc);
+      node->CopyPayload(meta, payload);
     }
+
+    return std::make_optional(payload);
   }
 
   /**

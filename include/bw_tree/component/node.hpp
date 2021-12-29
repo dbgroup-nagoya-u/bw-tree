@@ -437,38 +437,64 @@ class Node
    * @return std::pair<ReturnCode, size_t>: record's existence and the position of a
    * specified key if exist.
    */
-  std::pair<ReturnCode, size_t>
-  SearchRecord(  //
-      const void *key,
-      const bool range_is_closed) const
+  [[nodiscard]] auto
+  SearchRecord(const Key &key) const  //
+      -> NodeRC
   {
-    int64_t begin_idx = 0;
-    int64_t end_idx = GetRecordCount() - 1;
-    int64_t idx = (begin_idx + end_idx) >> 1;
-    ReturnCode rc = ReturnCode::kKeyNotExist;
+    int64_t begin_pos = 0;
+    int64_t end_pos = record_count_ - 1;
+    auto rc = NodeRC::kKeyNotExist;
+    while (begin_pos <= end_pos) {
+      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
 
-    while (begin_idx <= end_idx) {
-      const auto meta = GetMetadata(idx);
-      const auto idx_key = GetKeyAddr(meta);
+      const auto &index_key = GetKey(meta_array_[pos]);
 
-      if (meta.GetKeyLength() == 0 || LT<Key, Comp>(key, idx_key)) {
-        // a target key is in a left side
-        end_idx = idx - 1;
-      } else if (LT<Key, Comp>(idx_key, key)) {
-        // a target key is in a right side
-        begin_idx = idx + 1;
-      } else {
-        // find an equivalent key
-        if (!range_is_closed) ++idx;
-        begin_idx = idx;
-        rc = ReturnCode::kKeyExist;
-        break;
+      if (Comp{}(key, index_key)) {  // a target key is in a left side
+        end_pos = pos - 1;
+      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
+        begin_pos = pos + 1;
+      } else {  // find an equivalent key
+        rc = pos;
       }
-
-      idx = (begin_idx + end_idx) >> 1;
     }
 
-    return {rc, begin_idx};
+    return rc;
+  }
+
+  /**
+   * @brief Get the position of a specified key by using binary search. If there is no
+   * specified key, this returns the minimum metadata index that is greater than the
+   * specified key
+   *
+   * @param key a target key.
+   * @param range_is_closed a flag to indicate that a target key is included.
+   * @return the position of a specified key.
+   */
+  [[nodiscard]] auto
+  SearchChild(  //
+      const Key &key,
+      const bool range_is_closed) const  //
+      -> size_t
+  {
+    int64_t begin_pos = 0;
+    int64_t end_pos = record_count_ - 2;
+    while (begin_pos <= end_pos) {
+      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
+
+      const auto &index_key = GetKey(meta_array_[pos]);
+
+      if (Comp{}(key, index_key)) {  // a target key is in a left side
+        end_pos = pos - 1;
+      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
+        begin_pos = pos + 1;
+      } else {  // find an equivalent key
+        if (!range_is_closed) ++pos;
+        begin_pos = pos;
+        break;
+      }
+    }
+
+    return begin_pos;
   }
 
   void

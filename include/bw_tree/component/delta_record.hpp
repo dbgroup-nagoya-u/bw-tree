@@ -37,6 +37,12 @@ namespace dbgroup::index::bw_tree::component
 template <class Key, class Payload, class Comp>
 class DeltaRecord
 {
+  /*####################################################################################
+   * Type aliases
+   *##################################################################################*/
+
+  using NodeStack = std::vector<std::atomic_uintptr_t *>;
+
  public:
   /*####################################################################################
    * Public constructors and assignment operators
@@ -134,6 +140,24 @@ class DeltaRecord
     }
   }
 
+  /**
+   * @brief Copy a target payload to a specified reference.
+   *
+   * @param out_payload a reference to be copied a target payload.
+   */
+  void
+  CopyPayload(Payload &out_payload) const
+  {
+    const auto offset = meta_.GetOffset() + meta_.GetKeyLength();
+    if constexpr (IsVariableLengthData<Payload>()) {
+      const auto payload_length = meta_.GetPayloadLength();
+      out_payload = reinterpret_cast<Payload>(::operator new(payload_length));
+      memcpy(out_payload, ShiftAddress(this, offset), payload_length);
+    } else {
+      memcpy(&out_payload, ShiftAddress(this, offset), sizeof(Payload));
+    }
+  }
+
   /*####################################################################################
    * Public utilities
    *##################################################################################*/
@@ -154,16 +178,16 @@ class DeltaRecord
     while (true) {
       switch (cur_rec->delta_type_) {
         case DeltaType::kInsert:
-          const auto &sep_key = cur_rec->GetKey(cur_rec->meta_);
+          auto &&sep_key = cur_rec->GetKey(cur_rec->meta_);
           if (Comp{}(sep_key, key) || (!closed && !Comp{key, sep_key})) {
             // this index term delta directly indicates a child node
             child_page = cur_rec->template GetPayload<uintptr_t>();
-            return {child_page, kChildFound};
+            return {child_page, kRecordFound};
           }
           break;
 
         case DeltaType::kSplit:
-          const auto &sep_key = cur_rec->GetKey(cur_rec->meta_);
+          sep_key = cur_rec->GetKey(cur_rec->meta_);
           if (Comp{}(sep_key, key) || (!closed && !Comp{key, sep_key})) {
             // a sibling node includes a target key
             page_id = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
@@ -213,18 +237,103 @@ class DeltaRecord
     }
   }
 
+  auto
+  SearchRecord(  //
+      const Key &key,
+      NodeStack &stack)  //
+      -> std::pair<uintptr_t, DeltaRC>
+  {
+    auto *page_id = stack.back();
+    auto ptr = page_id->load(std::memory_order_acquire);
+    DeltaRecord *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+    DeltaRC delta_chain_length = 0;
+
+    // traverse a delta chain
+    while (true) {
+      switch (cur_rec->delta_type_) {
+        case DeltaType::kInsert:
+        case DeltaType::kModify:
+          auto &&rec_key = cur_rec->GetKey(cur_rec->meta_);
+          if (!Comp{}(key, rec_key) && !Comp{}(rec_key, key)) {
+            // this delta record contains a target key
+            return {ptr, kRecordFound};
+          }
+          break;
+
+        case DeltaType::kDelete:
+          rec_key = cur_rec->GetKey(cur_rec->meta_);
+          if (!Comp{}(key, rec_key) && !Comp{}(rec_key, key)) {
+            // a target key is deleted
+            return {ptr, kRecordDeleted};
+          }
+          break;
+
+        case DeltaType::kSplit:
+          rec_key = cur_rec->GetKey(cur_rec->meta_);
+          if (Comp{}(rec_key, key)) {
+            // a sibling node may include a target key
+            page_id = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
+            ptr = page_id->load(std::memory_order_acquire);
+            cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+            delta_chain_length = 0;
+
+            // swap a current node in a stack
+            stack.emplace(stack.rbegin(), page_id);
+            continue;
+          }
+          break;
+
+        case DeltaType::kNotDelta:
+          if (cur_rec->high_key_meta_.GetKeyLength() > 0) {
+            // this base node has a sibling node
+            const auto &high_key = cur_rec->GetKey(cur_rec->high_key_meta_);
+            if (Comp{}(high_key, key)) {
+              // a sibling node includes a target key
+              page_id = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
+              ptr = page_id->load(std::memory_order_acquire);
+              cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+              delta_chain_length = 0;
+
+              // swap a current node in a stack
+              stack.emplace(stack.rbegin(), page_id);
+              continue;
+            }
+          }
+          // reach a base page
+          return {ptr, delta_chain_length};
+
+        case DeltaType::kMerge:
+          // ...not implemented yet
+          break;
+
+        case DeltaType::kRemoveNode:
+          // ...not implemented yet
+          break;
+
+        default:
+          break;
+      }
+
+      // go to the next delta record or base node
+      ptr = cur_rec->next_;
+      cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+      ++delta_chain_length;
+    }
+  }
+
   static auto
   Validate(  //
       const Key &key,
       const bool closed,
-      const std::atomic_uintptr_t *&page_id,
-      const uintptr_t prev_head)  //
+      const uintptr_t prev_head,
+      NodeStack &stack)  //
       -> std::pair<uintptr_t, DeltaRC>
   {
-    DeltaRC delta_chain_length = 0;
+    auto *page_id = stack.back();
     auto head = page_id->load(std::memory_order_acquire);
     auto ptr = head;
     DeltaRecord *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+    DeltaRC delta_chain_length = 0;
 
     // traverse a delta chain
     while (ptr != prev_head) {
@@ -248,6 +357,9 @@ class DeltaRecord
               ptr = head;
               cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
               delta_chain_length = 0;
+
+              // swap a current node in a stack
+              stack.emplace(stack.rbegin(), page_id);
               continue;
             }
           }
