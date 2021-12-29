@@ -85,7 +85,7 @@ class Node
       const size_t record_count,
       const Mapping_t *sib_node)
       : node_type_{node_type},
-        delta_type_{DeltaNodeType::kNotDelta},
+        delta_type_{DeltaType::kNotDelta},
         record_count_{static_cast<uint16_t>(record_count)},
         next_node_{reinterpret_cast<const uintptr_t>(sib_node)}
   {
@@ -100,7 +100,7 @@ class Node
    */
   Node(  //
       const NodeType node_type,
-      const DeltaNodeType delta_type)
+      const DeltaType delta_type)
       : node_type_{node_type}, delta_type_{delta_type}, next_node_{0}
   {
   }
@@ -145,7 +145,7 @@ class Node
   DeleteNode(Node *node)
   {
     // release nodes recursively until it reaches a base node
-    while (node != nullptr && node->GetDeltaNodeType() != DeltaNodeType::kNotDelta) {
+    while (node != nullptr && node->GetDeltaNodeType() != DeltaType::kNotDelta) {
       auto cur_node = node;
       node = cur_node->GetNextNode();
 
@@ -167,7 +167,7 @@ class Node
   static Node *
   CreateDeltaNode(  //
       const NodeType node_type,
-      const DeltaNodeType delta_type,
+      const DeltaType delta_type,
       const void *key,
       const size_t key_length,
       const T &payload,
@@ -197,7 +197,7 @@ class Node
     const auto high_key_len = high_meta.GetKeyLength();
     size_t offset = kHeaderLength + total_length + high_key_len;
 
-    Node *delta = new (::operator new(offset)) Node{NodeType::kInternal, DeltaNodeType::kInsert};
+    Node *delta = new (::operator new(offset)) Node{NodeType::kInternal, DeltaType::kInsert};
 
     if (high_key_len == 0) {
       delta->SetHighMeta(high_meta);
@@ -228,12 +228,12 @@ class Node
   }
 
   /**
-   * @return DeltaNodeType: the type of a delta node.
+   * @return DeltaType: the type of a delta node.
    */
-  constexpr DeltaNodeType
+  constexpr DeltaType
   GetDeltaNodeType() const
   {
-    return static_cast<DeltaNodeType>(delta_type_);
+    return static_cast<DeltaType>(delta_type_);
   }
 
   /**

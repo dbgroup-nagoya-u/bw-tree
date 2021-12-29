@@ -17,8 +17,10 @@
 #ifndef BW_TREE_COMPONENT_DELTA_RECORD_HPP
 #define BW_TREE_COMPONENT_DELTA_RECORD_HPP
 
+#include <atomic>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "common.hpp"
 #include "metadata.hpp"
@@ -52,7 +54,7 @@ class DeltaRecord
    */
   template <class T>
   DeltaRecord(  //
-      const DeltaNodeType delta_type,
+      const DeltaType delta_type,
       const Key &key,
       const size_t key_length,
       const T &payload,
@@ -76,7 +78,7 @@ class DeltaRecord
    * @param sib_node
    */
   DeltaRecord(  //
-      const DeltaNodeType delta_type,
+      const DeltaType delta_type,
       const Key &low_key,
       const size_t low_key_len,
       const std::optional<std::pair<const Key &, size_t>> &high_key,
@@ -116,10 +118,146 @@ class DeltaRecord
 
   constexpr ~DeltaRecord() = default;
 
+  /**
+   * @tparam Payload a class of payload.
+   * @return a payload in this record.
+   */
+  template <class T>
+  [[nodiscard]] constexpr auto
+  GetPayload() const  //
+      -> T
+  {
+    if constexpr (IsVariableLengthData<T>()) {
+      return reinterpret_cast<T>(GetPayloadAddr());
+    } else {
+      return *reinterpret_cast<T *>(GetPayloadAddr());
+    }
+  }
+
+  /*####################################################################################
+   * Public utilities
+   *##################################################################################*/
+
+  static auto
+  SearchChildNode(  //
+      const Key &key,
+      const bool closed,
+      const std::atomic_uintptr_t *&page_id)  //
+      -> std::pair<uintptr_t, DeltaRC>
+  {
+    DeltaRC delta_chain_length = 0;
+    uintptr_t child_page{};
+    auto ptr = page_id->load(std::memory_order_acquire);
+    DeltaRecord *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+
+    // traverse a delta chain
+    while (true) {
+      switch (cur_rec->delta_type_) {
+        case DeltaType::kInsert:
+          const auto &sep_key = cur_rec->GetKey(cur_rec->meta_);
+          if (Comp{}(sep_key, key) || (!closed && !Comp{key, sep_key})) {
+            // this index term delta directly indicates a child node
+            child_page = cur_rec->template GetPayload<uintptr_t>();
+            return {child_page, kChildFound};
+          }
+          break;
+
+        case DeltaType::kSplit:
+          const auto &sep_key = cur_rec->GetKey(cur_rec->meta_);
+          if (Comp{}(sep_key, key) || (!closed && !Comp{key, sep_key})) {
+            // a sibling node includes a target key
+            page_id = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
+            ptr = page_id->load(std::memory_order_acquire);
+            cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+            delta_chain_length = 0;
+            continue;
+          }
+          break;
+
+        case DeltaType::kNotDelta:
+          if (cur_rec->high_key_meta_.GetKeyLength() > 0) {
+            // this base node has a sibling node
+            const auto &high_key = cur_rec->GetKey(cur_rec->high_key_meta_);
+            if (Comp{}(high_key, key) || (!closed && !Comp{key, high_key})) {
+              // a sibling node includes a target key
+              page_id = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
+              ptr = page_id->load(std::memory_order_acquire);
+              cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+              delta_chain_length = 0;
+              continue;
+            }
+          }
+          // reach a base page
+          return {ptr, delta_chain_length};
+
+        case DeltaType::kDelete:
+          // ...not implemented yet
+          break;
+
+        case DeltaType::kMerge:
+          // ...not implemented yet
+          break;
+
+        case DeltaType::kRemoveNode:
+          // ...not implemented yet
+          break;
+
+        default:
+          break;
+      }
+
+      // go to the next delta record or base node
+      ptr = cur_rec->next_;
+      cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+      ++delta_chain_length;
+    }
+  }
+
+      ++delta_chain_length;
+    }
+  }
+
  private:
   /*####################################################################################
    * Internal getters/setters
    *##################################################################################*/
+
+  /**
+   * @param meta metadata of a corresponding record.
+   * @return an address of a target key.
+   */
+  [[nodiscard]] constexpr auto
+  GetKeyAddr(const Metadata meta) const  //
+      -> void *
+  {
+    return ShiftAddr(this, meta.GetOffset());
+  }
+
+  /**
+   * @param meta metadata of a corresponding record.
+   * @return a key in a target record.
+   */
+  [[nodiscard]] constexpr auto
+  GetKey(const Metadata meta) const  //
+      -> Key
+  {
+    if constexpr (IsVariableLengthData<Key>()) {
+      return reinterpret_cast<Key>(GetKeyAddr(meta));
+    } else {
+      return *reinterpret_cast<Key *>(GetKeyAddr(meta));
+    }
+  }
+
+  /**
+   * @param meta metadata of a corresponding record.
+   * @return an address of a target payload.
+   */
+  [[nodiscard]] constexpr auto
+  GetPayloadAddr() const  //
+      -> void *
+  {
+    return ShiftAddr(this, meta_.GetOffset() + meta_.GetKeyLength());
+  }
 
   /**
    * @brief Set a target key.
@@ -182,7 +320,7 @@ class DeltaRecord
   uint64_t : 0;
 
   /// the pointer to the next node.
-  uintptr_t next_node_{0};
+  uintptr_t next_{0};
 
   /// metadata of an embedded record
   Metadata meta_{};

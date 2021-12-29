@@ -39,6 +39,17 @@ enum NodeReturnCode
 };
 
 /**
+ * @brief Internal return codes for representing results of delta chain traversal.
+ *
+ */
+enum DeltaRC
+{
+  kChildFound = -100,
+  kNodeRemoved,
+  kSuccess = 0
+};
+
+/**
  * @brief A flag to distinguish leaf/internal nodes.
  *
  */
@@ -52,7 +63,7 @@ enum NodeType : uint16_t
  * @brief A flag to represent the types of delta nodes
  *
  */
-enum DeltaNodeType : uint16_t
+enum DeltaType : uint16_t
 {
   kNotDelta = 0,
   kInsert,
