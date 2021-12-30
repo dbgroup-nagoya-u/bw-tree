@@ -87,6 +87,8 @@ constexpr auto mo_relax = std::memory_order_relaxed;
 /// Header length in bytes.
 constexpr size_t kHeaderLength = 28;
 
+constexpr bool kClosed = true;
+
 /*##################################################################################################
  * Internal utility functions
  *################################################################################################*/

@@ -34,7 +34,7 @@ namespace dbgroup::index::bw_tree::component
  * @tparam Payload a target payload class.
  * @tparam Comp a comparetor class for keys.
  */
-template <class Key, class Payload, class Comp>
+template <class Key, class Comp>
 class DeltaRecord
 {
   /*####################################################################################
@@ -70,8 +70,8 @@ class DeltaRecord
     auto [key_len, pay_len, rec_len] = Align<Key, T>(key_length, payload_length);
     auto offset = sizeof(DeltaRecord);
 
-    offset = SetPayload(offset, payload, pay_len);
-    offset = SetKey(offset, key, key_len);
+    offset = SetData<T>(offset, payload, pay_len);
+    offset = SetData<Key>(offset, key, key_len);
     meta_ = Metadata{offset, key_len, rec_len};
   }
 
@@ -98,7 +98,7 @@ class DeltaRecord
       const auto &[h_key, h_key_len] = high_key.value();
       auto [key_len, pay_len, rec_len] = Align<Key, uintptr_t>(h_key_len, kPtrLength);
 
-      auto tmp_offset = SetKey(offset, h_key, key_len);
+      auto tmp_offset = SetData<Key>(offset, h_key, key_len);
       high_key_meta_ = Metadata{tmp_offset, key_len, rec_len};
 
       offset -= rec_len;
@@ -108,8 +108,8 @@ class DeltaRecord
 
     auto [key_len, pay_len, rec_len] = Align<Key, uintptr_t>(low_key_len, kPtrLength);
 
-    offset = SetPayload(offset, sib_node, pay_len);
-    offset = SetKey(offset, low_key, key_len);
+    offset = SetData<uintptr_t>(offset, sib_node, pay_len);
+    offset = SetData<Key>(offset, low_key, key_len);
     meta_ = Metadata{offset, key_len, rec_len};
   }
 
@@ -123,6 +123,17 @@ class DeltaRecord
    *##################################################################################*/
 
   constexpr ~DeltaRecord() = default;
+
+  /*####################################################################################
+   * Public getters/setters
+   *##################################################################################*/
+
+  [[nodescard]] constexpr auto
+  HasPayload() const  //
+      -> bool
+  {
+    return delta_type_ == DeltaType::kInsert || delta_type_ == DeltaType::kModify;
+  }
 
   /**
    * @tparam Payload a class of payload.
@@ -386,14 +397,16 @@ class DeltaRecord
   }
 
   static auto
-  SortRecords(  //
+  Sort(  //
       uintptr_t ptr,
-      std::vector<std::pair<Key, DeltaRecord *>> &records)  //
-      -> std::tuple<uintptr_t, std::optional<Key>, std::atomic_uintptr_t *>
+      std::vector<std::pair<Key, uintptr_t>> &records)  //
+      -> std::tuple<uintptr_t, std::optional<Key>, Metadata, std::atomic_uintptr_t *>
   {
     DeltaRecord *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
     std::optional<Key> high_key = std::nullopt;
+    Metadata high_meta{};
     std::atomic_uintptr_t *sib_node = nullptr;
+    int64_t size_diff = 0;
 
     // traverse and sort a delta chain
     while (true) {
@@ -411,17 +424,27 @@ class DeltaRecord
               if (!Comp{}(key, it->first)) break;
             }
             if (it == it_end) {
-              records.emplace_back(std::make_pair(std::move(key), cur_rec));
+              records.emplace_back(std::make_pair(std::move(key), ptr));
             } else if (Comp{}(it->first, key)) {
-              records.insert(it, std::make_pair(std::move(key), cur_rec));
+              records.insert(it, std::make_pair(std::move(key), ptr));
             }
+          }
+
+          // update the page size
+          if (cur_rec->delta_type_ == DeltaType::kInsert) {
+            size_diff += cur_rec->meta_.GetTotalLength() + sizeof(Metadata);
+          } else if (cur_rec->delta_type_ == DeltaType::kDelete) {
+            size_diff -= cur_rec->meta_.GetTotalLength() + sizeof(Metadata);
+          } else if constexpr (IsVariableLengthData<Payload>()) {
+            size_diff += cur_rec->meta_.GetPayloadLength();
           }
           break;
 
         case DeltaType::kSplit:
           if (!high_key) {
             // the first split delta has a highest key and a sibling node
-            high_key = cur_rec->GetKey(cur_rec->meta_);
+            high_meta = cur_rec->meta_;
+            high_key = cur_rec->GetKey(high_meta);
             sib_node = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
           }
           break;
@@ -429,10 +452,11 @@ class DeltaRecord
         case DeltaType::kNotDelta:
           if (!high_key) {
             // if there are no SMOs, a base node has a highest key and a sibling node
+            high_meta = cur_rec->high_key_meta_;
             high_key = cur_rec->GetHighKey();
             sib_node = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
           }
-          return {ptr, high_key, sib_node};
+          return {ptr, high_key, high_meta, sib_node, size_diff};
 
         case DeltaType::kMerge:
           // ...not implemented yet
@@ -452,6 +476,13 @@ class DeltaRecord
   /*####################################################################################
    * Internal getters/setters
    *##################################################################################*/
+
+  [[nodescard]] constexpr auto
+  GetMetadata() const  //
+      -> Metadata
+  {
+    return meta_;
+  }
 
   /**
    * @param meta metadata of a corresponding record.
@@ -502,50 +533,27 @@ class DeltaRecord
   }
 
   /**
-   * @brief Set a target key.
+   * @brief Set a target data directly.
    *
-   * @param offset an offset to set a target key.
-   * @param key a target key to be set.
-   * @param key_length the length of a target key.
-   */
-  auto
-  SetKey(  //
-      size_t offset,
-      const Key &key,
-      const size_t key_length)  //
-      -> size_t
-  {
-    offset -= key_length;
-    if constexpr (IsVariableLengthData<Key>()) {
-      memcpy(ShiftAddr(this, offset), key, key_length);
-    } else {
-      memcpy(ShiftAddr(this, offset), &key, sizeof(Key));
-    }
-
-    return offset;
-  }
-
-  /**
-   * @brief Set a target payload directly.
-   *
-   * @tparam Payload a class of payload.
-   * @param offset an offset to set a target payload.
+   * @tparam T a class of data.
+   * @param offset an offset to set a target data.
    * @param payload a target payload to be set.
    * @param payload_length the length of a target payload.
    */
   template <class T>
   auto
-  SetPayload(  //
+  SetData(  //
       size_t offset,
-      const T &payload,
-      const size_t payload_length)  //
+      const T &data,
+      [[maybe_unused]] const size_t data_len)  //
       -> size_t
   {
-    offset -= payload_length;
     if constexpr (IsVariableLengthData<T>()) {
-      memcpy(ShiftAddr(this, offset), payload, payload_length);
+      offset -= data_len;
+      memcpy(ShiftAddr(this, offset), data, data_len);
     } else {
-      memcpy(ShiftAddr(this, offset), &payload, sizeof(T));
+      offset -= sizeof(T);
+      memcpy(ShiftAddr(this, offset), &data, sizeof(T));
     }
 
     return offset;
