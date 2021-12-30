@@ -385,6 +385,69 @@ class DeltaRecord
     }
   }
 
+  static auto
+  SortRecords(  //
+      uintptr_t ptr,
+      std::vector<std::pair<Key, DeltaRecord *>> &records)  //
+      -> std::tuple<uintptr_t, std::optional<Key>, std::atomic_uintptr_t *>
+  {
+    DeltaRecord *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+    std::optional<Key> high_key = std::nullopt;
+    std::atomic_uintptr_t *sib_node = nullptr;
+
+    // traverse and sort a delta chain
+    while (true) {
+      switch (cur_rec->delta_type_) {
+        case DeltaType::kInsert:
+        case DeltaType::kModify:
+        case DeltaType::kDelete:
+          // check whether this record is in a target node
+          auto &&key = cur_rec->GetKey(cur_rec->meta_);
+          if (!high_key || !Comp{}(*high_key, key)) {
+            // check uniqueness
+            auto it = records.cbegin();
+            const auto it_end = records.cend();
+            for (; it != it_end; ++it) {
+              if (!Comp{}(key, it->first)) break;
+            }
+            if (it == it_end) {
+              records.emplace_back(std::make_pair(std::move(key), cur_rec));
+            } else if (Comp{}(it->first, key)) {
+              records.insert(it, std::make_pair(std::move(key), cur_rec));
+            }
+          }
+          break;
+
+        case DeltaType::kSplit:
+          if (!high_key) {
+            // the first split delta has a highest key and a sibling node
+            high_key = cur_rec->GetKey(cur_rec->meta_);
+            sib_node = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
+          }
+          break;
+
+        case DeltaType::kNotDelta:
+          if (!high_key) {
+            // if there are no SMOs, a base node has a highest key and a sibling node
+            high_key = cur_rec->GetHighKey();
+            sib_node = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
+          }
+          return {ptr, high_key, sib_node};
+
+        case DeltaType::kMerge:
+          // ...not implemented yet
+          break;
+
+        default:
+          break;
+      }
+
+      // go to the next delta record or base node
+      ptr = cur_rec->next_;
+      cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+    }
+  }
+
  private:
   /*####################################################################################
    * Internal getters/setters
@@ -414,6 +477,17 @@ class DeltaRecord
     } else {
       return *reinterpret_cast<Key *>(GetKeyAddr(meta));
     }
+  }
+
+  /**
+   * @return a highest key in a target record.
+   */
+  [[nodiscard]] constexpr auto
+  GetHighKey(const Metadata meta) const  //
+      -> std::optional<Key>
+  {
+    if (high_key_meta_.GetKeyLength() > 0) return GetKey(high_key_meta_);
+    return std::nullopt;
   }
 
   /**

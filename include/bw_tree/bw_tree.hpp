@@ -197,68 +197,6 @@ class BwTree
     return stack;
   }
 
-  std::pair<Node_t *, Node_t *>
-  SortDeltaRecords(  //
-      Node_t *cur_node,
-      std::vector<Record> &records)
-  {
-    Node_t *end_node = nullptr;
-    void *sep_key = nullptr;
-
-    while (true) {
-      if (const auto delta_type = cur_node->GetDeltaNodeType();
-          delta_type == DeltaType::kInsert     //
-          || delta_type == DeltaType::kModify  //
-          || delta_type == DeltaType::kDelete) {
-        // check whether this delta record is in current key-range
-        const auto meta = cur_node->GetLowMeta();
-        const Record rec{cur_node, meta, cur_node->GetKeyAddr(meta)};
-        if (sep_key == nullptr || !component::LT<Key, Comp>(sep_key, rec.key)) {
-          // check whether this delta record has a new key
-          const auto it = std::lower_bound(records.begin(), records.end(), rec);
-          if (it == records.end()) {
-            records.emplace_back(std::move(rec));
-          } else if (component::LT<Key, Comp>(rec.key, (*it).key)) {
-            records.insert(it, std::move(rec));
-          }
-        }
-      } else if (delta_type == DeltaType::kNotDelta) {
-        if (end_node == nullptr) {
-          // if there are no SMOs, a base node has a sibling node
-          end_node = cur_node;
-        }
-        break;
-      } else if (delta_type == DeltaType::kSplit) {
-        if (end_node == nullptr) {
-          // this split-delta record has a sibling node
-          end_node = cur_node;
-        }
-        if (sep_key == nullptr) {
-          // the last separator key is the most strict one
-          sep_key = cur_node->GetLowKeyAddr();
-        }
-      } else if (delta_type == DeltaType::kMerge) {
-        // traverse a merged delta chain recursively
-        const auto merged_chain = cur_node->template GetPayload<Node_t *>(cur_node->GetLowMeta());
-        const auto [merged_base_node, merged_end_node] = SortDeltaRecords(merged_chain, records);
-
-        // add records in a merged base node
-        const auto high_key = GetHighKey(merged_end_node);
-        MergeRecords(high_key, records, merged_base_node);
-
-        if (end_node == nullptr) {
-          // this merged base node has a sibling node
-          end_node = merged_base_node;
-        }
-      }
-
-      // go to the next delta record or base node
-      cur_node = cur_node->GetNextNode();
-    }
-
-    return {cur_node, end_node};
-  }
-
   void
   MergeRecords(  //
       const void *sep_key,
