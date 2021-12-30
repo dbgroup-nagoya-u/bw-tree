@@ -49,7 +49,7 @@ class BwTree
   using DeltaRC = component::DeltaRC;
   using NodeType = component::NodeType;
   using Node_t = component::Node<Key, Comp>;
-  using DeltaRecord_t = component::DeltaRecord<Key, Payload, Comp>;
+  using DeltaRecord_t = component::DeltaRecord<Key, Comp>;
   using Mapping_t = std::atomic<Node_t *>;
   using MappingTable_t = component::MappingTable<Key, Comp>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
@@ -116,11 +116,10 @@ class BwTree
       delta->CopyPayload(payload);
     } else {
       auto *node = reinterpret_cast<Node_t *>(ptr);
-      auto meta = node->GetMetadata(rc);
-      node->CopyPayload(meta, payload);
+      node->CopyPayload(node->GetMetadata(rc), payload);
     }
 
-    return std::make_optional(payload);
+    return std::make_optional(std::move(payload));
   }
 
   /*####################################################################################
@@ -157,18 +156,6 @@ class BwTree
    * Not refactored yet......
    *##################################################################################*/
 
-  struct Record {
-    Node_t *node;
-    Metadata meta;
-    void *key;
-
-    constexpr bool
-    operator<(const Record &comp) const noexcept
-    {
-      return component::LT<Key, Comp>(this->key, comp.key);
-    }
-  };
-
  private:
   NodeStack
   SearchLeftEdgeLeaf()
@@ -197,145 +184,6 @@ class BwTree
     return stack;
   }
 
-  bool
-  HalfSplit(  //
-      Mapping_t *split_page,
-      Node_t *cur_head,
-      Node_t *split_node,
-      NodeStack &stack)
-  {
-    // get the number of records and metadata of a separator key
-    const auto total_num = split_node->GetRecordCount();
-    const auto left_num = total_num >> 1;
-    const auto right_num = total_num - left_num;
-    const auto sep_meta = split_node->GetMetadata(left_num - 1);
-
-    // shift metadata to use a consolidated node as a split-right node
-    auto dest_addr = component::ShiftAddress(split_node, kHeaderLength);
-    const auto src_addr = component::ShiftAddress(dest_addr, sizeof(Metadata) * left_num);
-    memmove(dest_addr, src_addr, sizeof(Metadata) * right_num);
-
-    // set a separator key as the lowest key
-    split_node->SetLowMeta(sep_meta);
-    split_node->SetRecordCount(right_num);
-
-    // create a split-delta record
-    const auto node_type = static_cast<NodeType>(split_node->IsLeaf());
-    const auto sep_key = split_node->GetKeyAddr(sep_meta);
-    Mapping_t *right_page_id = mapping_table_.GetNewLogicalID();
-    Node_t *split_delta = Node_t::CreateDeltaNode(node_type, DeltaType::kSplit,      //
-                                                  sep_key, sep_meta.GetKeyLength(),  //
-                                                  right_page_id, sizeof(Mapping_t *));
-    split_delta->SetNextNode(cur_head);
-    right_page_id->store(split_node, mo_relax);
-
-    // install the delta record for splitting a child node
-    for (auto old_head = cur_head;
-         !split_page->compare_exchange_weak(old_head, split_delta, mo_relax);) {
-      if (old_head == cur_head) continue;  // weak CAS may fail even if it can execute
-
-      // no CAS retry for split
-      split_delta->SetNextNode(nullptr);
-      Node_t::DeleteNode(split_delta);
-      Node_t::DeleteNode(split_node);
-      right_page_id->store(nullptr, mo_relax);
-      return false;
-    }
-
-    // execute parent update
-    Mapping_t *consol_page = nullptr;
-    CompleteSplit(split_delta, stack, consol_page);
-
-    // execute parent consolidation/split if needed
-    if (consol_page != nullptr) {
-      TryConsolidation(consol_page, sep_key, true, stack);
-    }
-
-    return true;
-  }
-
-  void
-  CompleteSplit(  //
-      Node_t *split_delta,
-      NodeStack &stack,
-      Mapping_t *&consol_page)
-  {
-    // create an index-entry delta record
-    const auto sep_meta = split_delta->GetLowMeta();
-    const auto sep_key_len = sep_meta.GetKeyLength();
-    const auto sep_key = split_delta->GetKeyAddr(sep_meta);
-    Mapping_t *right_page = split_delta->template GetPayload<Mapping_t *>(sep_meta);
-
-    if (stack.size() <= 1) {
-      // a split node is a root node
-      SplitRoot(sep_key, sep_key_len, right_page, stack);
-      return;
-    }
-
-    // create an index-entry delta record to complete split
-    Node_t *entry_delta = Node_t::CreateIndexEntryDelta(sep_key, sep_key_len, right_page);
-
-    // insert the delta record into a parent node
-    stack.pop_back();  // remove a split child node to modify its parent node
-    for (Node_t *prev_node = nullptr; true;) {
-      // check whether there are no incomplete SMOs
-      Node_t *cur_head = ValidateNode(sep_key, true, prev_node, stack, consol_page);
-
-      // check whether another thread has already completed this split
-      if (CheckExistence(sep_key, stack, consol_page).first != nullptr) {
-        entry_delta->SetNextNode(nullptr);
-        Node_t::DeleteNode(entry_delta);
-        return;
-      }
-
-      // try to insert the index-entry delta record
-      entry_delta->SetNextNode(cur_head);
-      prev_node = cur_head;
-      if (stack.back()->compare_exchange_weak(cur_head, entry_delta, mo_relax)) return;
-    }
-  }
-
-  void
-  SplitRoot(  //
-      const void *sep_key,
-      const size_t sep_key_len,
-      Mapping_t *right_page,
-      NodeStack &stack)
-  {
-    // create a new root node
-    Mapping_t *left_page = stack.back();  // i.e., the old root node
-    const auto total_len = sep_key_len + sizeof(Mapping_t *);
-    auto offset = kHeaderLength + (2 * sizeof(Metadata)) + sizeof(Mapping_t *) + total_len;
-    Node_t *new_root = Node_t::CreateNode(offset, NodeType::kInternal, 2, nullptr);
-    new_root->SetLowMeta(Metadata{0, 0, 0});
-    new_root->SetHighMeta(Metadata{0, 0, 0});
-
-    // set a split-left page
-    new_root->SetPayload(offset, left_page, sizeof(Mapping_t *));
-    new_root->SetKey(offset, sep_key, sep_key_len);
-    new_root->SetMetadata(0, Metadata{offset, sep_key_len, total_len});
-
-    // set a split-right page
-    new_root->SetPayload(offset, right_page, sizeof(Mapping_t *));
-    new_root->SetMetadata(1, Metadata{offset, 0, sizeof(Mapping_t *)});
-
-    // install a new root page
-    Mapping_t *new_root_page = mapping_table_.GetNewLogicalID();
-    new_root_page->store(new_root, mo_relax);
-    stack.pop_back();
-    for (auto old_root_page = left_page;
-         !root_.compare_exchange_weak(old_root_page, new_root_page, mo_relax);) {
-      if (old_root_page == left_page) continue;  // weak CAS may fail even if it can execute
-
-      // another thread has already inserted a new root
-      new_root_page->store(nullptr, mo_relax);
-      Node_t::DeleteNode(new_root);
-      stack.emplace_back(old_root_page);
-      return;
-    }
-    stack.emplace_back(new_root_page);
-  }
-
  public:
   /*####################################################################################
    * Public classes
@@ -348,7 +196,6 @@ class BwTree
    * @tparam Payload a target payload class
    * @tparam Compare a key-comparator class
    */
-
   class RecordIterator
   {
     using BwTree_t = BwTree<Key, Payload, Comp>;
@@ -752,6 +599,8 @@ class BwTree
 
   static constexpr bool kClosed = component::kClosed;
 
+  static constexpr uintptr_t kNullPtr = component::kNullPtr;
+
   /*####################################################################################
    * Internal utility functions
    *##################################################################################*/
@@ -764,11 +613,19 @@ class BwTree
    * @retval an empty internal node otherwise.
    */
   [[nodiscard]] auto
-  ReservePage(const size_t size)  //
+  GetNodePage(const size_t size)  //
       -> void *
   {
     auto *page = (size > kPageSize) ? (::operator new(size))  //
                                     : gc_->template GetPageIfPossible<Node_t>();
+    return (page == nullptr) ? (::operator new(kPageSize)) : page;
+  }
+
+  [[nodiscard]] auto
+  GetRecordPage()  //
+      -> void *
+  {
+    auto *page = gc_->template GetPageIfPossible<DeltaRecord_t>();
     return (page == nullptr) ? (::operator new(kPageSize)) : page;
   }
 
@@ -897,7 +754,7 @@ class BwTree
   void
   TryConsolidation(  //
       const std::atomic_uintptr_t *target_page,
-      const void *key,
+      const Key &key,
       const bool closed,
       NodeStack &stack)
   {
@@ -907,13 +764,13 @@ class BwTree
 
     // check whether the target node is valid (containing a target key and no incomplete SMOs)
     consol_page_ = nullptr;
-    auto cur_head = ValidateNode(key, closed, 0, stack);
+    auto cur_head = ValidateNode(key, closed, kNullPtr, stack);
     if (consol_page_ != target_page) return;
 
     // perform consolidation, and split if needed
     auto [consol_node, size] = Consolidate(cur_head);
     if (size > kPageSize) {
-      if (HalfSplit(consol_page, cur_head, consol_node, stack)) return;
+      if (HalfSplit(target_page, cur_head, consol_node, stack)) return;
       TryConsolidation(consol_page, key, closed, stack);  // retry from consolidation
       return;
     }
@@ -921,14 +778,13 @@ class BwTree
     // install a consolidated node
     auto old_head = cur_head;
     auto new_head = reinterpret_cast<uintptr_t>(consol_node);
-    if (target_page->compare_exchange_strong(old_head, new_head, std::memory_order_release)) {
-      // delete consolidated delta records and a base node
-      AddToGC(cur_head);
+    if (!target_page->compare_exchange_strong(old_head, new_head, std::memory_order_release)) {
+      // no CAS retry for consolidation
+      AddToGC(new_head);
       return;
     }
-
-    // no CAS retry for consolidation
-    AddToGC(new_head);
+    // delete consolidated delta records and a base node
+    AddToGC(cur_head);
   }
 
   auto
@@ -944,7 +800,7 @@ class BwTree
     // reserve a page for a consolidated node
     auto [block_size, rec_num] = node->GetPageSize(high_key, high_meta);
     auto size = kHeaderLength + block_size + diff;
-    void *page = ReservePage(size);
+    void *page = GetNodePage(size);
     auto *consol_node = new (page) Node_t{sib_page};
 
     // perform merge sort to copy records to the consolidated node
@@ -953,12 +809,110 @@ class BwTree
     return {consol_node, size};
   }
 
+  bool
+  HalfSplit(  //
+      std::atomic_uintptr_t *split_page,
+      const uintptr_t cur_head,
+      Node_t *split_node,
+      NodeStack &stack)
+  {
+    auto &&[sep_key, key_len] = split_node->Split();
+
+    // create a split-delta record
+    std::atomic_uintptr_t *sib_page = mapping_table_.GetNewLogicalID();
+    auto split_ptr = reinterpret_cast<uintptr_t>(split_node);
+    sib_page->store(split_ptr, std::memory_order_release);
+    auto sib_ptr = reinterpret_cast<uintptr_t>(sib_page);
+    auto *delta = new (GetRecordPage()) DeltaRecord_t{split_ptr, sib_ptr, cur_head};
+
+    // install the delta record for splitting a child node
+    auto old_head = cur_head;
+    auto new_head = reinterpret_cast<uintptr_t>(delta);
+    if (!split_page->compare_exchange_strong(old_head, new_head, std::memory_order_release)) {
+      // retry from consolidation
+      delta->SetNextNode(kNullPtr);
+      AddToGC(new_head);
+      AddToGC(split_ptr);
+      sib_page->store(kNullPtr, std::memory_order_relaxed);
+      return false;
+    }
+
+    // execute parent update
+    consol_page_ = nullptr;
+    CompleteSplit(delta, stack);
+
+    // execute parent consolidation/split if needed
+    if (consol_page_ != nullptr) {
+      TryConsolidation(consol_page_, sep_key, kClosed, stack);
+    }
+
+    AddToGC(cur_head);
+    return true;
+  }
+
+  void
+  CompleteSplit(  //
+      const DeltaRecord_t *split_delta,
+      NodeStack &stack)
+  {
+    if (stack.size() <= 1) {  // a split node is root
+      RootSplit(split_delta, stack);
+      return;
+    }
+
+    // create an index-entry delta record to complete split
+    auto *entry_delta = new (GetRecordPage()) DeltaRecord_t{split_delta};
+    auto new_head = reinterpret_cast<uintptr_t>(entry_delta);
+    auto &&sep_key = split_delta->GetKey();
+
+    // remove a split child node to modify its parent node
+    stack.pop_back();
+    uintptr_t cur_head{};
+    do {  // insert the delta record into a parent node
+      cur_head = ValidateNode(sep_key, kClosed, kNullPtr, stack);
+
+      // check whether another thread has already completed this split
+      if (CheckExistence(sep_key, stack).second != NodeRC::kKeyNotExist) {
+        entry_delta->SetNextNode(kNullPtr);
+        AddToGC(entry_delta);
+        return;
+      }
+
+      // try to insert the index-entry delta record
+      entry_delta->SetNextNode(cur_head);
+    } while (stack.back()->compare_exchange_weak(cur_head, new_head, std::memory_order_release));
+  }
+
+  void
+  RootSplit(  //
+      const DeltaRecord_t *split_delta,
+      NodeStack &stack)
+  {
+    // create a new root node
+    std::atomic_uintptr_t *old_root_p = stack.back();
+    auto *new_root = new (GetNodePage(kPageSize)) Node_t{split_delta, old_root_p};
+    auto root_ptr = reinterpret_cast<uintptr_t>(new_root);
+
+    // install a new root page
+    auto *new_root_p = mapping_table_.GetNewLogicalID();
+    new_root_p->store(root_ptr, std::memory_order_release);
+    stack.pop_back();
+    if (!root_.compare_exchange_strong(old_root_p, new_root_p, std::memory_order_relaxed)) {
+      // another thread has already inserted a new root
+      new_root_p->store(nullptr, std::memory_order_relaxed);
+      AddToGC(new_root);
+      stack.emplace_back(old_root_p);
+      return;
+    }
+    stack.emplace_back(new_root_p);
+  }
+
   /*####################################################################################
    * Internal member variables
    *##################################################################################*/
 
   /// a root node of Bw-tree
-  std::atomic<std::pair<std::atomic_uintptr_t *, size_t>> root_;
+  std::atomic<std::atomic_uintptr_t *> root_;
 
   /// a mapping table
   MappingTable_t mapping_table_;

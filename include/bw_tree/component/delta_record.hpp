@@ -70,47 +70,62 @@ class DeltaRecord
     auto [key_len, pay_len, rec_len] = Align<Key, T>(key_length, payload_length);
     auto offset = sizeof(DeltaRecord);
 
-    offset = SetData<T>(offset, payload, pay_len);
-    offset = SetData<Key>(offset, key, key_len);
+    offset = SetData(offset, payload, pay_len);
+    offset = SetData(offset, key, key_len);
     meta_ = Metadata{offset, key_len, rec_len};
   }
 
   /**
-   * @brief Construct a new delta record for internal-insert/delete or merging.
+   * @brief Construct a new delta record for split deltas.
    *
-   * @param delta_type
-   * @param low_key
-   * @param high_key
-   * @param sib_node
+   * @param split_delta
    */
   DeltaRecord(  //
-      const DeltaType delta_type,
-      const Key &low_key,
-      const size_t low_key_len,
-      const std::optional<std::pair<const Key &, size_t>> &high_key,
-      const uintptr_t sib_node)
-      : delta_type_{delta_type}
+      const uintptr_t node,
+      const uintptr_t sib_page,
+      const uintptr_t next)
+      : delta_type_{DeltaType::kSplit}, next_{next}
   {
-    constexpr auto kPtrLength = sizeof(uintptr_t);
+    auto *delta = reinterpret_cast<DeltaRecord *>(node);
     auto offset = sizeof(DeltaRecord);
 
-    if (high_key) {
-      const auto &[h_key, h_key_len] = high_key.value();
-      auto [key_len, pay_len, rec_len] = Align<Key, uintptr_t>(h_key_len, kPtrLength);
+    // set a sibling node
+    offset = SetData(offset, sib_page, sizeof(uintptr_t));
 
-      auto tmp_offset = SetData<Key>(offset, h_key, key_len);
-      high_key_meta_ = Metadata{tmp_offset, key_len, rec_len};
+    // copy a lowest key
+    auto key_len = delta->meta_.GetKeyLength();
+    offset -= key_len;
+    memcpy(ShiftAddr(this, offset), delta->GetKeyAddr(delta->meta_), key_len);
+    meta_ = Metadata{offset, key_len, key_len + sizeof(uintptr_t)};
+  }
 
-      offset -= rec_len;
-    } else {
-      high_key_meta_ = Metadata{0, 0, 0};
+  /**
+   * @brief Construct a new delta record for index-entries.
+   *
+   * @param split_delta
+   */
+  DeltaRecord(const DeltaRecord *delta)
+      : node_type_{NodeType::kInternal}, delta_type_{DeltaType::kInsert}
+  {
+    auto offset = sizeof(DeltaRecord);
+
+    // copy a highest key from a sibling node
+    auto *sib_page = delta->template GetPayload<std::atomic<DeltaRecord *> *>();
+    auto *sib_node = sib_page->load(std::memory_order_relaxed);
+    high_key_meta_ = sib_node->high_key_meta_;
+    auto rec_len = high_key_meta_.GetKeyLength();
+    if (key_len > 0) {
+      offset -= key_len;
+      memcpy(ShiftAddr(this, offset), sib_node->GetKeyAddr(high_key_meta_), key_len);
+      high_key_meta_.SetOffset(offset);
     }
 
-    auto [key_len, pay_len, rec_len] = Align<Key, uintptr_t>(low_key_len, kPtrLength);
-
-    offset = SetData<uintptr_t>(offset, sib_node, pay_len);
-    offset = SetData<Key>(offset, low_key, key_len);
-    meta_ = Metadata{offset, key_len, rec_len};
+    // copy contents of a split delta
+    meta_ = delta->meta_;
+    rec_len = meta_.GetTotalLength();
+    offset -= rec_len;
+    memcpy(ShiftAddr(this, offset), delta->GetKeyAddr(meta_), rec_len);
+    meta_.SetOffset(offset);
   }
 
   constexpr DeltaRecord(const DeltaRecord &) = default;
@@ -136,19 +151,40 @@ class DeltaRecord
   }
 
   /**
+   * @param meta metadata of a corresponding record.
+   * @return a key in a target record.
+   */
+  [[nodiscard]] auto
+  GetKey() const  //
+      -> Key
+  {
+    Key key{};
+    if constexpr (IsVariableLengthData<Key>()) {
+      key = reinterpret_cast<Key>(GetKeyAddr(meta_));
+    } else {
+      memcpy(&key, GetKeyAddr(meta_), sizeof(Key));
+    }
+
+    return key;
+  }
+
+  /**
    * @tparam Payload a class of payload.
    * @return a payload in this record.
    */
   template <class T>
-  [[nodiscard]] constexpr auto
+  [[nodiscard]] auto
   GetPayload() const  //
       -> T
   {
+    T payload{};
     if constexpr (IsVariableLengthData<T>()) {
-      return reinterpret_cast<T>(GetPayloadAddr());
+      payload = reinterpret_cast<T>(GetPayloadAddr());
     } else {
-      return *reinterpret_cast<T *>(GetPayloadAddr());
+      memcpy(&payload, GetPayloadAddr(), sizeof(T));
     }
+
+    return payload;
   }
 
   /**
@@ -156,16 +192,16 @@ class DeltaRecord
    *
    * @param out_payload a reference to be copied a target payload.
    */
+  template <class T>
   void
-  CopyPayload(Payload &out_payload) const
+  CopyPayload(T &payload) const
   {
-    const auto offset = meta_.GetOffset() + meta_.GetKeyLength();
-    if constexpr (IsVariableLengthData<Payload>()) {
-      const auto payload_length = meta_.GetPayloadLength();
-      out_payload = reinterpret_cast<Payload>(::operator new(payload_length));
-      memcpy(out_payload, ShiftAddress(this, offset), payload_length);
+    if constexpr (IsVariableLengthData<T>()) {
+      const auto pay_len = meta_.GetPayloadLength();
+      payload = reinterpret_cast<T>(::operator new(pay_len));
+      memcpy(payload, GetPayloadAddr(meta_), pay_len);
     } else {
-      memcpy(&out_payload, ShiftAddress(this, offset), sizeof(Payload));
+      memcpy(&payload, GetPayloadAddr(meta_), sizeof(T));
     }
   }
 
@@ -189,7 +225,7 @@ class DeltaRecord
     while (true) {
       switch (cur_rec->delta_type_) {
         case DeltaType::kInsert:
-          auto &&sep_key = cur_rec->GetKey(cur_rec->meta_);
+          auto &&sep_key = cur_rec->GetKey();
           if (Comp{}(sep_key, key) || (!closed && !Comp{key, sep_key})) {
             // this index term delta directly indicates a child node
             child_page = cur_rec->template GetPayload<uintptr_t>();
@@ -198,7 +234,7 @@ class DeltaRecord
           break;
 
         case DeltaType::kSplit:
-          sep_key = cur_rec->GetKey(cur_rec->meta_);
+          sep_key = cur_rec->GetKey();
           if (Comp{}(sep_key, key) || (!closed && !Comp{key, sep_key})) {
             // a sibling node includes a target key
             page_id = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
@@ -210,17 +246,14 @@ class DeltaRecord
           break;
 
         case DeltaType::kNotDelta:
-          if (cur_rec->high_key_meta_.GetKeyLength() > 0) {
-            // this base node has a sibling node
-            const auto &high_key = cur_rec->GetKey(cur_rec->high_key_meta_);
-            if (Comp{}(high_key, key) || (!closed && !Comp{key, high_key})) {
-              // a sibling node includes a target key
-              page_id = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
-              ptr = page_id->load(std::memory_order_acquire);
-              cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-              delta_chain_length = 0;
-              continue;
-            }
+          const auto &high_key = cur_rec->GetHighKey();
+          if (high_key && (Comp{}(*high_key, key) || (!closed && !Comp{key, *high_key}))) {
+            // a sibling node includes a target key
+            page_id = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
+            ptr = page_id->load(std::memory_order_acquire);
+            cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+            delta_chain_length = 0;
+            continue;
           }
           // reach a base page
           return {ptr, delta_chain_length};
@@ -264,7 +297,7 @@ class DeltaRecord
       switch (cur_rec->delta_type_) {
         case DeltaType::kInsert:
         case DeltaType::kModify:
-          auto &&rec_key = cur_rec->GetKey(cur_rec->meta_);
+          auto &&rec_key = cur_rec->GetKey();
           if (!Comp{}(key, rec_key) && !Comp{}(rec_key, key)) {
             // this delta record contains a target key
             return {ptr, kRecordFound};
@@ -272,7 +305,7 @@ class DeltaRecord
           break;
 
         case DeltaType::kDelete:
-          rec_key = cur_rec->GetKey(cur_rec->meta_);
+          rec_key = cur_rec->GetKey();
           if (!Comp{}(key, rec_key) && !Comp{}(rec_key, key)) {
             // a target key is deleted
             return {ptr, kRecordDeleted};
@@ -280,7 +313,7 @@ class DeltaRecord
           break;
 
         case DeltaType::kSplit:
-          rec_key = cur_rec->GetKey(cur_rec->meta_);
+          rec_key = cur_rec->GetKey();
           if (Comp{}(rec_key, key)) {
             // a sibling node may include a target key
             page_id = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
@@ -289,26 +322,23 @@ class DeltaRecord
             delta_chain_length = 0;
 
             // swap a current node in a stack
-            stack.emplace(stack.rbegin(), page_id);
+            *stack.rbegin() = page_id;
             continue;
           }
           break;
 
         case DeltaType::kNotDelta:
-          if (cur_rec->high_key_meta_.GetKeyLength() > 0) {
-            // this base node has a sibling node
-            const auto &high_key = cur_rec->GetKey(cur_rec->high_key_meta_);
-            if (Comp{}(high_key, key)) {
-              // a sibling node includes a target key
-              page_id = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
-              ptr = page_id->load(std::memory_order_acquire);
-              cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-              delta_chain_length = 0;
+          const auto &high_key = cur_rec->GetHighKey();
+          if (high_key && Comp{}(*high_key, key)) {
+            // a sibling node includes a target key
+            page_id = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
+            ptr = page_id->load(std::memory_order_acquire);
+            cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+            delta_chain_length = 0;
 
-              // swap a current node in a stack
-              stack.emplace(stack.rbegin(), page_id);
-              continue;
-            }
+            // swap a current node in a stack
+            *stack.rbegin() = page_id;
+            continue;
           }
           // reach a base page
           return {ptr, delta_chain_length};
@@ -350,7 +380,7 @@ class DeltaRecord
     while (ptr != prev_head) {
       switch (cur_rec->delta_type_) {
         case DeltaType::kSplit:
-          const auto &sep_key = cur_rec->GetKey(cur_rec->meta_);
+          const auto &sep_key = cur_rec->GetKey();
           if (Comp{}(sep_key, key) || (!closed && !Comp{key, sep_key})) {
             // there may be incomplete split
             return {ptr, kSplitMayIncomplete};
@@ -358,21 +388,18 @@ class DeltaRecord
           break;
 
         case DeltaType::kNotDelta:
-          if (cur_rec->high_key_meta_.GetKeyLength() > 0) {
-            // this base node has a sibling node
-            const auto &high_key = cur_rec->GetKey(cur_rec->high_key_meta_);
-            if (Comp{}(high_key, key) || (!closed && !Comp{key, high_key})) {
-              // a sibling node includes a target key
-              page_id = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
-              head = page_id->load(std::memory_order_acquire);
-              ptr = head;
-              cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-              delta_chain_length = 0;
+          const auto &high_key = cur_rec->GetHighKey();
+          if (high_key && (Comp{}(*high_key, key) || (!closed && !Comp{key, *high_key}))) {
+            // a sibling node includes a target key
+            page_id = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
+            head = page_id->load(std::memory_order_acquire);
+            ptr = head;
+            cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+            delta_chain_length = 0;
 
-              // swap a current node in a stack
-              stack.emplace(stack.rbegin(), page_id);
-              continue;
-            }
+            // swap a current node in a stack
+            *stack.rbegin() = page_id;
+            continue;
           }
           // reach a base page
           return {head, delta_chain_length};
@@ -415,7 +442,7 @@ class DeltaRecord
         case DeltaType::kModify:
         case DeltaType::kDelete:
           // check whether this record is in a target node
-          auto &&key = cur_rec->GetKey(cur_rec->meta_);
+          auto &&key = cur_rec->GetKey();
           if (!high_key || !Comp{}(*high_key, key)) {
             // check uniqueness
             auto it = records.cbegin();
@@ -444,7 +471,7 @@ class DeltaRecord
           if (!high_key) {
             // the first split delta has a highest key and a sibling node
             high_meta = cur_rec->meta_;
-            high_key = cur_rec->GetKey(high_meta);
+            high_key = cur_rec->GetHighKey();
             sib_node = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
           }
           break;
@@ -477,13 +504,6 @@ class DeltaRecord
    * Internal getters/setters
    *##################################################################################*/
 
-  [[nodescard]] constexpr auto
-  GetMetadata() const  //
-      -> Metadata
-  {
-    return meta_;
-  }
-
   /**
    * @param meta metadata of a corresponding record.
    * @return an address of a target key.
@@ -496,29 +516,23 @@ class DeltaRecord
   }
 
   /**
-   * @param meta metadata of a corresponding record.
-   * @return a key in a target record.
-   */
-  [[nodiscard]] constexpr auto
-  GetKey(const Metadata meta) const  //
-      -> Key
-  {
-    if constexpr (IsVariableLengthData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(meta));
-    } else {
-      return *reinterpret_cast<Key *>(GetKeyAddr(meta));
-    }
-  }
-
-  /**
    * @return a highest key in a target record.
    */
   [[nodiscard]] constexpr auto
-  GetHighKey(const Metadata meta) const  //
+  GetHighKey() const  //
       -> std::optional<Key>
   {
-    if (high_key_meta_.GetKeyLength() > 0) return GetKey(high_key_meta_);
-    return std::nullopt;
+    const auto key_len = high_key_meta_.GetKeyLength();
+    if (key_len == 0) return std::nullopt;
+
+    Key key{};
+    if constexpr (IsVariableLengthData<Key>()) {
+      key = reinterpret_cast<Key>(GetKeyAddr(high_key_meta_));
+    } else {
+      memcpy(&key, GetKeyAddr(high_key_meta_), key_len);
+    }
+
+    return key;
   }
 
   /**
@@ -562,6 +576,9 @@ class DeltaRecord
   /*####################################################################################
    * Internal member variables
    *##################################################################################*/
+
+  /// a flag to indicate whether this node is a leaf or internal node.
+  uint16_t node_type_ : 1;
 
   /// a flag for indicating the types of a delta record.
   uint16_t delta_type_ : 3;

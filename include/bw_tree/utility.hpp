@@ -75,7 +75,7 @@ IsVariableLengthData()
  *################################################################################################*/
 
 /// Assumes that one word is represented by 8 bytes
-constexpr size_t kWordLength = 8;
+constexpr size_t kWordSize = sizeof(uintptr_t);
 
 /// Assumes that one word is represented by 8 bytes
 constexpr size_t kCacheLineSize = 64;
@@ -104,6 +104,6 @@ constexpr size_t kMaxVariableSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
 constexpr size_t kMaxVariableSize = 128;
 #endif
 /// check whether the specified page size is valid
-static_assert(kPageSize % kWordLength == 0);
+static_assert(kPageSize % kWordSize == 0);
 
 }  // namespace dbgroup::index::bw_tree

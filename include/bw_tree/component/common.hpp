@@ -89,6 +89,8 @@ constexpr size_t kHeaderLength = 28;
 
 constexpr bool kClosed = true;
 
+constexpr uintptr_t kNullPtr = 0;
+
 /*##################################################################################################
  * Internal utility functions
  *################################################################################################*/
@@ -235,7 +237,7 @@ template <class Key, class Payload>
 constexpr size_t
 GetMaxRecordNum()
 {
-  auto record_min_length = kWordLength;
+  auto record_min_length = kWordSize;
   if constexpr (std::is_same_v<Key, std::byte *>) {
     record_min_length += 1;
   } else {
@@ -311,7 +313,7 @@ IsInRange(  //
  * @return void* a shifted address.
  */
 constexpr void *
-ShiftAddress(  //
+ShiftAddr(  //
     const void *addr,
     const size_t offset)
 {
