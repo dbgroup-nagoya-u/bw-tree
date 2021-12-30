@@ -35,80 +35,10 @@ namespace dbgroup::index::bw_tree::component
 template <class Key, class Comp>
 class Node
 {
-  using Mapping_t = std::atomic<Node *>;
-
- private:
-  /*################################################################################################
-   * Internal variables
-   *##############################################################################################*/
-
-  /// a flag to indicate whether this node is a leaf or internal node.
-  uint16_t node_type_ : 1;
-
-  /// a flag to indicate the types of a delta node.
-  uint16_t delta_type_ : 3;
-
-  /// a blank block for alignment.
-  uint16_t : 0;
-
-  /// the number of records in this node.
-  uint16_t record_count_;
-
-  /// a blank block for alignment.
-  uint64_t : 0;
-
-  /// the pointer to the next node.
-  uintptr_t next_node_;
-
-  /// metadata of a lowest key or a first record in a delta node
-  Metadata low_meta_;
-
-  /// metadata of a highest key or a second record in a delta node
-  Metadata high_meta_;
-
-  /// an actual data block (it starts with record metadata).
-  Metadata meta_array_[0];
-
-  /*################################################################################################
-   * Internal constructors/destructors
-   *##############################################################################################*/
-
-  /**
-   * @brief Construct a new base node object.
-   *
-   * @param node_type a flag to indicate whether a leaf or internal node is constructed.
-   * @param record_count the number of records in this node.
-   * @param sib_node the pointer to a sibling node.
-   */
-  Node(  //
-      const NodeType node_type,
-      const size_t record_count,
-      const Mapping_t *sib_node)
-      : node_type_{node_type},
-        delta_type_{DeltaType::kNotDelta},
-        record_count_{static_cast<uint16_t>(record_count)},
-        next_node_{reinterpret_cast<const uintptr_t>(sib_node)}
-  {
-  }
-
-  /**
-   * @brief Construct a new delta node object.
-   *
-   * @param node_type a flag to indicate whether a leaf or internal node is constructed.
-   * @param delta_type a flag to indicate the type of a constructed delta node.
-   * @param next_node the pointer to a next delta/base node.
-   */
-  Node(  //
-      const NodeType node_type,
-      const DeltaType delta_type)
-      : node_type_{node_type}, delta_type_{delta_type}, next_node_{0}
-  {
-  }
-
  public:
-  /*################################################################################################
-   * Public constructors/destructors
-   *##############################################################################################*/
+  /*####################################################################################
+   * Public constructors and assignment operators
+   *##################################################################################*/
 
   /**
    * @brief Construct a new base node object.
@@ -116,20 +46,24 @@ class Node
    */
   constexpr Node() : node_type_{}, delta_type_{}, record_count_{}, next_node_{} {}
 
+  Node(const Node &) = delete;
+  Node &operator=(const Node &) = delete;
+  Node(Node &&) = delete;
+  Node &operator=(Node &&) = delete;
+
+  /*####################################################################################
+   * Public destructors
+   *##################################################################################*/
+
   /**
    * @brief Destroy the node object.
    *
    */
   ~Node() = default;
 
-  Node(const Node &) = delete;
-  Node &operator=(const Node &) = delete;
-  Node(Node &&) = delete;
-  Node &operator=(Node &&) = delete;
-
-  /*################################################################################################
+  /*####################################################################################
    * Public node builders
-   *##############################################################################################*/
+   *##################################################################################*/
 
   static Node *
   CreateNode(  //
@@ -159,63 +93,9 @@ class Node
     }
   }
 
-  /*################################################################################################
-   * Public delta node builders
-   *##############################################################################################*/
-
-  template <class T>
-  static Node *
-  CreateDeltaNode(  //
-      const NodeType node_type,
-      const DeltaType delta_type,
-      const void *key,
-      const size_t key_length,
-      const T &payload,
-      const size_t payload_length)
-  {
-    const size_t total_length = key_length + payload_length;
-    size_t offset = kHeaderLength + total_length;
-
-    Node *delta = new (::operator new(offset)) Node{node_type, delta_type};
-
-    delta->SetPayload(offset, payload, payload_length);
-    delta->SetKey(offset, key, key_length);
-    delta->SetLowMeta(Metadata{offset, key_length, total_length});
-
-    return delta;
-  }
-
-  static Node *
-  CreateIndexEntryDelta(  //
-      const void *sep_key,
-      const size_t sep_key_len,
-      const Mapping_t *split_page)
-  {
-    const auto total_length = sep_key_len + sizeof(Mapping_t *);
-    const Node *split_node = split_page->load(mo_relax);
-    const auto high_meta = split_node->GetHighMeta();
-    const auto high_key_len = high_meta.GetKeyLength();
-    size_t offset = kHeaderLength + total_length + high_key_len;
-
-    Node *delta = new (::operator new(offset)) Node{NodeType::kInternal, DeltaType::kInsert};
-
-    if (high_key_len == 0) {
-      delta->SetHighMeta(high_meta);
-    } else {
-      const auto high_key = split_node->GetKeyAddr(high_meta);
-      delta->SetKey(offset, high_key, high_key_len);
-      delta->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
-    }
-    delta->SetPayload(offset, split_page, sizeof(Mapping_t *));
-    delta->SetKey(offset, sep_key, sep_key_len);
-    delta->SetLowMeta(Metadata{offset, sep_key_len, total_length});
-
-    return delta;
-  }
-
-  /*################################################################################################
+  /*####################################################################################
    * Public getters/setters
-   *##############################################################################################*/
+   *##################################################################################*/
 
   /**
    * @retval true if this is a leaf node.
@@ -423,9 +303,9 @@ class Node
     }
   }
 
-  /*################################################################################################
+  /*####################################################################################
    * Public utility functions
-   *##############################################################################################*/
+   *##################################################################################*/
 
   /**
    * @brief Get the position of a specified key by using binary search. If there is no
@@ -532,6 +412,74 @@ class Node
     SetKey(offset, key_node->GetKeyAddr(key_meta), key_len);
     SetMetadata(position, Metadata{offset, key_len, key_len + sizeof(Mapping_t *)});
   }
+
+ private:
+  /*####################################################################################
+   * Internal constructors/destructors
+   *##################################################################################*/
+
+  /**
+   * @brief Construct a new base node object.
+   *
+   * @param node_type a flag to indicate whether a leaf or internal node is constructed.
+   * @param record_count the number of records in this node.
+   * @param sib_node the pointer to a sibling node.
+   */
+  Node(  //
+      const NodeType node_type,
+      const size_t record_count,
+      const Mapping_t *sib_node)
+      : node_type_{node_type},
+        delta_type_{DeltaType::kNotDelta},
+        record_count_{static_cast<uint16_t>(record_count)},
+        next_node_{reinterpret_cast<const uintptr_t>(sib_node)}
+  {
+  }
+
+  /**
+   * @brief Construct a new delta node object.
+   *
+   * @param node_type a flag to indicate whether a leaf or internal node is constructed.
+   * @param delta_type a flag to indicate the type of a constructed delta node.
+   * @param next_node the pointer to a next delta/base node.
+   */
+  Node(  //
+      const NodeType node_type,
+      const DeltaType delta_type)
+      : node_type_{node_type}, delta_type_{delta_type}, next_node_{0}
+  {
+  }
+
+  /*####################################################################################
+   * Internal variables
+   *##################################################################################*/
+
+  /// a flag to indicate the types of a delta node.
+  uint16_t delta_type_ : 3;
+
+  /// a flag to indicate whether this node is a leaf or internal node.
+  uint16_t node_type_ : 1;
+
+  /// a blank block for alignment.
+  uint16_t : 0;
+
+  /// the number of records in this node.
+  uint16_t record_count_;
+
+  /// a blank block for alignment.
+  uint64_t : 0;
+
+  /// the pointer to the next node.
+  uintptr_t next_node_;
+
+  /// metadata of a lowest key or a first record in a delta node
+  Metadata low_meta_;
+
+  /// metadata of a highest key or a second record in a delta node
+  Metadata high_meta_;
+
+  /// an actual data block (it starts with record metadata).
+  Metadata meta_array_[0];
 };
 
 }  // namespace dbgroup::index::bw_tree::component
