@@ -49,10 +49,13 @@ class Node
    *##################################################################################*/
 
   /**
-   * @brief Construct a new base node object.
+   * @brief Construct an initial root node.
    *
    */
-  constexpr Node() : node_type_{}, delta_type_{}, record_count_{} {}
+  constexpr Node()
+      : node_type_{NodeType::kLeaf}, delta_type_{DeltaType::kNotDelta}, record_count_{0}
+  {
+  }
 
   /**
    * @brief Construct a new base node object.
@@ -72,11 +75,7 @@ class Node
   Node(  //
       uintptr_t split_ptr,
       std::atomic_uintptr_t *left_page)
-      : node_type_{NodeType::kInternal},
-        delta_type_{DeltaType::kNotDelta},
-        record_count_{2},
-        low_meta_{kPageSize, 0, 0},
-        high_meta_{kPageSize, 0, 0}
+      : node_type_{NodeType::kInternal}, delta_type_{DeltaType::kNotDelta}, record_count_{2},
   {
     auto *split_delta = reinterpret_cast<Node *>(split_ptr);
 
@@ -122,6 +121,17 @@ class Node
       -> bool
   {
     return node_type_;
+  }
+
+  /**
+   * @retval true if this is a base node.
+   * @retval false if this is a delta record.
+   */
+  [[nodiscard]] constexpr auto
+  IsBaseNode() const  //
+      -> bool
+  {
+    return delta_type_ == DeltaType::kNotDelta;
   }
 
   /**
@@ -521,10 +531,10 @@ class Node
   uintptr_t next_node_{kNullPtr};
 
   /// metadata of a lowest key or a first record in a delta node
-  Metadata low_meta_{};
+  Metadata low_meta_{kPageSize, 0, 0};
 
   /// metadata of a highest key or a second record in a delta node
-  Metadata high_meta_{};
+  Metadata high_meta_{kPageSize, 0, 0};
 
   /// an actual data block (it starts with record metadata).
   Metadata meta_array_[0];

@@ -21,6 +21,7 @@
 #include <mutex>
 #include <vector>
 
+#include "delta_record.hpp"
 #include "node.hpp"
 
 namespace dbgroup::index::bw_tree::component
@@ -35,7 +36,7 @@ template <class Key, class Comp>
 class MappingTable
 {
   using Node_t = Node<Key, Comp>;
-  using Mapping_t = std::atomic<Node_t *>;
+  using DeltaRecord_t = DeltaRecord<Key, Comp>;
 
  public:
   /*################################################################################################
@@ -43,8 +44,7 @@ class MappingTable
    *##############################################################################################*/
 
   /// capacity of mapping information that can be maintained in each table.
-  static constexpr size_t kDefaultTableCapacity =
-      (kPageSize - sizeof(std::atomic_size_t)) / sizeof(Mapping_t);
+  static constexpr size_t kDefaultTableCapacity = (kPageSize - kWordSize) / kWordSize;
 
  private:
   /*################################################################################################
@@ -66,7 +66,7 @@ class MappingTable
     std::atomic_size_t head_id_;
 
     /// an actual mapping table.
-    std::array<Mapping_t, kDefaultTableCapacity> logical_ids_;
+    std::array<std::atomic_uintptr_t, kDefaultTableCapacity> logical_ids_;
 
    public:
     /*##############################################################################################
@@ -88,10 +88,20 @@ class MappingTable
     {
       const size_t size = head_id_.load(mo_relax);
       for (size_t i = 0; i < size; ++i) {
-        Node_t *node = logical_ids_[i].load(mo_relax);
-        if (node == nullptr) continue;
+        auto ptr = logical_ids_[i].load(std::memory_order_acquire);
+        if (ptr == kNullPtr) continue;
 
-        Node_t::DeleteNode(node);
+        // delete delta records
+        auto *rec = reinterpret_cast<DeltaRecord_t *>(ptr);
+        while (!rec->IsBaseNode()) {
+          ptr = rec->GetNext();
+          delete rec;
+          rec = reinterpret_cast<DeltaRecord_t *>(ptr);
+        }
+
+        // delete a base node
+        auto *node = reinterpret_cast<Node_t *>(ptr);
+        delete node;
       }
     }
 
@@ -99,7 +109,11 @@ class MappingTable
      * new/delete definitions
      *############################################################################################*/
 
-    static void *operator new(std::size_t) { return calloc(1UL, kPageSize); }
+    static void *
+    operator new(std::size_t)
+    {
+      return calloc(1UL, kPageSize);
+    }
 
     static void
     operator delete(void *p) noexcept
@@ -116,9 +130,9 @@ class MappingTable
      *
      * If this function returns nullptr, it means that this table is full.
      *
-     * @return Mapping_t*: a reserved logical ID.
+     * @return std::atomic_uintptr_t*: a reserved logical ID.
      */
-    Mapping_t *
+    std::atomic_uintptr_t *
     ReserveNewID()
     {
       auto current_id = head_id_.load(mo_relax);
@@ -184,9 +198,9 @@ class MappingTable
   /**
    * @brief Get a new logical ID (i.e., an address to mapping information).
    *
-   * @return Mapping_t*: a reserved logical ID.
+   * @return std::atomic_uintptr_t*: a reserved logical ID.
    */
-  Mapping_t *
+  std::atomic_uintptr_t *
   GetNewLogicalID()
   {
     auto current_table = table_.load(mo_relax);

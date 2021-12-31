@@ -43,24 +43,38 @@ class BwTree
    * Type aliases
    *##################################################################################*/
 
+  using NodeType = component::NodeType;
   using DeltaType = component::DeltaType;
-  using Metadata = component::Metadata;
   using NodeRC = component::NodeRC;
   using DeltaRC = component::DeltaRC;
-  using NodeType = component::NodeType;
+  using Metadata = component::Metadata;
   using Node_t = component::Node<Key, Comp>;
   using DeltaRecord_t = component::DeltaRecord<Key, Comp>;
-  using Mapping_t = std::atomic<Node_t *>;
   using MappingTable_t = component::MappingTable<Key, Comp>;
-  using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
+  using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t, DeltaRecord_t>;
   using NodeStack = std::vector<std::atomic_uintptr_t *>;
-  using Binary_t = std::remove_pointer_t<Payload>;
-  using Binary_p = std::unique_ptr<Binary_t, component::PayloadDeleter<Binary_t>>;
 
  public:
   /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/
+
+  /**
+   * @brief Construct a new BwTree object.
+   *
+   * @param gc_interval_microsec GC internal [us]
+   */
+  explicit BwTree(  //
+      const size_t gc_interval_microsec = 100000,
+      const size_t gc_thread_num = 1)
+      : root_{nullptr}, mapping_table_{}, gc_{gc_interval_microsec, gc_thread_num, true}
+  {
+    // create an empty Bw-tree
+    auto *leaf = new (GetNodePage(kPageSize)) Node_t{};
+    auto *root_page = mapping_table_.GetNewLogicalID();
+    root_page->store(reinterpret_cast<uintptr_t>(leaf), std::memory_order_release);
+    root_.store(root_page, std::memory_order_relaxed);
+  }
 
   BwTree(const BwTree &) = delete;
   BwTree &operator=(const BwTree &) = delete;
@@ -120,291 +134,6 @@ class BwTree
         auto *node = reinterpret_cast<Node_t *>(ptr);
         return std::make_optional(node->CopyPayload(rc));
     }
-  }
-
-  /*####################################################################################
-   * Public write APIs
-   *##################################################################################*/
-
-  /**
-   * @brief Delete a target kay from the index.
-   *
-   * This function performs a uniqueness check in its processing. If a specified key
-   * exist, this function deletes it. If a specified key does not exist in the index,
-   * this function does nothing and returns kKeyNotExist as a return code.
-   *
-   * Note that if a target key is binary data, it is required to specify its length in
-   * bytes.
-   *
-   * @param key a target key to be written.
-   * @param key_length the length of a target key.
-   * @retval kSuccess if deleted.
-   * @retval kKeyNotExist if a specified key does not exist.
-   */
-  auto
-  Delete(  //
-      [[maybe_unused]] const Key &key,
-      [[maybe_unused]] const size_t key_length = sizeof(Key))  //
-      -> ReturnCode
-  {
-    // not implemented yet
-
-    return ReturnCode::kSuccess;
-  }
-
-  /*####################################################################################
-   * Not refactored yet......
-   *##################################################################################*/
-
- private:
-  NodeStack
-  SearchLeftEdgeLeaf()
-  {
-    NodeStack stack;
-    stack.reserve(kExpectedTreeHeight);
-
-    // get a logical page of a root node
-    Mapping_t *page_id = root_.load(mo_relax);
-    stack.emplace_back(page_id);
-
-    // traverse a Bw-tree
-    Node_t *cur_node = page_id->load(mo_relax);
-    while (!cur_node->IsLeaf()) {
-      if (cur_node->GetDeltaNodeType() == DeltaType::kNotDelta) {
-        // reach a base page and get left edge node
-        Mapping_t *child_page =
-            cur_node->template GetPayload<Mapping_t *>(cur_node->GetMetadata(0));
-        stack.emplace_back(child_page);
-        cur_node = child_page->load(mo_relax);
-      } else {
-        // go to the next delta record or base node
-        cur_node = cur_node->GetNextNode();
-      }
-    }
-    return stack;
-  }
-
- public:
-  /*####################################################################################
-   * Public classes
-   *##################################################################################*/
-
-  /**
-   * @brief A class to represent a iterator for scan results.
-   *
-   * @tparam Key a target key class
-   * @tparam Payload a target payload class
-   * @tparam Compare a key-comparator class
-   */
-  class RecordIterator
-  {
-    using BwTree_t = BwTree<Key, Payload, Comp>;
-
-   private:
-    /*##################################################################################
-     * Internal member variables
-     *################################################################################*/
-
-    /// a pointer to BwTree to perform continuous scan
-    BwTree_t *bw_tree_;
-
-    /// node
-    Node_t *node_;
-
-    /// the number of records in this node.
-    size_t record_count_;
-
-    /// an index of a current record
-    size_t current_idx_;
-
-   public:
-    /*##################################################################################
-     * Public constructors/destructors
-     *################################################################################*/
-    constexpr RecordIterator() {}
-    constexpr RecordIterator(BwTree_t *bw_tree, Node_t *node, size_t current_idx)
-        : bw_tree_{bw_tree},
-          node_{node},
-          record_count_{node->GetRecordCount()},
-          current_idx_{current_idx}
-    {
-    }
-
-    ~RecordIterator() = default;
-
-    RecordIterator(const RecordIterator &) = delete;
-    RecordIterator &operator=(const RecordIterator &) = delete;
-    constexpr RecordIterator(RecordIterator &&) = default;
-    constexpr RecordIterator &operator=(RecordIterator &&) = default;
-
-    /*##################################################################################
-     * Public operators for iterators
-     *################################################################################*/
-
-    /**
-     * @return std::pair<Key, Payload>: a current key and payload pair
-     */
-    constexpr std::pair<Key, Payload>
-    operator*() const
-    {
-      return {GetKey(), GetPayload()};
-    }
-
-    /**
-     * @brief Forward an iterator.
-     *
-     */
-    void
-    operator++()
-    {
-      current_idx_++;
-    }
-
-    /*##################################################################################
-     * Public getters/setters
-     *################################################################################*/
-
-    /**
-     * @brief Check if there are any records left.
-     *
-     * function may call a scan function internally to get a next leaf node.
-     *
-     * @retval true if there are any records or next node left.
-     * @retval false if there are no records and node left.
-     */
-    bool
-    HasNext()
-    {
-      if (current_idx_ < record_count_) return true;
-      if (node_->GetSiblingNode() == nullptr) return false;
-
-      auto *next_node = node_->GetSiblingNode()->load(mo_relax);
-      delete (node_);
-      node_ = bw_tree_->LeafScan(next_node);
-      record_count_ = node_->GetRecordCount();
-      current_idx_ = 0;
-      return HasNext();
-    }
-
-    /**
-     * @return Key: a key of a current record
-     */
-    constexpr Key
-    GetKey() const
-    {
-      if constexpr (IsVariableLengthData<Key>()) {
-        return reinterpret_cast<const Key>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
-      } else {
-        return *reinterpret_cast<const Key *>(node_->GetKeyAddr(node_->GetMetadata(current_idx_)));
-      }
-    }
-
-    /**
-     * @return Payload: a payload of a current record
-     */
-    constexpr Payload
-    GetPayload() const
-    {
-      Payload payload{};
-      node_->CopyPayload(node_->GetMetadata(current_idx_), payload);
-      return payload;
-    }
-  };
-
-  /*####################################################################################
-   * Public constructor/destructor
-   *##################################################################################*/
-
-  /**
-   * @brief Construct a new BwTree object.
-   *
-   * @param gc_interval_microsec GC internal [us]
-   */
-  explicit BwTree(const size_t gc_interval_microsec = 100000)
-      : root_{nullptr}, mapping_table_{}, gc_{gc_interval_microsec}
-  {
-    // create an empty leaf node
-    Mapping_t *child_page_id = mapping_table_.GetNewLogicalID();
-    Node_t *empty_leaf = Node_t::CreateNode(kHeaderLength, NodeType::kLeaf, 0UL, nullptr);
-    empty_leaf->SetLowMeta(Metadata{0, 0, 0});
-    empty_leaf->SetHighMeta(Metadata{0, 0, 0});
-    child_page_id->store(empty_leaf, mo_relax);
-
-    // create an empty Bw-tree
-    Mapping_t *root_page_id = mapping_table_.GetNewLogicalID();
-    auto offset = kHeaderLength + sizeof(Metadata) + sizeof(Mapping_t *);
-    Node_t *initial_root = Node_t::CreateNode(offset, NodeType::kInternal, 1UL, nullptr);
-    initial_root->SetLowMeta(Metadata{0, 0, 0});
-    initial_root->SetHighMeta(Metadata{0, 0, 0});
-    initial_root->template SetPayload<Mapping_t *>(offset, child_page_id, sizeof(Mapping_t *));
-    initial_root->SetMetadata(0, Metadata{offset, 0, sizeof(Mapping_t *)});
-    root_page_id->store(initial_root, mo_relax);
-    root_.store(root_page_id, mo_relax);
-
-    // start garbage collector for removed nodes
-    gc_.StartGC();
-  }
-
-  /**
-   * @brief Perform a range scan with specified keys.
-   *
-   * @param begin_key the pointer of a begin key of a range scan.
-   * @param begin_closed a flag to indicate whether the begin side of a range is closed.
-   * @return RecordIterator: an iterator to access target records.
-   */
-  RecordIterator
-  Scan(  //
-      const Key &begin_key,
-      bool begin_closed = false)
-  {
-    const auto guard = gc_.CreateEpochGuard();
-    Mapping_t *consol_node = nullptr;
-    const auto *key_addr = component::GetAddr(begin_key);
-    const auto node_stack = SearchLeafNode(key_addr, begin_closed, consol_node);
-    Mapping_t *page_id = node_stack.back();
-    Node_t *page = LeafScan(page_id->load(mo_relax));
-    return RecordIterator{this, page, page->SearchRecord(key_addr, begin_closed).second};
-  }
-
-  /**
-   * @brief Perform a range scan from left edge.
-   *
-   * @return RecordIterator: an iterator to access target records.
-   */
-  RecordIterator
-  Begin()
-  {
-    const auto guard = gc_.CreateEpochGuard();
-    const auto node_stack = SearchLeftEdgeLeaf();
-    Mapping_t *page_id = node_stack.back();
-    Node_t *page = LeafScan(page_id->load(mo_relax));
-    return RecordIterator{this, page, 0};
-  }
-
-  /**
-   * @brief Consolidate leaf node for range scan
-   *
-   * @param node the target node.
-   * @retval the pointer to consolidated leaf node
-   */
-
-  Node_t *
-  LeafScan(  //
-      Node_t *target_node)
-  {
-    // collect and sort delta records
-    std::vector<Record> records;
-    records.reserve(kMaxDeltaNodeNum * 4);
-    const auto [base_node, end_node] = SortDeltaRecords(target_node, records);
-
-    // reserve a page for a consolidated node
-    auto [offset, base_rec_num] = CalculatePageSize(base_node, end_node, records);
-
-    const auto sib_page = GetSiblingPage(end_node);
-    Node_t *page = Node_t::CreateNode(offset, component::NodeType::kLeaf, 0, sib_page);
-    // copy active records
-    CopyLeafRecords(page, offset, base_node, base_rec_num, records);
-    return page;
   }
 
   /*####################################################################################
@@ -490,36 +219,36 @@ class BwTree
       const size_t key_length = sizeof(Key),
       const size_t payload_length = sizeof(Payload))
   {
-    const auto key_addr = component::GetAddr(key);
-    const auto guard = gc_.CreateEpochGuard();
+    // const auto key_addr = component::GetAddr(key);
+    // const auto guard = gc_.CreateEpochGuard();
 
-    // traverse to a target leaf node
-    Mapping_t *consol_node = nullptr;
-    NodeStack stack = SearchLeafNode(key_addr, true, consol_node);
+    // // traverse to a target leaf node
+    // Mapping_t *consol_node = nullptr;
+    // NodeStack stack = SearchLeafNode(key_addr, true, consol_node);
 
-    // create a delta record to write a key/value pair
-    Node_t *delta_node = Node_t::CreateDeltaNode(NodeType::kLeaf, DeltaType::kInsert,  //
-                                                 key_addr, key_length, payload, payload_length);
-    // insert the delta record
-    for (Node_t *prev_head = nullptr; true;) {
-      // check whether the target node is valid (containing a target key and no incomplete SMOs)
-      Node_t *cur_head = ValidateNode(key_addr, true, prev_head, stack, consol_node);
+    // // create a delta record to write a key/value pair
+    // Node_t *delta_node = Node_t::CreateDeltaNode(NodeType::kLeaf, DeltaType::kInsert,  //
+    //                                              key_addr, key_length, payload, payload_length);
+    // // insert the delta record
+    // for (Node_t *prev_head = nullptr; true;) {
+    //   // check whether the target node is valid (containing a target key and no incomplete SMOs)
+    //   Node_t *cur_head = ValidateNode(key_addr, true, prev_head, stack, consol_node);
 
-      // check target key/value existence
-      const auto [target_node, meta] = CheckExistence(key_addr, stack, consol_node);
-      if (target_node != nullptr) return ReturnCode::kKeyExist;
+    //   // check target key/value existence
+    //   const auto [target_node, meta] = CheckExistence(key_addr, stack, consol_node);
+    //   if (target_node != nullptr) return ReturnCode::kKeyExist;
 
-      // prepare nodes to perform CAS
-      delta_node->SetNextNode(cur_head);
-      prev_head = cur_head;
+    //   // prepare nodes to perform CAS
+    //   delta_node->SetNextNode(cur_head);
+    //   prev_head = cur_head;
 
-      // try to insert the delta record
-      if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
-    }
+    //   // try to insert the delta record
+    //   if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
+    // }
 
-    if (consol_node != nullptr) {
-      TryConsolidation(consol_node, key_addr, true, stack);
-    }
+    // if (consol_node != nullptr) {
+    //   TryConsolidation(consol_node, key_addr, true, stack);
+    // }
 
     return ReturnCode::kSuccess;
   }
@@ -548,58 +277,78 @@ class BwTree
       const size_t key_length = sizeof(Key),
       const size_t payload_length = sizeof(Payload))
   {
-    const auto key_addr = component::GetAddr(key);
-    const auto guard = gc_.CreateEpochGuard();
+    // const auto key_addr = component::GetAddr(key);
+    // const auto guard = gc_.CreateEpochGuard();
 
-    // traverse to a target leaf node
-    Mapping_t *consol_node = nullptr;
-    NodeStack stack = SearchLeafNode(key_addr, true, consol_node);
+    // // traverse to a target leaf node
+    // Mapping_t *consol_node = nullptr;
+    // NodeStack stack = SearchLeafNode(key_addr, true, consol_node);
 
-    // create a delta record to write a key/value pair
-    Node_t *delta_node = Node_t::CreateDeltaNode(NodeType::kLeaf, DeltaType::kModify,  //
-                                                 key_addr, key_length, payload, payload_length);
-    // insert the delta record
-    for (Node_t *prev_head = nullptr; true;) {
-      // check whether the target node is valid (containing a target key and no incomplete SMOs)
-      Node_t *cur_head = ValidateNode(key_addr, true, prev_head, stack, consol_node);
+    // // create a delta record to write a key/value pair
+    // Node_t *delta_node = Node_t::CreateDeltaNode(NodeType::kLeaf, DeltaType::kModify,  //
+    //                                              key_addr, key_length, payload, payload_length);
+    // // insert the delta record
+    // for (Node_t *prev_head = nullptr; true;) {
+    //   // check whether the target node is valid (containing a target key and no incomplete SMOs)
+    //   Node_t *cur_head = ValidateNode(key_addr, true, prev_head, stack, consol_node);
 
-      // check target key/value existence
-      const auto [target_node, meta] = CheckExistence(key_addr, stack, consol_node);
-      if (target_node == nullptr) return ReturnCode::kKeyNotExist;
+    //   // check target key/value existence
+    //   const auto [target_node, meta] = CheckExistence(key_addr, stack, consol_node);
+    //   if (target_node == nullptr) return ReturnCode::kKeyNotExist;
 
-      // prepare nodes to perform CAS
-      delta_node->SetNextNode(cur_head);
-      prev_head = cur_head;
+    //   // prepare nodes to perform CAS
+    //   delta_node->SetNextNode(cur_head);
+    //   prev_head = cur_head;
 
-      // try to insert the delta record
-      if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
-    }
+    //   // try to insert the delta record
+    //   if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
+    // }
 
-    if (consol_node != nullptr) {
-      TryConsolidation(consol_node, key_addr, true, stack);
-    }
+    // if (consol_node != nullptr) {
+    //   TryConsolidation(consol_node, key_addr, true, stack);
+    // }
 
     return ReturnCode::kSuccess;
   }
 
-  /*####################################################################################
-   * ......Not refactored yet
-   *##################################################################################*/
+  /**
+   * @brief Delete a target kay from the index.
+   *
+   * This function performs a uniqueness check in its processing. If a specified key
+   * exist, this function deletes it. If a specified key does not exist in the index,
+   * this function does nothing and returns kKeyNotExist as a return code.
+   *
+   * Note that if a target key is binary data, it is required to specify its length in
+   * bytes.
+   *
+   * @param key a target key to be written.
+   * @param key_length the length of a target key.
+   * @retval kSuccess if deleted.
+   * @retval kKeyNotExist if a specified key does not exist.
+   */
+  auto
+  Delete(  //
+      [[maybe_unused]] const Key &key,
+      [[maybe_unused]] const size_t key_length = sizeof(Key))  //
+      -> ReturnCode
+  {
+    // not implemented yet
+
+    return ReturnCode::kSuccess;
+  }
 
  private:
   /*####################################################################################
    * Internal constants
    *##################################################################################*/
 
-  static constexpr auto mo_relax = component::mo_relax;
+  static constexpr size_t kExpectedTreeHeight = 8;
 
   static constexpr auto kHeaderLength = component::kHeaderLength;
 
-  static constexpr size_t kExpectedTreeHeight = 8;
+  static constexpr auto kClosed = component::kClosed;
 
-  static constexpr bool kClosed = component::kClosed;
-
-  static constexpr uintptr_t kNullPtr = component::kNullPtr;
+  static constexpr auto kNullPtr = component::kNullPtr;
 
   /*####################################################################################
    * Internal utility functions

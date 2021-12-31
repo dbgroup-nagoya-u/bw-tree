@@ -143,11 +143,40 @@ class DeltaRecord
    * Public getters/setters
    *##################################################################################*/
 
+  /**
+   * @retval true if this is a leaf node.
+   * @retval false if this is an internal node.
+   */
+  [[nodiscard]] constexpr auto
+  IsLeaf() const  //
+      -> bool
+  {
+    return node_type_;
+  }
+
+  /**
+   * @retval true if this is a base node.
+   * @retval false if this is a delta record.
+   */
+  [[nodiscard]] constexpr auto
+  IsBaseNode() const  //
+      -> bool
+  {
+    return delta_type_ == DeltaType::kNotDelta;
+  }
+
   [[nodescard]] constexpr auto
   HasPayload() const  //
       -> bool
   {
     return delta_type_ == DeltaType::kInsert || delta_type_ == DeltaType::kModify;
+  }
+
+  [[nodiscard]] constexpr auto
+  GetNext() const  //
+      -> uintptr_t
+  {
+    return next_;
   }
 
   /**
