@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef BW_TREE_COMPONENT_METADATA_HPP
+#define BW_TREE_COMPONENT_METADATA_HPP
 
 #include "common.hpp"
 
@@ -26,24 +27,10 @@ namespace dbgroup::index::bw_tree::component
  */
 class Metadata
 {
- private:
-  /*################################################################################################
-   * Internal member variables
-   *##############################################################################################*/
-
-  /// an offset to a corresponding record.
-  uint16_t offset_;
-
-  /// the length of a key in a corresponding record.
-  uint16_t key_length_;
-
-  /// the total length of a corresponding record.
-  uint16_t total_length_;
-
  public:
-  /*################################################################################################
-   * Public constructors/destructors
-   *##############################################################################################*/
+  /*####################################################################################
+   * Public constructors and assignment operators
+   *##################################################################################*/
 
   /**
    * @brief Construct a new metadata object.
@@ -65,71 +52,81 @@ class Metadata
   {
   }
 
+  constexpr Metadata(const Metadata &) = default;
+  constexpr auto operator=(const Metadata &) -> Metadata & = default;
+  constexpr Metadata(Metadata &&) = default;
+  constexpr auto operator=(Metadata &&) -> Metadata & = default;
+
+  /*####################################################################################
+   * Public destructors
+   *##################################################################################*/
+
   /**
    * @brief Destroy the metadata object.
    *
    */
   ~Metadata() = default;
 
-  constexpr Metadata(const Metadata &) = default;
-  constexpr Metadata &operator=(const Metadata &) = default;
-  constexpr Metadata(Metadata &&) = default;
-  constexpr Metadata &operator=(Metadata &&) = default;
-
-  /*################################################################################################
+  /*####################################################################################
    * Public operators
-   *##############################################################################################*/
+   *##################################################################################*/
 
-  constexpr bool
-  operator==(const Metadata &comp) const
+  constexpr auto
+  operator==(const Metadata &comp) const  //
+      -> bool
   {
     return offset_ == comp.offset_             //
            && key_length_ == comp.key_length_  //
            && total_length_ == comp.total_length_;
   }
 
-  constexpr bool
-  operator!=(const Metadata &comp) const
+  constexpr auto
+  operator!=(const Metadata &comp) const  //
+      -> bool
   {
     return !(*this == comp);
   }
 
-  /*################################################################################################
+  /*####################################################################################
    * Public getters/setters
-   *##############################################################################################*/
+   *##################################################################################*/
 
   /**
-   * @return size_t: an offset to a corresponding record.
+   * @return an offset to a corresponding record.
    */
-  constexpr size_t
-  GetOffset() const
+  constexpr auto
+  GetOffset() const  //
+      -> size_t
   {
     return offset_;
   }
 
   /**
-   * @return size_t: the length of a key in a corresponding record.
+   * @return the length of a key in a corresponding record.
    */
-  constexpr size_t
-  GetKeyLength() const
+  constexpr auto
+  GetKeyLength() const  //
+      -> size_t
   {
     return key_length_;
   }
 
   /**
-   * @return size_t: the total length of a corresponding record.
+   * @return the total length of a corresponding record.
    */
-  constexpr size_t
-  GetTotalLength() const
+  constexpr auto
+  GetTotalLength() const  //
+      -> size_t
   {
     return total_length_;
   }
 
   /**
-   * @return size_t: the length of a payload in a corresponding record.
+   * @return the length of a payload in a corresponding record.
    */
-  constexpr size_t
-  GetPayloadLength() const
+  constexpr auto
+  GetPayloadLength() const  //
+      -> size_t
   {
     return GetTotalLength() - GetKeyLength();
   }
@@ -142,6 +139,22 @@ class Metadata
   {
     offset_ = offset;
   }
+
+ private:
+  /*####################################################################################
+   * Internal member variables
+   *##################################################################################*/
+
+  /// an offset to a corresponding record.
+  uint16_t offset_;
+
+  /// the length of a key in a corresponding record.
+  uint16_t key_length_;
+
+  /// the total length of a corresponding record.
+  uint16_t total_length_;
 };
 
 }  // namespace dbgroup::index::bw_tree::component
+
+#endif  // BW_TREE_COMPONENT_METADATA_HPP
