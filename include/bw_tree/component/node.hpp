@@ -160,14 +160,13 @@ class Node
   GetKey(const Metadata meta) const  //
       -> Key
   {
-    Key key{};
     if constexpr (IsVariableLengthData<Key>()) {
-      key = reinterpret_cast<Key>(GetKeyAddr(meta));
+      return reinterpret_cast<Key>(GetKeyAddr(meta));
     } else {
+      Key key{};
       memcpy(&key, GetKeyAddr(meta), sizeof(Key));
+      return key;
     }
-
-    return key;
   }
 
   /**
@@ -180,34 +179,34 @@ class Node
   GetPayload(const Metadata meta) const  //
       -> T
   {
-    T payload{};
     if constexpr (IsVariableLengthData<T>()) {
-      payload = reinterpret_cast<T>(GetPayloadAddr(meta));
+      return reinterpret_cast<T>(GetPayloadAddr(meta));
     } else {
+      T payload{};
       memcpy(&payload, GetPayloadAddr(meta), sizeof(T));
+      return payload;
     }
-
-    return payload;
   }
 
   /**
    * @brief Copy a target payload to a specified reference.
    *
    * @param meta metadata of a corresponding record.
-   * @param out_payload a reference to be copied a target payload.
    */
   template <class T>
-  [[nodiscard]] void
-  CopyPayload(  //
-      const Metadata meta,
-      T &payload) const
+  [[nodiscard]] auto
+  CopyPayload(const size_t pos) const  //
+      -> T
   {
     if constexpr (IsVariableLengthData<T>()) {
-      const auto pay_len = meta.GetPayloadLength();
-      payload = reinterpret_cast<T>(::operator new(pay_len));
-      memcpy(payload, GetPayloadAddr(meta), pay_len);
+      const auto pay_len = meta_array_[pos].GetPayloadLength();
+      auto payload = reinterpret_cast<T>(::operator new(pay_len));
+      memcpy(payload, GetPayloadAddr(meta_array_[pos]), pay_len);
+      return payload;
     } else {
-      memcpy(&payload, GetPayloadAddr(meta), sizeof(T));
+      T payload{};
+      memcpy(&payload, GetPayloadAddr(meta_array_[pos]), sizeof(T));
+      return payload;
     }
   }
 

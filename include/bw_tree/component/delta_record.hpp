@@ -158,14 +158,13 @@ class DeltaRecord
   GetKey() const  //
       -> Key
   {
-    Key key{};
     if constexpr (IsVariableLengthData<Key>()) {
-      key = reinterpret_cast<Key>(GetKeyAddr(meta_));
+      return reinterpret_cast<Key>(GetKeyAddr(meta_));
     } else {
+      Key key{};
       memcpy(&key, GetKeyAddr(meta_), sizeof(Key));
+      return key;
     }
-
-    return key;
   }
 
   /**
@@ -177,14 +176,13 @@ class DeltaRecord
   GetPayload() const  //
       -> T
   {
-    T payload{};
     if constexpr (IsVariableLengthData<T>()) {
-      payload = reinterpret_cast<T>(GetPayloadAddr());
+      return reinterpret_cast<T>(GetPayloadAddr());
     } else {
+      T payload{};
       memcpy(&payload, GetPayloadAddr(), sizeof(T));
+      return payload;
     }
-
-    return payload;
   }
 
   /**
@@ -193,15 +191,19 @@ class DeltaRecord
    * @param out_payload a reference to be copied a target payload.
    */
   template <class T>
-  void
-  CopyPayload(T &payload) const
+  [[nodiscard]] auto
+  CopyPayload() const  //
+      -> T
   {
     if constexpr (IsVariableLengthData<T>()) {
       const auto pay_len = meta_.GetPayloadLength();
-      payload = reinterpret_cast<T>(::operator new(pay_len));
-      memcpy(payload, GetPayloadAddr(meta_), pay_len);
+      auto payload = reinterpret_cast<T>(::operator new(pay_len));
+      memcpy(payload, GetPayloadAddr(), pay_len);
+      return payload;
     } else {
-      memcpy(&payload, GetPayloadAddr(meta_), sizeof(T));
+      T payload{};
+      memcpy(&payload, GetPayloadAddr(), sizeof(T));
+      return payload;
     }
   }
 
@@ -525,18 +527,16 @@ class DeltaRecord
     const auto key_len = high_key_meta_.GetKeyLength();
     if (key_len == 0) return std::nullopt;
 
-    Key key{};
     if constexpr (IsVariableLengthData<Key>()) {
-      key = reinterpret_cast<Key>(GetKeyAddr(high_key_meta_));
+      return reinterpret_cast<Key>(GetKeyAddr(high_key_meta_));
     } else {
-      memcpy(&key, GetKeyAddr(high_key_meta_), key_len);
+      Key key{};
+      memcpy(&key, GetKeyAddr(high_key_meta_), sizeof(Key));
+      return key;
     }
-
-    return key;
   }
 
   /**
-   * @param meta metadata of a corresponding record.
    * @return an address of a target payload.
    */
   [[nodiscard]] constexpr auto

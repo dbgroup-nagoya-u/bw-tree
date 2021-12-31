@@ -97,29 +97,29 @@ class BwTree
   {
     const auto &guard = gc_.CreateEpochGuard();
 
-    // traverse to a target leaf node
+    // check whether the leaf node has a target key
     consol_page_ = nullptr;
     auto &&stack = SearchLeafNode(key, kClosed);
-
-    // check whether the leaf node has a target key
     auto [ptr, rc] = CheckExistence(key, stack);
+
+    // if a long delta-chain is found, consolidate it
     if (consol_page_ != nullptr) {
-      // if a long delta-chain is found, consolidate it
       TryConsolidation(consol_page_, key, kClosed, stack);
     }
 
-    if (rc == NodeRC::kKeyNotExist) return std::nullopt;
+    switch (rc) {
+      case NodeRC::kKeyNotExist:
+        return std::nullopt;
 
-    Payload payload{};
-    if (rc == NodeRC::kKeyInDelta) {
-      auto *delta = reinterpret_cast<DeltaRecord_t *>(ptr);
-      delta->CopyPayload(payload);
-    } else {
-      auto *node = reinterpret_cast<Node_t *>(ptr);
-      node->CopyPayload(node->GetMetadata(rc), payload);
+      case NodeRC::kKeyInDelta:
+        auto *delta = reinterpret_cast<DeltaRecord_t *>(ptr);
+        return std::make_optional(delta->CopyPayload());
+
+      case NodeRC::kKeyExist:
+      default:
+        auto *node = reinterpret_cast<Node_t *>(ptr);
+        return std::make_optional(node->CopyPayload(rc));
     }
-
-    return std::make_optional(std::move(payload));
   }
 
   /*####################################################################################
