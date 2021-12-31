@@ -340,6 +340,8 @@ class BwTree
 
   static constexpr size_t kExpectedTreeHeight = 8;
 
+  static constexpr size_t kMaxDeltaSize = component::GetMaxDeltaSize<Key, Payload>();
+
   static constexpr auto kHeaderLength = component::kHeaderLength;
 
   static constexpr auto kClosed = component::kClosed;
@@ -372,7 +374,7 @@ class BwTree
       -> void *
   {
     auto *page = gc_->template GetPageIfPossible<Delta_t>();
-    return (page == nullptr) ? (::operator new(kPageSize)) : page;
+    return (page == nullptr) ? (::operator new(kMaxDeltaSize)) : page;
   }
 
   auto

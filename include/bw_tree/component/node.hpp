@@ -36,13 +36,6 @@ namespace dbgroup::index::bw_tree::component
 template <class Key, class Comp>
 class Node
 {
-  /*####################################################################################
-   * Type aliases
-   *##################################################################################*/
-
-  template <class T>
-  using DeltaRecord_t = DeltaRecord<Key, T, Comp>;
-
  public:
   /*####################################################################################
    * Public constructors and assignment operators
@@ -326,14 +319,14 @@ class Node
     // copy the lowest key
     low_meta_ = node->low_meta_;
     if (low_meta_.GetKeyLength() > 0) {
-      offset = CopyRecordFrom(node, low_meta_, offset);
+      offset = CopyKeyFrom(node, low_meta_, offset);
     }
     low_meta_.SetOffset(offset);
 
     // copy the lowest key
     high_meta_ = high_meta;
     if (high_key) {
-      offset = SetData<Key>(offset, *high_key, high_meta_.GetKeyLength());
+      offset = SetData(offset, *high_key, high_meta_.GetKeyLength());
     }
     high_meta_.SetOffset(offset);
 
@@ -355,14 +348,14 @@ class Node
 
         // check a new record has any payload
         if (rec->HasPayload()) {
-          offset = CopyRecordFrom<T>(rec, rec->low_meta_, rec_count++, offset);
+          offset = CopyRecordFrom(rec, rec->low_meta_, rec_count++, offset);
         }
       }
 
       // check a new record is updated one
       if (j < new_rec_num && !Comp{}(base_key, rec_key)) {
         if (rec->HasPayload()) {
-          offset = CopyRecordFrom<T>(rec, rec->low_meta_, rec_count++, offset);
+          offset = CopyRecordFrom(rec, rec->low_meta_, rec_count++, offset);
         }
         ++j;
       } else {
@@ -374,7 +367,7 @@ class Node
     for (; j < new_rec_num; ++j) {
       rec = records[j].second;
       if (rec->HasPayload()) {
-        offset = CopyRecordFrom<T>(rec, rec->low_meta_, rec_count++, offset);
+        offset = CopyRecordFrom(rec, rec->low_meta_, rec_count++, offset);
       }
     }
 
@@ -401,6 +394,13 @@ class Node
   /*####################################################################################
    * Internal getters setters
    *##################################################################################*/
+
+  [[nodescard]] constexpr auto
+  HasPayload() const  //
+      -> bool
+  {
+    return delta_type_ == DeltaType::kInsert || delta_type_ == DeltaType::kModify;
+  }
 
   /**
    * @param meta metadata of a corresponding record.
@@ -464,16 +464,16 @@ class Node
    * @return the updated offset value.
    */
   auto
-  CopyRecordFrom(  //
+  CopyKeyFrom(  //
       const Node *node,
       const Metadata meta,
       size_t offset)  //
       -> size_t
   {
     // copy a record from the given node
-    const auto rec_len = meta.GetTotalLength();
-    offset -= rec_len;
-    memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), rec_len);
+    const auto key_len = meta.GetKeyLength();
+    offset -= key_len;
+    memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
 
     return offset;
   }
@@ -481,13 +481,11 @@ class Node
   /**
    * @brief Copy a record from a delta record.
    *
-   * @tparam Payload a class of payload.
    * @param rec an original delta record.
    * @param rec_count the current number of records in this node.
    * @param offset the current offset of this node.
    * @return the updated offset value.
    */
-  template <class Payload>
   auto
   CopyRecordFrom(  //
       const Node *node,

@@ -49,7 +49,7 @@ class DeltaRecord
    *##################################################################################*/
 
   /**
-   * @brief Construct a new delta record for leaf-insert/modify/delete or split.
+   * @brief Construct a new delta record for leaf-insert/modify/delete.
    *
    * @tparam T a target payload class.
    * @param delta_type
@@ -62,17 +62,14 @@ class DeltaRecord
   DeltaRecord(  //
       const DeltaType delta_type,
       const Key &key,
-      const size_t key_length,
+      const size_t key_len,
       const T &payload,
-      const size_t payload_length)
-      : delta_type_{delta_type}
+      const size_t pay_len)
+      : node_type_{NodeType::kLeaf}, delta_type_{delta_type}
   {
-    auto [key_len, pay_len, rec_len] = Align<Key, T>(key_length, payload_length);
-    auto offset = sizeof(DeltaRecord);
-
-    offset = SetData(offset, payload, pay_len);
-    offset = SetData(offset, key, key_len);
-    meta_ = Metadata{offset, key_len, rec_len};
+    meta_ = Metadata{kHeaderLength, key_len, key_len + pay_len};
+    auto offset = SetData(kHeaderLength, key, key_len);
+    SetData(offset, payload, pay_len);
   }
 
   /**
@@ -81,22 +78,20 @@ class DeltaRecord
    * @param split_delta
    */
   DeltaRecord(  //
-      const uintptr_t node,
+      const uintptr_t right_ptr,
       const uintptr_t sib_page,
       const uintptr_t next)
       : delta_type_{DeltaType::kSplit}, next_{next}
   {
-    auto *delta = reinterpret_cast<DeltaRecord *>(node);
-    auto offset = sizeof(DeltaRecord);
-
-    // set a sibling node
-    offset = SetData(offset, sib_page, sizeof(uintptr_t));
+    auto *right_node = reinterpret_cast<DeltaRecord *>(right_ptr);
 
     // copy a lowest key
-    auto key_len = delta->meta_.GetKeyLength();
-    offset -= key_len;
-    memcpy(ShiftAddr(this, offset), delta->GetKeyAddr(delta->meta_), key_len);
-    meta_ = Metadata{offset, key_len, key_len + sizeof(uintptr_t)};
+    auto key_len = right_node->meta_.GetKeyLength();
+    meta_ = Metadata{kHeaderLength, key_len, key_len + kWordSize};
+    memcpy(&data_block_, right_node->GetKeyAddr(right_node->meta_), key_len);
+
+    // set a sibling node
+    SetData(kHeaderLength + key_len, sib_page, kWordSize);
   }
 
   /**
@@ -107,25 +102,21 @@ class DeltaRecord
   DeltaRecord(const DeltaRecord *delta)
       : node_type_{NodeType::kInternal}, delta_type_{DeltaType::kInsert}
   {
-    auto offset = sizeof(DeltaRecord);
+    // copy contents of a split delta
+    meta_ = delta->meta_;
+    auto rec_len = meta_.GetTotalLength();
+    memcpy(&data_block_, &(delta->data_block_), rec_len);
 
     // copy a highest key from a sibling node
     auto *sib_page = delta->template GetPayload<std::atomic<DeltaRecord *> *>();
     auto *sib_node = sib_page->load(std::memory_order_relaxed);
     high_key_meta_ = sib_node->high_key_meta_;
-    auto rec_len = high_key_meta_.GetKeyLength();
     if (key_len > 0) {
-      offset -= key_len;
+      auto offset = kHeaderLength + rec_len;
+      rec_len = high_key_meta_.GetKeyLength();
       memcpy(ShiftAddr(this, offset), sib_node->GetKeyAddr(high_key_meta_), key_len);
       high_key_meta_.SetOffset(offset);
     }
-
-    // copy contents of a split delta
-    meta_ = delta->meta_;
-    rec_len = meta_.GetTotalLength();
-    offset -= rec_len;
-    memcpy(ShiftAddr(this, offset), delta->GetKeyAddr(meta_), rec_len);
-    meta_.SetOffset(offset);
   }
 
   constexpr DeltaRecord(const DeltaRecord &) = default;
@@ -163,13 +154,6 @@ class DeltaRecord
       -> bool
   {
     return delta_type_ == DeltaType::kNotDelta;
-  }
-
-  [[nodescard]] constexpr auto
-  HasPayload() const  //
-      -> bool
-  {
-    return delta_type_ == DeltaType::kInsert || delta_type_ == DeltaType::kModify;
   }
 
   [[nodiscard]] constexpr auto
@@ -598,11 +582,11 @@ class DeltaRecord
       -> size_t
   {
     if constexpr (IsVariableLengthData<T>()) {
-      offset -= data_len;
       memcpy(ShiftAddr(this, offset), data, data_len);
+      offset += data_len;
     } else {
-      offset -= sizeof(T);
       memcpy(ShiftAddr(this, offset), &data, sizeof(T));
+      offset += sizeof(T);
     }
 
     return offset;
@@ -631,7 +615,7 @@ class DeltaRecord
   Metadata high_key_meta_{};
 
   /// an actual data block for records
-  std::byte data_block_[GetMaxDeltaSize<Key, Payload>()]{};
+  std::byte data_block_[0]{};
 };
 
 }  // namespace dbgroup::index::bw_tree::component

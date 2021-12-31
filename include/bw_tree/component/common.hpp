@@ -105,8 +105,8 @@ GetMaxDeltaSize()  //
   auto [l_k_len, l_p_len, l_rec] = Align<Key, Payload>(key_length, pay_length);
   auto [i_k_len, i_p_len, i_rec] = Align<Key, uintptr_t>(key_length, sizeof(uintptr_t));
 
-  auto max_leaf_delta = l_k_len + l_p_len;
-  auto max_internal_delta = 2 * i_k_len + i_p_len;
+  auto max_leaf_delta = kHeaderLength + l_k_len + l_p_len;
+  auto max_internal_delta = kHeaderLength + 2 * i_k_len + i_p_len;
 
   return (max_leaf_delta > max_internal_delta) ? max_leaf_delta : max_internal_delta;
 }
