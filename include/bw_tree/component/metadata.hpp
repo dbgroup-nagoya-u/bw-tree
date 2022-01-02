@@ -68,26 +68,6 @@ class Metadata
   ~Metadata() = default;
 
   /*####################################################################################
-   * Public operators
-   *##################################################################################*/
-
-  constexpr auto
-  operator==(const Metadata &comp) const  //
-      -> bool
-  {
-    return offset_ == comp.offset_             //
-           && key_length_ == comp.key_length_  //
-           && total_length_ == comp.total_length_;
-  }
-
-  constexpr auto
-  operator!=(const Metadata &comp) const  //
-      -> bool
-  {
-    return !(*this == comp);
-  }
-
-  /*####################################################################################
    * Public getters/setters
    *##################################################################################*/
 
