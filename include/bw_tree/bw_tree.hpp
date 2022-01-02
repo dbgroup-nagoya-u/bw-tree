@@ -122,17 +122,18 @@ class BwTree
     }
 
     switch (rc) {
-      case NodeRC::kKeyNotExist:
+      case NodeRC::kKeyNotExist: {
         return std::nullopt;
-
-      case NodeRC::kKeyInDelta:
+      }
+      case NodeRC::kKeyInDelta: {
         auto *delta = reinterpret_cast<Delta_t *>(ptr);
-        return std::make_optional(delta->CopyPayload());
-
+        return std::make_optional(delta->template CopyPayload<Payload>());
+      }
       case NodeRC::kKeyExist:
-      default:
+      default: {
         auto *node = reinterpret_cast<Node_t *>(ptr);
-        return std::make_optional(node->CopyPayload(rc));
+        return std::make_optional(node->template CopyPayload<Payload>(rc));
+      }
     }
   }
 
@@ -174,14 +175,15 @@ class BwTree
     auto *rec = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload, pay_len};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
     auto prev_head = kNullPtr;
-    do {
+    while (true) {
       // check whether the target node includes incomplete SMOs
-      auto cur_head = ValidateNode(key, kClosed, prev_head, stack);
+      auto head = ValidateNode(key, kClosed, prev_head, stack);
 
       // prepare nodes to perform CAS
-      rec->SetNext(cur_head);
-      prev_head = cur_head;
-    } while (stack.back()->compare_exchange_weak(cur_head, rec_ptr, std::memory_order_release));
+      rec->SetNext(head);
+      prev_head = head;
+      if (stack.back()->compare_exchange_weak(head, rec_ptr, std::memory_order_release)) break;
+    }
 
     if (consol_page_ != nullptr) {
       TryConsolidation(consol_page_, key, kClosed, stack);
@@ -365,7 +367,7 @@ class BwTree
   {
     if (size > kPageSize) return ::operator new(size);
 
-    auto *page = gc_->template GetPageIfPossible<Node_t>();
+    auto *page = gc_.template GetPageIfPossible<Node_t>();
     return (page == nullptr) ? (::operator new(kPageSize)) : page;
   }
 
@@ -373,7 +375,7 @@ class BwTree
   GetRecPage()  //
       -> void *
   {
-    auto *page = gc_->template GetPageIfPossible<Delta_t>();
+    auto *page = gc_.template GetPageIfPossible<Delta_t>();
     return (page == nullptr) ? (::operator new(kMaxDeltaSize)) : page;
   }
 
@@ -405,37 +407,39 @@ class BwTree
     stack.reserve(kExpectedTreeHeight);
 
     // get a logical page of a root node
-    auto [page_id, height] = root_.load(std::memory_order_relaxed);
+    auto *page_id = root_.load(std::memory_order_relaxed);
+    auto *head = reinterpret_cast<Node_t *>(page_id->load(std::memory_order_relaxed));
 
     // traverse a Bw-tree
-    for (size_t i = 0; i < height; ++i) {
+    while (!head->IsLeaf()) {
       auto [ptr, rc] = Delta_t::SearchChildNode(key, closed, page_id);
       switch (rc) {
-        case DeltaRC::kRecordFound:
+        case DeltaRC::kRecordFound: {
           stack.emplace_back(page_id);
           page_id = reinterpret_cast<std::atomic_uintptr_t *>(ptr);
           break;
-
-        case DeltaRC::kNodeRemoved:
+        }
+        case DeltaRC::kNodeRemoved: {
           page_id = stack.back();
           stack.pop_back();
-          --i;
           continue;
-
+        }
         case DeltaRC::kReachBase:
-        default:
+        default: {
           stack.emplace_back(page_id);
-          if (rc >= kMaxDeltaNodeNum) {
+          if (static_cast<size_t>(rc) >= kMaxDeltaNodeNum) {
             consol_page_ = page_id;
           }
 
           // search a child node in a base node
-          Node_t *base_node = reinterpret_cast<Node_t *>(ptr);
+          auto *base_node = reinterpret_cast<Node_t *>(ptr);
           auto pos = base_node->SearchChild(key, closed);
           auto meta = base_node->GetMetadata(pos);
           page_id = base_node->template GetPayload<std::atomic_uintptr_t *>(meta);
           break;
+        }
       }
+      head = reinterpret_cast<Node_t *>(page_id->load(std::memory_order_relaxed));
     }
     stack.emplace_back(page_id);
 
@@ -450,34 +454,34 @@ class BwTree
       NodeStack &stack)  //
       -> uintptr_t
   {
-    auto *page_id = stack.back();
     while (true) {
-      auto [ptr, rc] = Delta_t::Validate(key, closed, page_id, prev_head);
+      auto [ptr, rc] = Delta_t::Validate(key, closed, prev_head, stack);
       switch (rc) {
-        case DeltaRC::kSplitMayIncomplete:
+        case DeltaRC::kSplitMayIncomplete: {
           // complete splitting and traverse to a sibling node
           CompleteSplit(ptr, stack);
-          auto *rec = reinterpret_cast<Delta_t *>(ptr);
-          page_id = rec->template GetPayload<std::atomic_uintptr_t *>();
 
           // insert a new current-level node (an old node was popped in parent-update)
+          auto *rec = reinterpret_cast<Delta_t *>(ptr);
+          auto *page_id = rec->template GetPayload<std::atomic_uintptr_t *>();
           stack.emplace_back(page_id);
           break;
-
-        case DeltaRC::kMergeMayIncomplete:
+        }
+        case DeltaRC::kMergeMayIncomplete: {
           // ...not implemented yet
           break;
-
-        case DeltaRC::kNodeRemoved:
+        }
+        case DeltaRC::kNodeRemoved: {
           // ...not implemented yet
           break;
-
+        }
         case DeltaRC::kReachBase:
-        default:
-          if (rc >= kMaxDeltaNodeNum) {
-            consol_page_ = page_id;
+        default: {
+          if (static_cast<size_t>(rc) >= kMaxDeltaNodeNum) {
+            consol_page_ = stack.back();
           }
           return ptr;
+        }
       }
     }
   }
@@ -490,27 +494,23 @@ class BwTree
   {
     auto [ptr, rc] = Delta_t::SearchRecord(key, stack);
     switch (rc) {
-      case DeltaRC::kRecordFound:
+      case DeltaRC::kRecordFound: {
         return {ptr, NodeRC::kKeyInDelta};
-
-      case DeltaRC::kRecordDeleted:
+      }
+      case DeltaRC::kRecordDeleted: {
         return {uintptr_t{}, NodeRC::kKeyNotExist};
-
+      }
       case DeltaRC::kReachBase:
-      default:
-        if (rc >= kMaxDeltaNodeNum) {
+      default: {
+        if (static_cast<size_t>(rc) >= kMaxDeltaNodeNum) {
           consol_page_ = stack.back();
         }
         // search a target key
         auto *node = reinterpret_cast<Node_t *>(ptr);
         auto pos = node->SearchRecord(key);
-        return {ptr, pos};
+        return {ptr, static_cast<NodeRC>(pos)};
+      }
     }
-  }
-
-  void
-  AddToGC(uintptr_t head_ptr)
-  {
   }
 
   /*####################################################################################
@@ -536,15 +536,15 @@ class BwTree
     // perform consolidation, and split if needed
     auto [consol_node, size] = Consolidate(cur_head);
     if (size > kPageSize) {
-      if (HalfSplit(target_page, cur_head, consol_node, stack)) return;
-      TryConsolidation(consol_page, key, closed, stack);  // retry from consolidation
+      if (HalfSplit(consol_page_, cur_head, consol_node, stack)) return;
+      TryConsolidation(consol_page_, key, closed, stack);  // retry from consolidation
       return;
     }
 
     // install a consolidated node
     auto old_head = cur_head;
     auto new_head = reinterpret_cast<uintptr_t>(consol_node);
-    if (!target_page->compare_exchange_strong(old_head, new_head, std::memory_order_release)) {
+    if (!consol_page_->compare_exchange_strong(old_head, new_head, std::memory_order_release)) {
       // no CAS retry for consolidation
       AddToGC(new_head);
       return;
@@ -560,19 +560,16 @@ class BwTree
     // sort delta records
     std::vector<std::pair<Key, uintptr_t>> sorted{};
     sorted.reserve(kMaxDeltaNodeNum * 4);
-    auto &&[node_ptr, high_key, high_meta, sib_page, diff] = Delta_t::Sort(head, sorted);
-    auto *node = reinterpret_cast<Node_t *>(node_ptr);
+    auto &&[ptr, high_key, h_meta, sib_ptr, diff] = Delta_t::template Sort<Payload>(head, sorted);
+    auto *node = reinterpret_cast<Node_t *>(ptr);
 
     // reserve a page for a consolidated node
-    auto [block_size, rec_num] = node->GetPageSize(high_key, high_meta);
+    auto [block_size, rec_num] = node->GetPageSize(high_key, h_meta);
     auto size = kHeaderLength + block_size + diff;
     void *page = GetNodePage(size);
-    auto *consol_node = new (page) Node_t{sib_page};
+    auto *new_node = new (page) Node_t{node, sorted, high_key, h_meta, sib_ptr, size, rec_num};
 
-    // perform merge sort to copy records to the consolidated node
-    consol_node->Consolidate(node, sorted, high_key, high_meta, size, rec_num);
-
-    return {consol_node, size};
+    return {new_node, size};
   }
 
   bool
@@ -586,26 +583,26 @@ class BwTree
 
     // create a split-delta record
     std::atomic_uintptr_t *sib_page = mapping_table_.GetNewLogicalID();
-    auto split_ptr = reinterpret_cast<uintptr_t>(split_node);
-    sib_page->store(split_ptr, std::memory_order_release);
+    auto right_ptr = reinterpret_cast<uintptr_t>(split_node);
+    sib_page->store(right_ptr, std::memory_order_release);
     auto sib_ptr = reinterpret_cast<uintptr_t>(sib_page);
-    auto *delta = new (GetRecPage()) Delta_t{split_ptr, sib_ptr, cur_head};
+    auto *delta = new (GetRecPage()) Delta_t{right_ptr, sib_ptr, cur_head};
 
     // install the delta record for splitting a child node
     auto old_head = cur_head;
-    auto new_head = reinterpret_cast<uintptr_t>(delta);
-    if (!split_page->compare_exchange_strong(old_head, new_head, std::memory_order_release)) {
+    auto delta_ptr = reinterpret_cast<uintptr_t>(delta);
+    if (!split_page->compare_exchange_strong(old_head, delta_ptr, std::memory_order_release)) {
       // retry from consolidation
-      delta->SetNextNode(kNullPtr);
-      AddToGC(new_head);
-      AddToGC(split_ptr);
+      delta->SetNext(kNullPtr);
+      AddToGC(delta_ptr);
+      AddToGC(right_ptr);
       sib_page->store(kNullPtr, std::memory_order_relaxed);
       return false;
     }
 
     // execute parent update
     consol_page_ = nullptr;
-    CompleteSplit(delta, stack);
+    CompleteSplit(delta_ptr, stack);
 
     // execute parent consolidation/split if needed
     if (consol_page_ != nullptr) {
@@ -618,15 +615,16 @@ class BwTree
 
   void
   CompleteSplit(  //
-      const Delta_t *split_delta,
+      const uintptr_t split_ptr,
       NodeStack &stack)
   {
     if (stack.size() <= 1) {  // a split node is root
-      RootSplit(split_delta, stack);
+      RootSplit(split_ptr, stack);
       return;
     }
 
     // create an index-entry delta record to complete split
+    auto *split_delta = reinterpret_cast<const Delta_t *>(split_ptr);
     auto *entry_delta = new (GetRecPage()) Delta_t{split_delta};
     auto new_head = reinterpret_cast<uintptr_t>(entry_delta);
     auto &&sep_key = split_delta->GetKey();
@@ -639,19 +637,19 @@ class BwTree
 
       // check whether another thread has already completed this split
       if (CheckExistence(sep_key, stack).second != NodeRC::kKeyNotExist) {
-        entry_delta->SetNextNode(kNullPtr);
-        AddToGC(entry_delta);
+        entry_delta->SetNext(kNullPtr);
+        AddToGC(new_head);
         return;
       }
 
       // try to insert the index-entry delta record
-      entry_delta->SetNextNode(cur_head);
+      entry_delta->SetNext(cur_head);
     } while (stack.back()->compare_exchange_weak(cur_head, new_head, std::memory_order_release));
   }
 
   void
   RootSplit(  //
-      const Delta_t *split_delta,
+      const uintptr_t split_delta,
       NodeStack &stack)
   {
     // create a new root node
@@ -665,8 +663,8 @@ class BwTree
     stack.pop_back();
     if (!root_.compare_exchange_strong(old_root_p, new_root_p, std::memory_order_relaxed)) {
       // another thread has already inserted a new root
-      new_root_p->store(nullptr, std::memory_order_relaxed);
-      AddToGC(new_root);
+      new_root_p->store(kNullPtr, std::memory_order_relaxed);
+      AddToGC(root_ptr);
       stack.emplace_back(old_root_p);
       return;
     }
@@ -687,7 +685,7 @@ class BwTree
   NodeGC_t gc_;
 
   /// a page ID to be consolidated
-  inline thread_local std::atomic_uintptr_t *consol_page_{};
+  inline static thread_local std::atomic_uintptr_t *consol_page_{};
 };
 
 }  // namespace dbgroup::index::bw_tree

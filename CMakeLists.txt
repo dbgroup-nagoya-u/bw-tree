@@ -18,49 +18,42 @@ set(BW_TREE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(MEMORY_MANAGER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/memory-manager")
 
 #--------------------------------------------------------------------------------------#
+# Configure external libraries
+#--------------------------------------------------------------------------------------#
+
+# configure GC
+find_package(memory_manager QUIET)
+if(NOT TARGET memory_manager::memory_manager)
+  add_subdirectory("${MEMORY_MANAGER_SOURCE_DIR}")
+endif()
+
+#--------------------------------------------------------------------------------------#
 # Build targets
 #--------------------------------------------------------------------------------------#
 
 add_library(bw_tree INTERFACE)
-target_compile_features(
-  bw_tree INTERFACE
+target_compile_features(bw_tree INTERFACE
   "cxx_std_17"
 )
-target_compile_options(
-  bw_tree INTERFACE
-  -Wall
-  -Wextra
-  $<$<STREQUAL:${CMAKE_BUILD_TYPE},"Release">:"-O2 -march=native">
-  $<$<STREQUAL:${CMAKE_BUILD_TYPE},"RelWithDebInfo">:"-g3 -Og -pg">
-  $<$<STREQUAL:${CMAKE_BUILD_TYPE},"Debug">:"-g3 -O0 -pg">
-)
-target_include_directories(
-  bw_tree INTERFACE
+target_include_directories(bw_tree INTERFACE
   "${BW_TREE_SOURCE_DIR}/include"
-  "${MEMORY_MANAGER_SOURCE_DIR}/include"
 )
-
-if(DEFINED MEMORY_MANAGER_GARBAGE_BUFFER_SIZE)
-  target_compile_definitions(
-    bw_tree INTERFACE
-    MEMORY_MANAGER_GARBAGE_BUFFER_SIZE=${MEMORY_MANAGER_GARBAGE_BUFFER_SIZE}
-  )
-endif()
+target_link_libraries(bw_tree INTERFACE
+  memory_manager::memory_manager
+)
 
 #--------------------------------------------------------------------------------------#
 # Add compile options
 #--------------------------------------------------------------------------------------#
 
 if(DEFINED BW_TREE_PAGE_SIZE)
-  target_compile_definitions(
-    bw_tree INTERFACE
+  target_compile_definitions(bw_tree INTERFACE
     BW_TREE_PAGE_SIZE=${BW_TREE_PAGE_SIZE}
   )
 endif()
 
 if(DEFINED BW_TREE_MAX_DELTA_NODE_NUM)
-  target_compile_definitions(
-    bw_tree INTERFACE
+  target_compile_definitions(bw_tree INTERFACE
     BW_TREE_MAX_DELTA_NODE_NUM=${BW_TREE_MAX_DELTA_NODE_NUM}
   )
 endif()
