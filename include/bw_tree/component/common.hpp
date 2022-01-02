@@ -88,6 +88,9 @@ constexpr bool kClosed = true;
 
 constexpr uintptr_t kNullPtr = 0;
 
+/// the capacity of each mapping table.
+constexpr size_t kMappingTableCapacity = (kPageSize - kWordSize) / kWordSize;
+
 /*##################################################################################################
  * Internal utility functions
  *################################################################################################*/

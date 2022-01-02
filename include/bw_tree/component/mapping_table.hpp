@@ -45,13 +45,6 @@ class MappingTable
 
  public:
   /*####################################################################################
-   * Public constants
-   *##################################################################################*/
-
-  /// capacity of mapping information that can be maintained in each table.
-  static constexpr size_t kDefaultTableCapacity = (kPageSize - kWordSize) / kWordSize;
-
-  /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/
 
@@ -65,7 +58,7 @@ class MappingTable
     table_.store(table, std::memory_order_relaxed);
 
     std::unique_lock guard{full_tables_mtx_};
-    full_tables_.reserve(kDefaultTableNum);
+    full_tables_.reserve(kExpectedTableNum);
     full_tables_.emplace_back(table);
   }
 
@@ -145,7 +138,7 @@ class MappingTable
      */
     BufferedMap()
     {
-      for (size_t i = 0; i < kDefaultTableCapacity; ++i) {
+      for (size_t i = 0; i < kMappingTableCapacity; ++i) {
         auto *elem_ptr = reinterpret_cast<uintptr_t *>(&logical_ids_[i]);
         *elem_ptr = kNullPtr;
       }
@@ -168,8 +161,8 @@ class MappingTable
     ~BufferedMap()
     {
       auto size = head_id_.load(std::memory_order_relaxed);
-      if (size > kDefaultTableCapacity) {
-        size = kDefaultTableCapacity;
+      if (size > kMappingTableCapacity) {
+        size = kMappingTableCapacity;
       }
 
       for (size_t i = 0; i < size; ++i) {
@@ -207,7 +200,7 @@ class MappingTable
     {
       auto current_id = head_id_.fetch_add(1, std::memory_order_relaxed);
 
-      if (current_id >= kDefaultTableCapacity) return nullptr;
+      if (current_id >= kMappingTableCapacity) return nullptr;
       return &logical_ids_[current_id];
     }
 
@@ -220,14 +213,14 @@ class MappingTable
     std::atomic_size_t head_id_{0};
 
     /// an actual mapping table.
-    std::array<std::atomic_uintptr_t, kDefaultTableCapacity> logical_ids_{};
+    std::array<std::atomic_uintptr_t, kMappingTableCapacity> logical_ids_{};
   };
 
   /*####################################################################################
    * Internal constants
    *##################################################################################*/
 
-  static constexpr size_t kDefaultTableNum = 128;
+  static constexpr size_t kExpectedTableNum = 128;
 
   /*####################################################################################
    * Internal member variables
