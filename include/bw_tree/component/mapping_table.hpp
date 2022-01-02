@@ -63,8 +63,9 @@ class MappingTable
   }
 
   MappingTable(const MappingTable &) = delete;
-  MappingTable &operator=(const MappingTable &) = delete;
   MappingTable(MappingTable &&) = delete;
+
+  MappingTable &operator=(const MappingTable &) = delete;
   MappingTable &operator=(MappingTable &&) = delete;
 
   /*####################################################################################
@@ -145,8 +146,9 @@ class MappingTable
     }
 
     BufferedMap(const BufferedMap &) = delete;
-    BufferedMap &operator=(const BufferedMap &) = delete;
     BufferedMap(BufferedMap &&) = delete;
+
+    BufferedMap &operator=(const BufferedMap &) = delete;
     BufferedMap &operator=(BufferedMap &&) = delete;
 
     /*##################################################################################

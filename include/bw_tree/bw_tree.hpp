@@ -77,8 +77,9 @@ class BwTree
   }
 
   BwTree(const BwTree &) = delete;
-  BwTree &operator=(const BwTree &) = delete;
   BwTree(BwTree &&) = delete;
+
+  BwTree &operator=(const BwTree &) = delete;
   BwTree &operator=(BwTree &&) = delete;
 
   /*####################################################################################

@@ -31,7 +31,6 @@ namespace dbgroup::index::bw_tree::component
  * @brief A class to represent delta records in Bw-tree.
  *
  * @tparam Key a target key class.
- * @tparam Payload a target payload class.
  * @tparam Comp a comparetor class for keys.
  */
 template <class Key, class Comp>
@@ -84,6 +83,7 @@ class DeltaRecord
       : delta_type_{DeltaType::kSplit}, next_{next}
   {
     auto *right_node = reinterpret_cast<DeltaRecord *>(right_ptr);
+    node_type_ = right_node->node_type_;
 
     // copy a lowest key
     auto key_len = right_node->meta_.GetKeyLength();
@@ -121,8 +121,9 @@ class DeltaRecord
   }
 
   constexpr DeltaRecord(const DeltaRecord &) = default;
-  constexpr auto operator=(const DeltaRecord &) -> DeltaRecord & = default;
   constexpr DeltaRecord(DeltaRecord &&) = default;
+
+  constexpr auto operator=(const DeltaRecord &) -> DeltaRecord & = default;
   constexpr auto operator=(DeltaRecord &&) -> DeltaRecord & = default;
 
   /*####################################################################################
@@ -610,7 +611,7 @@ class DeltaRecord
   uint64_t : 0;
 
   /// the pointer to the next node.
-  uintptr_t next_{0};
+  uintptr_t next_{kNullPtr};
 
   /// metadata of an embedded record
   Metadata meta_{};
