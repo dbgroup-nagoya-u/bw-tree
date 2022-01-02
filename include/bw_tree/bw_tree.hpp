@@ -377,6 +377,24 @@ class BwTree
     return (page == nullptr) ? (::operator new(kMaxDeltaSize)) : page;
   }
 
+  void
+  AddToGC(uintptr_t ptr)
+  {
+    if (ptr == kNullPtr) return;
+
+    // delete delta records
+    auto *rec = reinterpret_cast<Delta_t *>(ptr);
+    while (!rec->IsBaseNode()) {
+      gc_.AddGarbage(rec);
+      ptr = rec->GetNext();
+      rec = reinterpret_cast<Delta_t *>(ptr);
+    }
+
+    // delete a base node
+    auto *node = reinterpret_cast<Node_t *>(ptr);
+    gc_.AddGarbage(node);
+  }
+
   auto
   SearchLeafNode(  //
       const Key &key,
