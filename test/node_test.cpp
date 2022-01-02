@@ -24,153 +24,125 @@
 
 namespace dbgroup::index::bw_tree::component::test
 {
-// use a supper template to define key-payload pair templates
-template <class KeyType, class PayloadType, class KeyComparator, class PayloadComparator>
+/*######################################################################################
+ * Classes for templated testing
+ *####################################################################################*/
+
+template <class KeyType, class PayloadType>
 struct KeyPayload {
   using Key = KeyType;
   using Payload = PayloadType;
-  using KeyComp = KeyComparator;
-  using PayloadComp = PayloadComparator;
 };
+
+/*######################################################################################
+ * Fixture class definition
+ *####################################################################################*/
 
 template <class KeyPayload>
 class NodeFixture : public testing::Test
 {
- protected:
+  /*####################################################################################
+   * Type aliases
+   *##################################################################################*/
+
   // extract key-payload types
-  using Key = typename KeyPayload::Key;
-  using Payload = typename KeyPayload::Payload;
-  using KeyComp = typename KeyPayload::KeyComp;
-  using PayloadComp = typename KeyPayload::PayloadComp;
+  using Key = typename KeyPayload::Key::Data;
+  using Payload = typename KeyPayload::Payload::Data;
+  using KeyComp = typename KeyPayload::Key::Comp;
+  using PayComp = typename KeyPayload::Payload::Comp;
 
   // define type aliases for simplicity
   using Node_t = Node<Key, std::less<Key>>;
 
-  /*################################################################################################
+ protected:
+  /*####################################################################################
    * Internal constants
-   *##############################################################################################*/
+   *##################################################################################*/
 
-  static constexpr size_t kKeyLength = GetDataLength<Key>();
-  static constexpr size_t kPayloadLength = GetDataLength<Payload>();
-  static constexpr size_t kRecordLength = kKeyLength + kPayloadLength;
-  static constexpr size_t kMaxRecordNum =
-      (kPageSize - component::kHeaderLength) / (kRecordLength + sizeof(Metadata));
-  static constexpr size_t kKeyNumForTest = 1024;
+  static constexpr size_t kKeyLen = GetDataLength<Key>();
+  static constexpr size_t kPayLen = GetDataLength<Payload>();
+  static constexpr size_t kRecLen = kKeyLen + kPayLen;
+  static constexpr size_t kMaxRecNum = (kPageSize - kHeaderLength) / (kRecLen + sizeof(Metadata));
+  static constexpr size_t kKeyNumForTest = kMaxRecNum;
 
-  /*################################################################################################
-   * Internal member variables
-   *##############################################################################################*/
-
-  // actual keys and payloads
-  Key keys[kKeyNumForTest];
-  Payload payloads[kKeyNumForTest];
-
-  // a target node and its expected metadata
-  Node_t *node;
-  std::vector<Metadata> meta_vec;
-
-  /*################################################################################################
+  /*####################################################################################
    * Setup/Teardown
-   *##############################################################################################*/
+   *##################################################################################*/
 
   void
   SetUp() override
   {
-    node = Node_t::CreateNode(kPageSize, NodeType::kLeaf, kMaxRecordNum, nullptr);
-    PrepareTestData(keys, kKeyNumForTest);
-    PrepareTestData(payloads, kKeyNumForTest);
+    PrepareTestData(keys_, kKeyNumForTest);
+    PrepareTestData(payloads_, kKeyNumForTest);
   }
 
   void
   TearDown() override
   {
-    Node_t::DeleteNode(node);
-
-    ReleaseTestData(keys, kKeyNumForTest);
-    ReleaseTestData(payloads, kKeyNumForTest);
+    ReleaseTestData(keys_, kKeyNumForTest);
+    ReleaseTestData(payloads_, kKeyNumForTest);
   }
 
-  /*################################################################################################
+  /*####################################################################################
+   * Utilities for testing
+   *##################################################################################*/
+
+  static auto
+  GetPage()  //
+      -> void *
+  {
+    return ::operator new(kPageSize);
+  }
+
+  /*####################################################################################
    * Functions for verification
-   *##############################################################################################*/
+   *##################################################################################*/
 
   void
-  VerifySetterGetter()
+  VerifyInitialRootConstructor()
   {
-    meta_vec.reserve(kMaxRecordNum);
+    auto *raw_p = new (GetPage()) Node_t{};
+    std::unique_ptr<Node_t> node{raw_p};
 
-    // set records and keep their metadata
-    size_t offset = kPageSize;
-    for (size_t i = 0; i < kMaxRecordNum; ++i) {
-      // set a record
-      node->SetPayload(offset, payloads[i], kPayloadLength);
-      node->SetKey(offset, GetAddr(keys[i]), kKeyLength);
-      node->SetMetadata(i, Metadata{offset, kKeyLength, kRecordLength});
-
-      // keep metadata for verification
-      meta_vec.emplace_back(offset, kKeyLength, kRecordLength);
-    }
-
-    // verify records and their metadata
-    for (size_t i = 0; i < kMaxRecordNum; ++i) {
-      const auto meta = node->GetMetadata(i);
-      EXPECT_EQ(meta_vec.at(i), meta);
-      VerifyKey(i, meta);
-      VerifyPayload(i, meta);
-    }
+    EXPECT_TRUE(node->IsLeaf());
+    EXPECT_TRUE(node->IsBaseNode());
+    EXPECT_EQ(nullptr, node->GetSiblingNode());
   }
 
-  void
-  VerifyKey(  //
-      const size_t idx,
-      const Metadata meta)
-  {
-    const auto key = node->GetKeyAddr(meta);
-    const auto result = IsEqual<Key, KeyComp>(key, GetAddr(keys[idx]));
-    EXPECT_TRUE(result);
-  }
+  /*####################################################################################
+   * Internal member variables
+   *##################################################################################*/
 
-  void
-  VerifyPayload(  //
-      const size_t idx,
-      const Metadata meta)
-  {
-    Payload payload{};
-    node->CopyPayload(meta, payload);
-
-    const auto result = IsEqual<Payload, PayloadComp>(GetAddr(payload), GetAddr(payloads[idx]));
-    EXPECT_TRUE(result);
-
-    if constexpr (IsVariableLengthData<Payload>()) {
-      ::operator delete(payload);
-    }
-  }
+  // actual keys and payloads
+  Key keys_[kKeyNumForTest]{};
+  Payload payloads_[kKeyNumForTest]{};
 };
 
-/*##################################################################################################
+/*######################################################################################
  * Preparation for typed testing
- *################################################################################################*/
+ *####################################################################################*/
 
-using KeyPayloadPairs = ::testing::Types<KeyPayload<uint64_t, uint64_t, UInt64Comp, UInt64Comp>,
-                                         KeyPayload<char *, uint64_t, CStrComp, UInt64Comp>,
-                                         KeyPayload<uint64_t, char *, UInt64Comp, CStrComp>,
-                                         KeyPayload<char *, char *, CStrComp, CStrComp>,
-                                         KeyPayload<uint32_t, uint64_t, UInt32Comp, UInt64Comp>,
-                                         KeyPayload<uint32_t, uint32_t, UInt32Comp, UInt32Comp>,
-                                         KeyPayload<uint64_t, uint64_t *, UInt64Comp, PtrComp>>;
-TYPED_TEST_CASE(NodeFixture, KeyPayloadPairs);
+using KeyPayloadPairs = ::testing::Types<  //
+    KeyPayload<UInt8, UInt8>,              // both fixed
+    KeyPayload<Var, UInt8>,                // variable-fixed
+    KeyPayload<UInt8, Var>,                // fixed-variable
+    KeyPayload<Var, Var>,                  // both variable
+    KeyPayload<Ptr, Ptr>,                  // pointer key/payload
+    KeyPayload<Original, Original>         // original key/payload
+    >;
+TYPED_TEST_SUITE(NodeFixture, KeyPayloadPairs);
 
-/*##################################################################################################
+/*######################################################################################
  * Unit test definitions
- *################################################################################################*/
+ *####################################################################################*/
 
-/*--------------------------------------------------------------------------------------------------
- * Getter/setter tests
- *------------------------------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------------------
+ * Constructor tests
+ *------------------------------------------------------------------------------------*/
 
-TYPED_TEST(NodeFixture, SetterGetter_EmptyNode_CorrectlySetAndGet)
-{
-  TestFixture::VerifySetterGetter();
+TYPED_TEST(NodeFixture, ConstructInitialRoot)
+{  //
+  TestFixture::VerifyInitialRootConstructor();
 }
 
 }  // namespace dbgroup::index::bw_tree::component::test

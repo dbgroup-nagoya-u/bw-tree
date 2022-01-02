@@ -195,16 +195,6 @@ class Node
     return delta_type_ == DeltaType::kNotDelta;
   }
 
-  /**
-   * @return the number of records in this node.
-   */
-  [[nodiscard]] constexpr auto
-  GetRecordCount() const  //
-      -> size_t
-  {
-    return record_count_;
-  }
-
   [[nodiscard]] constexpr auto
   GetSiblingNode() const  //
       -> std::atomic_uintptr_t *
