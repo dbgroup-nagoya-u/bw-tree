@@ -180,7 +180,7 @@ class BwTree
       // check whether the target node includes incomplete SMOs
       auto head = ValidateNode(key, kClosed, prev_head, stack);
 
-      // prepare nodes to perform CAS
+      // try to insert the delta record
       rec->SetNext(head);
       prev_head = head;
       if (stack.back()->compare_exchange_weak(head, rec_ptr, std::memory_order_release)) break;
@@ -215,39 +215,36 @@ class BwTree
   Insert(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_length = sizeof(Key),
-      const size_t payload_length = sizeof(Payload))
+      const size_t key_len = sizeof(Key),
+      const size_t pay_len = sizeof(Payload))
   {
-    // const auto key_addr = component::GetAddr(key);
-    // const auto guard = gc_.CreateEpochGuard();
+    const auto &guard = gc_.CreateEpochGuard();
 
-    // // traverse to a target leaf node
-    // Mapping_t *consol_node = nullptr;
-    // NodeStack stack = SearchLeafNode(key_addr, true, consol_node);
+    // traverse to a target leaf node
+    consol_page_ = nullptr;
+    auto &&stack = SearchLeafNode(key, kClosed);
 
-    // // create a delta record to write a key/value pair
-    // Node_t *delta_node = Node_t::CreateDeltaNode(NodeType::kLeaf, DeltaType::kInsert,  //
-    //                                              key_addr, key_length, payload, payload_length);
-    // // insert the delta record
-    // for (Node_t *prev_head = nullptr; true;) {
-    //   // check whether the target node is valid (containing a target key and no incomplete SMOs)
-    //   Node_t *cur_head = ValidateNode(key_addr, true, prev_head, stack, consol_node);
+    // insert a delta record
+    auto *rec = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload, pay_len};
+    auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
+    auto prev_head = kNullPtr;
+    while (true) {
+      // check whether the target node includes incomplete SMOs
+      auto head = ValidateNode(key, kClosed, prev_head, stack);
 
-    //   // check target key/value existence
-    //   const auto [target_node, meta] = CheckExistence(key_addr, stack, consol_node);
-    //   if (target_node != nullptr) return ReturnCode::kKeyExist;
+      // check target key/value existence
+      const auto rc = CheckExistence(key, stack).second;
+      if (rc != NodeRC::kKeyNotExist) return ReturnCode::kKeyExist;
 
-    //   // prepare nodes to perform CAS
-    //   delta_node->SetNextNode(cur_head);
-    //   prev_head = cur_head;
+      // try to insert the delta record
+      rec->SetNext(head);
+      prev_head = head;
+      if (stack.back()->compare_exchange_weak(head, rec_ptr, std::memory_order_release)) break;
+    }
 
-    //   // try to insert the delta record
-    //   if (stack.back()->compare_exchange_weak(cur_head, delta_node, mo_relax)) break;
-    // }
-
-    // if (consol_node != nullptr) {
-    //   TryConsolidation(consol_node, key_addr, true, stack);
-    // }
+    if (consol_page_ != nullptr) {
+      TryConsolidation(consol_page_, key, kClosed, stack);
+    }
 
     return ReturnCode::kSuccess;
   }
