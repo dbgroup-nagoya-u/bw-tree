@@ -91,7 +91,12 @@ class DeltaRecord
     memcpy(&data_block_, right_node->GetKeyAddr(right_node->meta_), key_len);
 
     // set a sibling node
-    SetData(kHeaderLength + key_len, sib_page, kWordSize);
+    const auto offset = SetData(kHeaderLength + key_len, sib_page, kWordSize);
+
+    // copy a highest key
+    key_len = right_node->high_key_meta_.GetKeyLength();
+    high_key_meta_ = Metadata{offset, key_len, key_len};
+    memcpy(ShiftAddr(this, offset), right_node->GetKeyAddr(right_node->meta_), key_len);
   }
 
   /**
@@ -104,20 +109,9 @@ class DeltaRecord
   {
     // copy contents of a split delta
     meta_ = delta->meta_;
-    auto rec_len = meta_.GetTotalLength();
+    high_key_meta_ = delta->high_key_meta_;
+    auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetTotalLength();
     memcpy(&data_block_, &(delta->data_block_), rec_len);
-
-    // copy a highest key from a sibling node
-    auto *sib_page = delta->template GetPayload<std::atomic<DeltaRecord *> *>();
-    auto *sib_node = sib_page->load(std::memory_order_relaxed);
-    high_key_meta_ = sib_node->high_key_meta_;
-    auto key_len = high_key_meta_.GetKeyLength();
-    if (key_len > 0) {
-      auto offset = kHeaderLength + rec_len;
-      rec_len = high_key_meta_.GetKeyLength();
-      memcpy(ShiftAddr(this, offset), sib_node->GetKeyAddr(high_key_meta_), key_len);
-      high_key_meta_.SetOffset(offset);
-    }
   }
 
   constexpr DeltaRecord(const DeltaRecord &) = default;
