@@ -222,7 +222,7 @@ class Node
   {
     if (record_count_ == 0) return {0, 0};
 
-    auto rec_num = (high_key) ? SearchChild(*high_key, !kClosed) : record_count_;
+    auto rec_num = (high_key) ? SearchChild(*high_key, kOpen) : record_count_;
     auto end_offset = meta_array_[0].GetOffset() + meta_array_[0].GetTotalLength();
     auto begin_offset = meta_array_[rec_num - 1].GetOffset();
 

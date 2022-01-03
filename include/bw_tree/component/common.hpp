@@ -86,6 +86,8 @@ constexpr size_t kHeaderLength = 28;
 
 constexpr bool kClosed = true;
 
+constexpr bool kOpen = false;
+
 constexpr uintptr_t kNullPtr = 0;
 
 /// the capacity of each mapping table.
