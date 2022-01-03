@@ -222,7 +222,13 @@ class Node
   {
     if (record_count_ == 0) return {0, 0};
 
-    auto rec_num = (high_key) ? SearchChild(*high_key, kOpen) : record_count_;
+    size_t rec_num;
+    if (high_key) {
+      auto [rc, pos] = SearchRecord(*high_key);
+      rec_num = (rc == NodeRC::kKeyNotExist) ? pos : pos + 1;
+    } else {
+      rec_num = record_count_;
+    }
     auto end_offset = meta_array_[0].GetOffset() + meta_array_[0].GetTotalLength();
     auto begin_offset = meta_array_[rec_num - 1].GetOffset();
 
@@ -249,7 +255,7 @@ class Node
    */
   [[nodiscard]] auto
   SearchRecord(const Key &key) const  //
-      -> NodeRC
+      -> std::pair<NodeRC, size_t>
   {
     int64_t begin_pos = 0;
     int64_t end_pos = record_count_ - 1;
@@ -263,11 +269,11 @@ class Node
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
       } else {  // find an equivalent key
-        return static_cast<NodeRC>(pos);
+        return {NodeRC::kKeyExist, pos};
       }
     }
 
-    return NodeRC::kKeyNotExist;
+    return {NodeRC::kKeyNotExist, begin_pos};
   }
 
   /**
