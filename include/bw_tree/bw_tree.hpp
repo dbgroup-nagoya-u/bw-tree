@@ -390,6 +390,8 @@ class BwTree
     while (!rec->IsBaseNode()) {
       gc_.AddGarbage(rec);
       ptr = rec->GetNext();
+      if (ptr == kNullPtr) return;
+
       rec = reinterpret_cast<Delta_t *>(ptr);
     }
 
@@ -567,8 +569,12 @@ class BwTree
     // reserve a page for a consolidated node
     auto [block_size, rec_num] = node->GetPageSize(high_key, h_meta);
     auto size = kHeaderLength + block_size + diff;
-    void *page = GetNodePage(size);
-    auto *new_node = new (page) Node_t{node, sorted, high_key, h_meta, sib_ptr, size, rec_num};
+    auto *new_node = new (GetNodePage(size)) Node_t{node, h_meta, sib_ptr};
+    if (new_node->IsLeaf()) {
+      new_node->LeafConsolidate(node, sorted, high_key, size, rec_num);
+    } else {
+      new_node->InternalConsolidate(node, sorted, high_key, size, rec_num);
+    }
 
     return {new_node, size};
   }
@@ -610,7 +616,6 @@ class BwTree
       TryConsolidation(consol_page_, sep_key, kClosed, stack);
     }
 
-    AddToGC(cur_head);
     return true;
   }
 
@@ -632,9 +637,8 @@ class BwTree
 
     // remove a split child node to modify its parent node
     stack.pop_back();
-    uintptr_t cur_head{};
-    do {  // insert the delta record into a parent node
-      cur_head = ValidateNode(sep_key, kClosed, kNullPtr, stack);
+    while (true) {  // insert the delta record into a parent node
+      auto head = ValidateNode(sep_key, kClosed, kNullPtr, stack);
 
       // check whether another thread has already completed this split
       if (CheckExistence(sep_key, stack).second != NodeRC::kKeyNotExist) {
@@ -644,8 +648,9 @@ class BwTree
       }
 
       // try to insert the index-entry delta record
-      entry_delta->SetNext(cur_head);
-    } while (stack.back()->compare_exchange_weak(cur_head, new_head, std::memory_order_release));
+      entry_delta->SetNext(head);
+      if (stack.back()->compare_exchange_weak(head, new_head, std::memory_order_release)) return;
+    }
   }
 
   void

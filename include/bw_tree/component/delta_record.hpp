@@ -249,7 +249,9 @@ class DeltaRecord
       switch (cur_rec->delta_type_) {
         case DeltaType::kInsert: {
           const auto &sep_key = cur_rec->GetKey();
-          if (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key))) {
+          const auto &high_key = cur_rec->GetHighKey();
+          if ((Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key)))
+              && (!high_key || Comp{}(key, *high_key) || (closed && !Comp{}(*high_key, key)))) {
             // this index term delta directly indicates a child node
             child_page = cur_rec->template GetPayload<uintptr_t>();
             return {child_page, kRecordFound};
@@ -474,22 +476,22 @@ class DeltaRecord
             auto it = records.cbegin();
             const auto it_end = records.cend();
             for (; it != it_end; ++it) {
-              if (!Comp{}(key, it->first)) break;
+              if (!Comp{}(it->first, key)) break;
             }
             if (it == it_end) {
               records.emplace_back(std::make_pair(std::move(key), ptr));
-            } else if (Comp{}(it->first, key)) {
+            } else if (Comp{}(key, it->first)) {
               records.insert(it, std::make_pair(std::move(key), ptr));
             }
-          }
 
-          // update the page size
-          if (cur_rec->delta_type_ == DeltaType::kInsert) {
-            size_diff += cur_rec->meta_.GetTotalLength() + sizeof(Metadata);
-          } else if (cur_rec->delta_type_ == DeltaType::kDelete) {
-            size_diff -= cur_rec->meta_.GetTotalLength() + sizeof(Metadata);
-          } else if constexpr (IsVariableLengthData<Payload>()) {
-            size_diff += cur_rec->meta_.GetPayloadLength();
+            // update the page size
+            if (cur_rec->delta_type_ == DeltaType::kInsert) {
+              size_diff += cur_rec->meta_.GetTotalLength() + sizeof(Metadata);
+            } else if (cur_rec->delta_type_ == DeltaType::kDelete) {
+              size_diff -= cur_rec->meta_.GetTotalLength() + sizeof(Metadata);
+            } else if constexpr (IsVariableLengthData<Payload>()) {
+              size_diff += cur_rec->meta_.GetPayloadLength();
+            }
           }
           break;
         }
@@ -497,7 +499,7 @@ class DeltaRecord
           if (!high_key) {
             // the first split delta has a highest key and a sibling node
             high_meta = cur_rec->meta_;
-            high_key = cur_rec->GetHighKey();
+            high_key = cur_rec->GetKey();
             sib_node = cur_rec->template GetPayload<uintptr_t>();
           }
           break;
