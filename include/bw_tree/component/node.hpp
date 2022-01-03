@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef BW_TREE_COMPONENT_NODE_HPP
+#define BW_TREE_COMPONENT_NODE_HPP
 
 #include <utility>
 
@@ -640,3 +641,5 @@ Delete(::dbgroup::index::bw_tree::component::Node<Key, Comp> *obj)
 }
 
 }  // namespace dbgroup::memory
+
+#endif  // BW_TREE_COMPONENT_NODE_HPP

@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef BW_TREE_BW_TREE_HPP
+#define BW_TREE_BW_TREE_HPP
 
 #include <functional>
 #include <memory>
@@ -691,3 +692,5 @@ class BwTree
 };
 
 }  // namespace dbgroup::index::bw_tree
+
+#endif  // BW_TREE_BW_TREE_HPP

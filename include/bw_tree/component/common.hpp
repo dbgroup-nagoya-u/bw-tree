@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef BW_TREE_COMPONENT_COMMON_HPP
+#define BW_TREE_COMPONENT_COMMON_HPP
 
 #include <cstring>
 #include <memory>
@@ -143,3 +144,5 @@ ShiftAddr(  //
 }
 
 }  // namespace dbgroup::index::bw_tree::component
+
+#endif  // BW_TREE_COMPONENT_COMMON_HPP

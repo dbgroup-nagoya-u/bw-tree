@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef BW_TREE_UTILITY_HPP
+#define BW_TREE_UTILITY_HPP
 
 #include <string.h>
 
@@ -107,3 +108,5 @@ constexpr size_t kMaxVariableSize = 128;
 static_assert(kPageSize % kWordSize == 0);
 
 }  // namespace dbgroup::index::bw_tree
+
+#endif  // BW_TREE_UTILITY_HPP
