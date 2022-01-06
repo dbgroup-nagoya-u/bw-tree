@@ -231,7 +231,7 @@ class Node
       const Metadata high_meta) const  //
       -> std::pair<size_t, size_t>
   {
-    if (record_count_ == 0) return {0, 0};
+    if (record_count_ == 0) return {high_meta.GetKeyLength(), 0};
 
     size_t rec_num;
     if (high_key) {
@@ -437,8 +437,31 @@ class Node
       SetMetadata(meta, rec_count++, offset);
     }
 
-    // Note: all the separator keys are smaller than the original highest key
-    assert(j == records.size());
+    // copy remaining delta records
+    if (j < new_rec_num) {
+      // copy a payload of a base node in advance to swap that of a new index entry
+      offset = CopyPayloadFrom(node, node->meta_array_[base_rec_num], offset);
+
+      // insert new index entries
+      const auto tmp_rec_num = new_rec_num - 1;
+      for (; j < tmp_rec_num; ++j) {
+        rec = reinterpret_cast<Node *>(records[j].second);
+
+        // check a new record has any payload
+        if (rec->HasPayload()) {
+          auto rec_meta = rec->low_meta_;
+          offset = CopyKeyFrom(rec, rec_meta, offset);
+          SetMetadata(rec_meta, rec_count++, offset);
+          offset = CopyPayloadFrom(rec, rec_meta, offset);
+        }
+      }
+
+      // Note: there are no duplicate keys in internal nodes
+      rec = reinterpret_cast<Node *>(records[j].second);
+      auto rec_meta = rec->low_meta_;
+      offset = CopyKeyFrom(rec, rec_meta, offset);
+      SetMetadata(rec_meta, rec_count++, offset);
+    }
 
     // set header information
     record_count_ = rec_count;
