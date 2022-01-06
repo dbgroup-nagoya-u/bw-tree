@@ -52,7 +52,7 @@ class NodeFixture : public testing::Test
   using PayComp = typename KeyPayload::Payload::Comp;
 
   // define type aliases for simplicity
-  using Node_t = Node<Key, std::less<Key>>;
+  using Node_t = Node<Key, std::less<>>;
 
  protected:
   /*####################################################################################

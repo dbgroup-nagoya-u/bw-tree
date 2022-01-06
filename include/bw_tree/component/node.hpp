@@ -46,10 +46,7 @@ class Node
    * @brief Construct an initial root node.
    *
    */
-  constexpr Node()
-      : node_type_{NodeType::kLeaf}, delta_type_{DeltaType::kNotDelta}, record_count_{0}
-  {
-  }
+  constexpr Node() : node_type_{NodeType::kLeaf}, delta_type_{DeltaType::kNotDelta} {}
 
   /**
    * @brief Construct a new root node.
@@ -233,7 +230,7 @@ class Node
   {
     if (record_count_ == 0) return {high_meta.GetKeyLength(), 0};
 
-    size_t rec_num;
+    size_t rec_num{};
     if (high_key) {
       auto [rc, pos] = SearchRecord(*high_key);
       rec_num = (rc == NodeRC::kKeyNotExist) ? pos : pos + 1;
@@ -498,7 +495,7 @@ class Node
    * @param meta metadata of a corresponding record.
    * @return an address of a target key.
    */
-  constexpr auto
+  [[nodiscard]] constexpr auto
   GetKeyAddr(const Metadata meta) const  //
       -> void *
   {
@@ -509,7 +506,7 @@ class Node
    * @param meta metadata of a corresponding record.
    * @return an address of a target payload.
    */
-  constexpr auto
+  [[nodiscard]] constexpr auto
   GetPayloadAddr(const Metadata meta) const  //
       -> void *
   {
@@ -644,7 +641,7 @@ class Node
   uint16_t : 0;
 
   /// the number of records in this node.
-  uint16_t record_count_;
+  uint16_t record_count_{0};
 
   /// a blank block for alignment.
   uint64_t : 0;

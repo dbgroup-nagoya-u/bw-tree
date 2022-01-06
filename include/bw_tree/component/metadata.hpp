@@ -36,7 +36,7 @@ class Metadata
    * @brief Construct a new metadata object.
    *
    */
-  constexpr Metadata() : offset_{}, key_length_{}, total_length_{} {}
+  constexpr Metadata() = default;
 
   /**
    * @brief Construct a new metadata object.
@@ -75,7 +75,7 @@ class Metadata
   /**
    * @return an offset to a corresponding record.
    */
-  constexpr auto
+  [[nodiscard]] constexpr auto
   GetOffset() const  //
       -> size_t
   {
@@ -85,7 +85,7 @@ class Metadata
   /**
    * @return the length of a key in a corresponding record.
    */
-  constexpr auto
+  [[nodiscard]] constexpr auto
   GetKeyLength() const  //
       -> size_t
   {
@@ -95,7 +95,7 @@ class Metadata
   /**
    * @return the total length of a corresponding record.
    */
-  constexpr auto
+  [[nodiscard]] constexpr auto
   GetTotalLength() const  //
       -> size_t
   {
@@ -105,7 +105,7 @@ class Metadata
   /**
    * @return the length of a payload in a corresponding record.
    */
-  constexpr auto
+  [[nodiscard]] constexpr auto
   GetPayloadLength() const  //
       -> size_t
   {
@@ -127,13 +127,13 @@ class Metadata
    *##################################################################################*/
 
   /// an offset to a corresponding record.
-  uint16_t offset_;
+  uint16_t offset_{};
 
   /// the length of a key in a corresponding record.
-  uint16_t key_length_;
+  uint16_t key_length_{};
 
   /// the total length of a corresponding record.
-  uint16_t total_length_;
+  uint16_t total_length_{};
 };
 
 }  // namespace dbgroup::index::bw_tree::component

@@ -99,7 +99,7 @@ class BwTree
     auto operator=(const RecordIterator &) -> RecordIterator & = delete;
 
     constexpr auto
-    operator=(RecordIterator &&obj)  //
+    operator=(RecordIterator &&obj) noexcept  //
         -> RecordIterator &
     {
       auto *old_node = node_;
@@ -219,6 +219,14 @@ class BwTree
   };
 
   /*####################################################################################
+   * Public constants
+   *##################################################################################*/
+
+  static constexpr size_t kDefaultGCTime = 100000;
+
+  static constexpr size_t kDefaultGCThreadNum = 1;
+
+  /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/
 
@@ -228,9 +236,9 @@ class BwTree
    * @param gc_interval_microsec GC internal [us]
    */
   explicit BwTree(  //
-      const size_t gc_interval_microsec = 100000,
-      const size_t gc_thread_num = 1)
-      : root_{nullptr}, mapping_table_{}, gc_{gc_interval_microsec, gc_thread_num, true}
+      const size_t gc_interval_microsec,
+      const size_t gc_thread_num = kDefaultGCThreadNum)
+      : gc_{gc_interval_microsec, gc_thread_num, true}
   {
     // create an empty Bw-tree
     auto *leaf = new (GetNodePage(kPageSize)) Node_t{};
@@ -273,7 +281,7 @@ class BwTree
   Read(const Key &key)  //
       -> std::optional<Payload>
   {
-    const auto &guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // check whether the leaf node has a target key
     consol_page_ = nullptr;
@@ -314,9 +322,9 @@ class BwTree
       const std::optional<std::pair<const Key &, bool>> &end_key = std::nullopt)  //
       -> RecordIterator
   {
-    const auto &guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    Node_t *node;
+    Node_t *node{};
     size_t begin_pos = 0;
     if (begin_key) {
       auto &&[b_key, b_closed] = *begin_key;
@@ -380,7 +388,7 @@ class BwTree
       const size_t pay_len = sizeof(Payload))  //
       -> ReturnCode
   {
-    const auto &guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
     consol_page_ = nullptr;
@@ -432,7 +440,7 @@ class BwTree
       const size_t key_len = sizeof(Key),
       const size_t pay_len = sizeof(Payload))
   {
-    const auto &guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
     consol_page_ = nullptr;
@@ -487,7 +495,7 @@ class BwTree
       const size_t key_len = sizeof(Key),
       const size_t pay_len = sizeof(Payload))
   {
-    const auto &guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
     consol_page_ = nullptr;
@@ -801,8 +809,8 @@ class BwTree
       const bool closed,
       NodeStack &stack)
   {
-    uintptr_t cur_head;
-    uintptr_t new_head;
+    uintptr_t cur_head{};
+    uintptr_t new_head{};
     while (true) {
       // remove child nodes from a node stack
       while (!stack.empty() && stack.back() != target_page) stack.pop_back();
@@ -961,16 +969,16 @@ class BwTree
    *##################################################################################*/
 
   /// a root node of Bw-tree
-  std::atomic<std::atomic_uintptr_t *> root_;
+  std::atomic<std::atomic_uintptr_t *> root_{nullptr};
 
   /// a mapping table
-  MappingTable_t mapping_table_;
+  MappingTable_t mapping_table_{};
 
   /// garbage collector
-  NodeGC_t gc_;
+  NodeGC_t gc_{kDefaultGCTime, kDefaultGCThreadNum, true};
 
   /// a page ID to be consolidated
-  inline static thread_local std::atomic_uintptr_t *consol_page_{};
+  inline static thread_local std::atomic_uintptr_t *consol_page_{};  // NOLINT
 };
 
 }  // namespace dbgroup::index::bw_tree

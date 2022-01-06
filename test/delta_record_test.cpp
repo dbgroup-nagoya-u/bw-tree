@@ -52,7 +52,7 @@ class DeltaRecordFixture : public testing::Test
   using PayComp = typename KeyPayload::Payload::Comp;
 
   // define type aliases for simplicity
-  using DeltaRecord_t = DeltaRecord<Key, std::less<Key>>;
+  using DeltaRecord_t = DeltaRecord<Key, std::less<>>;
 
  protected:
   /*####################################################################################

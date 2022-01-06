@@ -26,6 +26,12 @@
 
 namespace dbgroup::index::bw_tree::component::test
 {
+/*######################################################################################
+ * Global constants
+ *####################################################################################*/
+
+constexpr size_t kMultipleTableCapacity = kMappingTableCapacity * 10;
+
 class MappingTableFixture : public testing::Test
 {
   /*####################################################################################
@@ -34,7 +40,7 @@ class MappingTableFixture : public testing::Test
 
   using Key = uint64_t;
   using Payload = uint64_t;
-  using MappingTable_t = MappingTable<Key, std::less<Key>>;
+  using MappingTable_t = MappingTable<Key, std::less<>>;
   using IDContainer = std::vector<std::atomic_uintptr_t *>;
 
  protected:
@@ -105,7 +111,7 @@ class MappingTableFixture : public testing::Test
    * Functions for verification
    *##################################################################################*/
 
-  void
+  static void
   VerifyLogicalIDs(IDContainer &ids)
   {
     std::sort(ids.begin(), ids.end());
@@ -137,7 +143,7 @@ TEST_F(MappingTableFixture, GetNewLogicalIDWithAFewIDsGetUniqueIDs)
 
 TEST_F(MappingTableFixture, GetNewLogicalIDWithManyIDsGetUniqueIDs)
 {
-  auto &&ids = GetLogicalIDs(kMappingTableCapacity * 10);
+  auto &&ids = GetLogicalIDs(kMultipleTableCapacity);
   VerifyLogicalIDs(ids);
 }
 
@@ -149,7 +155,7 @@ TEST_F(MappingTableFixture, GetNewLogicalIDWithAFewIDsByMultiThreadsGetUniqueIDs
 
 TEST_F(MappingTableFixture, GetNewLogicalIDWighManyIDsByMultiThreadsGetUniqueIDs)
 {
-  auto &&ids = GetLogicalIDsWithMultiThreads(kMappingTableCapacity * 10);
+  auto &&ids = GetLogicalIDsWithMultiThreads(kMultipleTableCapacity);
   VerifyLogicalIDs(ids);
 }
 

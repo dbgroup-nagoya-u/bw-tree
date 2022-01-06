@@ -104,7 +104,7 @@ class DeltaRecord
    *
    * @param split_delta
    */
-  DeltaRecord(const DeltaRecord *delta)
+  explicit DeltaRecord(const DeltaRecord *delta)
       : node_type_{NodeType::kInternal}, delta_type_{DeltaType::kInsert}
   {
     // copy contents of a split delta
@@ -115,10 +115,10 @@ class DeltaRecord
   }
 
   constexpr DeltaRecord(const DeltaRecord &) = default;
-  constexpr DeltaRecord(DeltaRecord &&) = default;
+  constexpr DeltaRecord(DeltaRecord &&) noexcept = default;
 
   constexpr auto operator=(const DeltaRecord &) -> DeltaRecord & = default;
-  constexpr auto operator=(DeltaRecord &&) -> DeltaRecord & = default;
+  constexpr auto operator=(DeltaRecord &&) noexcept -> DeltaRecord & = default;
 
   /*####################################################################################
    * Public destructors
@@ -236,7 +236,7 @@ class DeltaRecord
     int64_t delta_chain_length = 0;
     uintptr_t child_page{};
     auto ptr = page_id->load(std::memory_order_acquire);
-    DeltaRecord *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+    auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
 
     // traverse a delta chain
     while (true) {
@@ -308,7 +308,7 @@ class DeltaRecord
   {
     auto *page_id = stack.back();
     auto ptr = page_id->load(std::memory_order_acquire);
-    DeltaRecord *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+    auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
     int64_t delta_chain_length = 0;
 
     // traverse a delta chain
@@ -392,7 +392,7 @@ class DeltaRecord
     auto *page_id = stack.back();
     auto head = page_id->load(std::memory_order_acquire);
     auto ptr = head;
-    DeltaRecord *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+    auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
     int64_t delta_chain_length = 0;
 
     // traverse a delta chain
@@ -451,7 +451,7 @@ class DeltaRecord
       std::vector<std::pair<Key, uintptr_t>> &records)  //
       -> std::tuple<uintptr_t, std::optional<Key>, Metadata, uintptr_t, int64_t>
   {
-    DeltaRecord *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+    auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
     std::optional<Key> high_key = std::nullopt;
     Metadata high_meta{};
     uintptr_t sib_node{};

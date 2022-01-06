@@ -29,7 +29,9 @@
  * @brief An example class.
  *
  */
-struct MyClass {
+class MyClass
+{
+ public:
   constexpr MyClass() = default;
 
   constexpr MyClass(const MyClass &) = default;
@@ -56,6 +58,7 @@ struct MyClass {
     return data_ < comp.data_;
   }
 
+ private:
   uint64_t data_{};
 };
 
@@ -113,14 +116,14 @@ PrepareTestData(  //
   if constexpr (::dbgroup::index::bw_tree::IsVariableLengthData<T>()) {
     // variable-length data
     for (size_t i = 0; i < data_num; ++i) {
-      auto data = reinterpret_cast<char *>(malloc(kVariableDataLength));
-      snprintf(data, kVariableDataLength, "%011lu", i);
+      auto *data = reinterpret_cast<char *>(malloc(kVariableDataLength));
+      snprintf(data, kVariableDataLength, "%011lu", i);  // NOLINT
       data_array[i] = reinterpret_cast<T>(data);
     }
   } else if constexpr (std::is_same_v<T, uint64_t *>) {
     // pointer data
     for (size_t i = 0; i < data_num; ++i) {
-      auto data = reinterpret_cast<uint64_t *>(malloc(sizeof(uint64_t)));
+      auto *data = reinterpret_cast<uint64_t *>(malloc(sizeof(uint64_t)));
       *data = i;
       data_array[i] = data;
     }

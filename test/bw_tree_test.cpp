@@ -63,7 +63,7 @@ class BwTreeFixture : public testing::Test
   using PayloadComp = typename KeyPayload::Payload::Comp;
 
   // define type aliases for simplicity
-  using Node_t = component::Node<Key, std::less<Key>>;
+  using Node_t = component::Node<Key, std::less<>>;
   using Metadata = component::Metadata;
   using BwTree_t = BwTree<Key, Payload, KeyComp>;
 

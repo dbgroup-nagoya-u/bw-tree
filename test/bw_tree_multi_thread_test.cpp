@@ -41,12 +41,7 @@ struct KeyPayload {
  * Global constants
  *####################################################################################*/
 
-constexpr auto kHeaderLen = component::kHeaderLength;
 constexpr size_t kGCTime = 1000;
-constexpr bool kExpectSuccess = true;
-constexpr bool kExpectFailed = false;
-constexpr bool kRangeClosed = true;
-constexpr bool kRangeOpened = false;
 
 /*######################################################################################
  * Fixture class definition
@@ -66,7 +61,7 @@ class BwTreeFixture : public testing::Test
   using PayloadComp = typename KeyPayload::Payload::Comp;
 
   // define type aliases for simplicity
-  using Node_t = component::Node<Key, std::less<Key>>;
+  using Node_t = component::Node<Key, std::less<>>;
   using Metadata = component::Metadata;
   using BwTree_t = BwTree<Key, Payload, KeyComp>;
 
@@ -312,8 +307,8 @@ class BwTreeFixture : public testing::Test
    *##################################################################################*/
 
   // actual keys and payloads
-  Key keys_[kKeyNumForTest];
-  Payload payloads_[kKeyNumForTest];
+  Key keys_[kKeyNumForTest]{};
+  Payload payloads_[kKeyNumForTest]{};
 
   // a test target BzTree
   std::unique_ptr<BwTree_t> index_{nullptr};
@@ -343,7 +338,7 @@ TYPED_TEST_SUITE(BwTreeFixture, KeyPayloadPairs);
  * Unit test definitions
  *####################################################################################*/
 
-TYPED_TEST(BwTreeFixture, Write_MultiThreads_ReadWrittenPayloads)
+TYPED_TEST(BwTreeFixture, WriteWithMultiThreadsReadWrittenPayloads)
 {  //
   TestFixture::VerifyWrite();
 }
