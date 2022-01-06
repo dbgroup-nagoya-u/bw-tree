@@ -27,45 +27,53 @@
 
 namespace dbgroup::index::bw_tree::test
 {
-// use a supper template to define key-payload pair templates
-template <class KeyType, class PayloadType, class KeyComparator, class PayloadComparator>
+/*######################################################################################
+ * Classes for templated testing
+ *####################################################################################*/
+
+template <class KeyType, class PayloadType>
 struct KeyPayload {
   using Key = KeyType;
   using Payload = PayloadType;
-  using KeyComp = KeyComparator;
-  using PayloadComp = PayloadComparator;
 };
+
+/*######################################################################################
+ * Global constants
+ *####################################################################################*/
+
+constexpr auto kHeaderLen = component::kHeaderLength;
+constexpr size_t kGCTime = 1000;
+constexpr bool kExpectSuccess = true;
+constexpr bool kExpectFailed = false;
+constexpr bool kRangeClosed = true;
+constexpr bool kRangeOpened = false;
+
+/*######################################################################################
+ * Fixture class definition
+ *####################################################################################*/
 
 template <class KeyPayload>
 class BwTreeFixture : public testing::Test
 {
- protected:
+  /*####################################################################################
+   * Type aliases
+   *##################################################################################*/
+
   // extract key-payload types
-  using Key = typename KeyPayload::Key;
-  using Payload = typename KeyPayload::Payload;
-  using KeyComp = typename KeyPayload::KeyComp;
-  using PayloadComp = typename KeyPayload::PayloadComp;
+  using Key = typename KeyPayload::Key::Data;
+  using Payload = typename KeyPayload::Payload::Data;
+  using KeyComp = typename KeyPayload::Key::Comp;
+  using PayloadComp = typename KeyPayload::Payload::Comp;
 
   // define type aliases for simplicity
   using Node_t = component::Node<Key, std::less<Key>>;
   using Metadata = component::Metadata;
   using BwTree_t = BwTree<Key, Payload, KeyComp>;
 
-  /*################################################################################################
-   * Internal constants
-   *##############################################################################################*/
-
-  static constexpr size_t kKeyLength = GetDataLength<Key>();
-  static constexpr size_t kPayloadLength = GetDataLength<Payload>();
-  static constexpr size_t kRecordLength = kKeyLength + kPayloadLength;
-  static constexpr size_t kMaxRecordNum =
-      (kPageSize - component::kHeaderLength) / (kRecordLength + sizeof(Metadata));
-#ifdef BW_TREE_TEST_TOTAL_EXEC_NUM
-  static constexpr size_t kKeyNumForTest = BW_TREE_TEST_TOTAL_EXEC_NUM;
-#else
-  static constexpr size_t kKeyNumForTest = kMaxRecordNum * kMaxRecordNum;
-#endif
-  static constexpr size_t kSmallKeyNum = kMaxDeltaNodeNum - 1;
+ protected:
+  /*####################################################################################
+   * Internal classes
+   *##################################################################################*/
 
   enum WriteType
   {
@@ -81,71 +89,67 @@ class BwTreeFixture : public testing::Test
     size_t payload_id;
   };
 
-  /*################################################################################################
-   * Internal member variables
-   *##############################################################################################*/
+  /*####################################################################################
+   * Internal constants
+   *##################################################################################*/
 
-  // actual keys and payloads
-  Key keys[kKeyNumForTest];
-  Payload payloads[kKeyNumForTest];
+  static constexpr size_t kKeyLen = GetDataLength<Key>();
+  static constexpr size_t kPayLen = GetDataLength<Payload>();
+  static constexpr size_t kKeyNumForTest = 8 * 8192 * kThreadNum;
 
-  // a target node and its expected metadata
-  std::unique_ptr<BwTree_t> bw_tree;
-
-  std::uniform_int_distribution<size_t> id_dist{0, kKeyNumForTest - 2};
-
-  std::shared_mutex main_lock;
-
-  std::shared_mutex worker_lock;
-
-  /*################################################################################################
+  /*####################################################################################
    * Setup/Teardown
-   *##############################################################################################*/
+   *##################################################################################*/
 
   void
   SetUp() override
   {
-    bw_tree = std::make_unique<BwTree_t>(1000);
-    PrepareTestData(keys, kKeyNumForTest);
-    PrepareTestData(payloads, kKeyNumForTest);
+    PrepareTestData(keys_, kKeyNumForTest);
+    PrepareTestData(payloads_, kKeyNumForTest);
+
+    index_ = std::make_unique<BwTree_t>(kGCTime);
   }
 
   void
   TearDown() override
   {
-    ReleaseTestData(keys, kKeyNumForTest);
-    ReleaseTestData(payloads, kKeyNumForTest);
+    ReleaseTestData(keys_, kKeyNumForTest);
+    ReleaseTestData(payloads_, kKeyNumForTest);
+
+    index_.reset(nullptr);
   }
 
-  /*################################################################################################
+  /*####################################################################################
    * Utility functions
-   *##############################################################################################*/
+   *##################################################################################*/
 
-  ReturnCode
-  PerformWriteOperation(const Operation &ops)
+  auto
+  PerformWriteOperation(const Operation &ops)  //
+      -> ReturnCode
   {
-    const auto key = keys[ops.key_id];
-    const auto payload = payloads[ops.payload_id];
+    const auto key = keys_[ops.key_id];
+    const auto payload = payloads_[ops.payload_id];
 
     switch (ops.w_type) {
-      case kInsert:
-        // return bw_tree->Insert(key, payload, kKeyLength, kPayloadLength);
-      case kUpdate:
-        // return bw_tree->Update(key, payload, kKeyLength, kPayloadLength);
-      case kDelete:
-        // return bw_tree->Delete(key, kKeyLength);
-      case kWrite:
-        break;
+      case WriteType::kInsert:
+        return index_->Insert(key, payload, kKeyLen, kPayLen);
+      case WriteType::kUpdate:
+        return index_->Update(key, payload, kKeyLen, kPayLen);
+      case WriteType::kDelete:
+        // return index_->Delete(key, kKeyLen);
+      case WriteType::kWrite:
+      default:
+        return index_->Write(key, payload, kKeyLen, kPayLen);
     }
-    return bw_tree->Write(key, payload, kKeyLength, kPayloadLength);
   }
 
-  Operation
+  auto
   PrepareOperation(  //
       const WriteType w_type,
-      std::mt19937_64 &rand_engine)
+      std::mt19937_64 &rand_engine)  //
+      -> Operation
   {
-    const auto id = id_dist(rand_engine);
+    const auto id = id_dist_(rand_engine);
 
     switch (w_type) {
       case kWrite:
@@ -171,7 +175,7 @@ class BwTreeFixture : public testing::Test
     written_ids.reserve(write_num);
 
     {  // create a lock to prevent a main thread
-      const std::shared_lock<std::shared_mutex> guard{main_lock};
+      const std::shared_lock<std::shared_mutex> guard{main_lock_};
 
       // prepare operations to be executed
       std::mt19937_64 rand_engine{rand_seed};
@@ -181,7 +185,7 @@ class BwTreeFixture : public testing::Test
     }
 
     {  // wait for a main thread to release a lock
-      const std::shared_lock<std::shared_mutex> lock{worker_lock};
+      const std::shared_lock<std::shared_mutex> lock{worker_lock_};
 
       // perform and gather results
       for (auto &&ops : operations) {
@@ -195,16 +199,17 @@ class BwTreeFixture : public testing::Test
     p.set_value(std::move(written_ids));
   }
 
-  std::vector<size_t>
+  auto
   RunOverMultiThread(  //
       const size_t write_num,
       const size_t thread_num,
-      const WriteType w_type)
+      const WriteType w_type)  //
+      -> std::vector<size_t>
   {
     std::vector<std::future<std::vector<size_t>>> futures;
 
     {  // create a lock to prevent workers from executing
-      const std::unique_lock<std::shared_mutex> guard{worker_lock};
+      const std::unique_lock<std::shared_mutex> guard{worker_lock_};
 
       // run a function over multi-threads with promise
       std::mt19937_64 rand_engine(kRandomSeed);
@@ -218,7 +223,7 @@ class BwTreeFixture : public testing::Test
       }
 
       // wait for all workers to finish initialization
-      const std::unique_lock<std::shared_mutex> lock{main_lock};
+      const std::unique_lock<std::shared_mutex> lock{main_lock_};
     }
 
     // gather results via promise-future
@@ -232,30 +237,28 @@ class BwTreeFixture : public testing::Test
     return written_ids;
   }
 
-  /*################################################################################################
+  /*####################################################################################
    * Functions for verification
-   *##############################################################################################*/
+   *##################################################################################*/
 
   void
   VerifyRead(  //
       const size_t key_id,
       const size_t expected_id,
-      const bool expect_fail = false)
+      const bool expect_success = true)
   {
-    const auto [rc, actual] = bw_tree->Read(keys[key_id]);
+    const auto read_val = index_->Read(keys_[key_id]);
+    if (expect_success) {
+      EXPECT_TRUE(read_val);
 
-    if (expect_fail) {
-      EXPECT_EQ(ReturnCode::kKeyNotExist, rc);
-    } else {
-      bool result;
-      EXPECT_EQ(ReturnCode::kSuccess, rc);
+      const auto expected_val = payloads_[expected_id];
+      const auto actual_val = read_val.value();
+      EXPECT_TRUE(component::IsEqual<PayloadComp>(expected_val, actual_val));
       if constexpr (IsVariableLengthData<Payload>()) {
-        result = component::IsEqual<Payload, PayloadComp>(payloads[expected_id], actual.get());
-      } else {
-        result = component::IsEqual<Payload, PayloadComp>(component::GetAddr(payloads[expected_id]),
-                                                          component::GetAddr(actual));
+        delete actual_val;
       }
-      EXPECT_TRUE(result);
+    } else {
+      EXPECT_FALSE(read_val);
     }
   }
 
@@ -264,33 +267,95 @@ class BwTreeFixture : public testing::Test
   {
     const size_t write_num = (kKeyNumForTest - 1) / kThreadNum;
 
-    auto written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kWrite);
+    auto &&written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kWrite);
     for (auto &&id : written_ids) {
       VerifyRead(id, id);
     }
   }
+
+  void
+  VerifyInsert()
+  {
+    const size_t write_num = (kKeyNumForTest - 1) / kThreadNum;
+
+    auto &&written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kInsert);
+    for (auto &&id : written_ids) {
+      VerifyRead(id, id);
+    }
+
+    written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kInsert);
+    EXPECT_EQ(0, written_ids.size());
+  }
+
+  void
+  VerifyUpdate()
+  {
+    const size_t write_num = (kKeyNumForTest - 1) / kThreadNum;
+
+    auto &&written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kUpdate);
+    EXPECT_EQ(0, written_ids.size());
+
+    written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kInsert);
+    auto &&updated_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kUpdate);
+
+    std::sort(updated_ids.begin(), updated_ids.end());
+    updated_ids.erase(std::unique(updated_ids.begin(), updated_ids.end()), updated_ids.end());
+
+    EXPECT_EQ(written_ids.size(), updated_ids.size());
+    for (auto &&id : updated_ids) {
+      VerifyRead(id, id + 1);
+    }
+  }
+
+  /*####################################################################################
+   * Internal member variables
+   *##################################################################################*/
+
+  // actual keys and payloads
+  Key keys_[kKeyNumForTest];
+  Payload payloads_[kKeyNumForTest];
+
+  // a test target BzTree
+  std::unique_ptr<BwTree_t> index_{nullptr};
+
+  std::uniform_int_distribution<size_t> id_dist_{0, kKeyNumForTest - 2};
+
+  std::shared_mutex main_lock_{};
+
+  std::shared_mutex worker_lock_{};
 };
 
-/*##################################################################################################
+/*######################################################################################
  * Preparation for typed testing
- *################################################################################################*/
+ *####################################################################################*/
 
-using KeyPayloadPairs = ::testing::Types<KeyPayload<uint64_t, uint64_t, UInt64Comp, UInt64Comp>,
-                                         KeyPayload<char *, uint64_t, CStrComp, UInt64Comp>,
-                                         KeyPayload<uint64_t, char *, UInt64Comp, CStrComp>,
-                                         KeyPayload<char *, char *, CStrComp, CStrComp>,
-                                         KeyPayload<uint32_t, uint64_t, UInt32Comp, UInt64Comp>,
-                                         KeyPayload<uint32_t, uint32_t, UInt32Comp, UInt32Comp>,
-                                         KeyPayload<uint64_t, uint64_t *, UInt64Comp, PtrComp>>;
-TYPED_TEST_CASE(BwTreeFixture, KeyPayloadPairs);
+using KeyPayloadPairs = ::testing::Types<  //
+    KeyPayload<UInt8, UInt8>,              // both fixed
+    KeyPayload<Var, UInt8>,                // variable-fixed
+    KeyPayload<UInt8, Var>,                // fixed-variable
+    KeyPayload<Var, Var>,                  // both variable
+    KeyPayload<Ptr, Ptr>,                  // pointer key/payload
+    KeyPayload<Original, Original>         // original key/payload
+    >;
+TYPED_TEST_SUITE(BwTreeFixture, KeyPayloadPairs);
 
-/*##################################################################################################
+/*######################################################################################
  * Unit test definitions
- *################################################################################################*/
+ *####################################################################################*/
 
 TYPED_TEST(BwTreeFixture, Write_MultiThreads_ReadWrittenPayloads)
 {  //
   TestFixture::VerifyWrite();
+}
+
+TYPED_TEST(BwTreeFixture, InsertWithMultiThreadsReadInsertedPayloads)
+{  //
+  TestFixture::VerifyInsert();
+}
+
+TYPED_TEST(BwTreeFixture, UpdateWithMultiThreadsReadUpdatedPayloads)
+{  //
+  TestFixture::VerifyUpdate();
 }
 
 }  // namespace dbgroup::index::bw_tree::test
