@@ -796,32 +796,37 @@ class BwTree
 
   void
   TryConsolidation(  //
-      const std::atomic_uintptr_t *target_page,
+      std::atomic_uintptr_t *target_page,
       const Key &key,
       const bool closed,
       NodeStack &stack)
   {
-    // remove child nodes from a node stack
-    while (!stack.empty() && stack.back() != target_page) stack.pop_back();
-    if (stack.empty()) return;
+    uintptr_t cur_head;
+    uintptr_t new_head;
+    while (true) {
+      // remove child nodes from a node stack
+      while (!stack.empty() && stack.back() != target_page) stack.pop_back();
+      if (stack.empty()) return;
 
-    // check whether the target node is valid (containing a target key and no incomplete SMOs)
-    consol_page_ = nullptr;
-    auto cur_head = ValidateNode(key, closed, kNullPtr, stack);
-    if (consol_page_ != target_page) return;
+      // check whether the target node is valid (containing a target key and no incomplete SMOs)
+      consol_page_ = nullptr;
+      cur_head = ValidateNode(key, closed, kNullPtr, stack);
+      if (consol_page_ != target_page) return;
 
-    // perform consolidation, and split if needed
-    auto [consol_node, size] = Consolidate(cur_head);
-    if (size > kPageSize) {
-      if (HalfSplit(consol_page_, cur_head, consol_node, stack)) return;
-      TryConsolidation(consol_page_, key, closed, stack);  // retry from consolidation
-      return;
+      // perform consolidation
+      auto [consol_node, size] = Consolidate(cur_head);
+      if (size <= kPageSize) {
+        new_head = reinterpret_cast<uintptr_t>(consol_node);
+        break;
+      }
+
+      // perform splitting if needed
+      if (HalfSplit(target_page, cur_head, consol_node, stack)) return;
     }
 
     // install a consolidated node
     auto old_head = cur_head;
-    auto new_head = reinterpret_cast<uintptr_t>(consol_node);
-    if (!consol_page_->compare_exchange_strong(old_head, new_head, std::memory_order_release)) {
+    if (!target_page->compare_exchange_strong(old_head, new_head, std::memory_order_release)) {
       // no CAS retry for consolidation
       AddToGC(new_head);
       return;
@@ -909,9 +914,9 @@ class BwTree
     auto new_head = reinterpret_cast<uintptr_t>(entry_delta);
     auto &&sep_key = split_delta->GetKey();
 
-    // remove a split child node to modify its parent node
-    stack.pop_back();
-    while (true) {  // insert the delta record into a parent node
+    // insert the delta record into a parent node
+    stack.pop_back();  // remove a split child node to modify its parent node
+    while (true) {
       auto head = ValidateNode(sep_key, kClosed, kNullPtr, stack);
 
       // check whether another thread has already completed this split
