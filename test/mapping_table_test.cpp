@@ -26,34 +26,32 @@
 
 namespace dbgroup::index::bw_tree::component::test
 {
+/*######################################################################################
+ * Global constants
+ *####################################################################################*/
+
+constexpr size_t kMultipleTableCapacity = kMappingTableCapacity * 10;
+
 class MappingTableFixture : public testing::Test
 {
- protected:
+  /*####################################################################################
+   * Type aliases
+   *##################################################################################*/
+
   using Key = uint64_t;
   using Payload = uint64_t;
-  using MappingTable_t = MappingTable<Key, std::less<Key>>;
-  using Mapping_t = std::atomic<Node<Key, std::less<Key>>*>;
+  using MappingTable_t = MappingTable<Key, std::less<>>;
+  using IDContainer = std::vector<std::atomic_uintptr_t *>;
 
-  /*################################################################################################
-   * Internal constants
-   *##############################################################################################*/
-
-  static constexpr size_t kTableCapacity = MappingTable_t::kDefaultTableCapacity;
-
-  /*################################################################################################
-   * Internal member variables
-   *##############################################################################################*/
-
-  std::unique_ptr<MappingTable_t> table;
-
-  /*################################################################################################
+ protected:
+  /*####################################################################################
    * Setup/Teardown
-   *##############################################################################################*/
+   *##################################################################################*/
 
   void
   SetUp() override
   {
-    table = std::make_unique<MappingTable_t>();
+    table_ = std::make_unique<MappingTable_t>();
   }
 
   void
@@ -61,86 +59,103 @@ class MappingTableFixture : public testing::Test
   {
   }
 
-  /*################################################################################################
+  /*####################################################################################
    * Utility functions
-   *##############################################################################################*/
+   *##################################################################################*/
 
-  std::vector<Mapping_t*>
-  GetLogicalIDs(const size_t id_num)
+  auto
+  GetLogicalIDs(const size_t id_num)  //
+      -> IDContainer
   {
-    std::vector<Mapping_t*> ids;
+    IDContainer ids{};
     ids.reserve(id_num);
 
     for (size_t i = 0; i < id_num; ++i) {
-      ids.emplace_back(table->GetNewLogicalID());
+      ids.emplace_back(table_->GetNewLogicalID());
     }
 
     return ids;
   }
 
-  std::vector<Mapping_t*>
-  GetLogicalIDsWithMultiThreads(const size_t id_num)
+  auto
+  GetLogicalIDsWithMultiThreads(const size_t id_num)  //
+      -> IDContainer
   {
     // lambda function to run tests with multi-threads
-    auto f = [&](std::promise<std::vector<Mapping_t*>> p, const size_t id_num) {
-      auto ids = GetLogicalIDs(id_num);
+    auto f = [&](std::promise<IDContainer> p, const size_t id_num) {
+      auto &&ids = GetLogicalIDs(id_num);
       p.set_value(std::move(ids));
     };
 
     // run GetNewLogicalGetID with multi-threads
-    std::vector<std::future<std::vector<Mapping_t*>>> futures;
+    std::vector<std::future<IDContainer>> futures{};
+    futures.reserve(kThreadNum);
     for (size_t i = 0; i < kThreadNum; ++i) {
-      std::promise<std::vector<Mapping_t*>> p;
+      std::promise<IDContainer> p;
       futures.emplace_back(p.get_future());
       std::thread{f, std::move(p), id_num}.detach();
     }
 
     // gather results
-    std::vector<Mapping_t*> ids;
+    IDContainer ids{};
     ids.reserve(id_num * kThreadNum);
-    for (auto&& future : futures) {
-      auto ids_per_thread = future.get();
+    for (auto &&future : futures) {
+      auto &&ids_per_thread = future.get();
       ids.insert(ids.end(), ids_per_thread.begin(), ids_per_thread.end());
     }
 
     return ids;
   }
 
-  void
-  VerifyLogicalIDs(std::vector<Mapping_t*>& ids)
+  /*####################################################################################
+   * Functions for verification
+   *##################################################################################*/
+
+  static void
+  VerifyLogicalIDs(IDContainer &ids)
   {
     std::sort(ids.begin(), ids.end());
-    auto actual_end = std::unique(ids.begin(), ids.end());
+    auto &&actual_end = std::unique(ids.begin(), ids.end());
 
     EXPECT_EQ(ids.end(), actual_end);
   }
+
+  /*####################################################################################
+   * Internal member variables
+   *##################################################################################*/
+
+  std::unique_ptr<MappingTable_t> table_{nullptr};
 };
 
-/*--------------------------------------------------------------------------------------------------
+/*######################################################################################
+ * Unit test definitions
+ *####################################################################################*/
+
+/*--------------------------------------------------------------------------------------
  * Utility tests
- *------------------------------------------------------------------------------------------------*/
+ *------------------------------------------------------------------------------------*/
 
-TEST_F(MappingTableFixture, GetNewLogicalID_SmallNumberOfIDs_GetUniqueIDs)
+TEST_F(MappingTableFixture, GetNewLogicalIDWithAFewIDsGetUniqueIDs)
 {
-  auto ids = GetLogicalIDs(kTableCapacity - 1);
+  auto &&ids = GetLogicalIDs(kMappingTableCapacity - 1);
   VerifyLogicalIDs(ids);
 }
 
-TEST_F(MappingTableFixture, GetNewLogicalID_LargeNumberOfIDs_GetUniqueIDs)
+TEST_F(MappingTableFixture, GetNewLogicalIDWithManyIDsGetUniqueIDs)
 {
-  auto ids = GetLogicalIDs(kTableCapacity + 1);
+  auto &&ids = GetLogicalIDs(kMultipleTableCapacity);
   VerifyLogicalIDs(ids);
 }
 
-TEST_F(MappingTableFixture, GetNewLogicalID_SmallNumberOfIDsWithMultiThreads_GetUniqueIDs)
+TEST_F(MappingTableFixture, GetNewLogicalIDWithAFewIDsByMultiThreadsGetUniqueIDs)
 {
-  auto ids = GetLogicalIDsWithMultiThreads((kTableCapacity / kThreadNum) - 1);
+  auto &&ids = GetLogicalIDsWithMultiThreads((kMappingTableCapacity / kThreadNum) - 1);
   VerifyLogicalIDs(ids);
 }
 
-TEST_F(MappingTableFixture, GetNewLogicalID_LargeNumberOfIDsWithMultiThreads_GetUniqueIDs)
+TEST_F(MappingTableFixture, GetNewLogicalIDWighManyIDsByMultiThreadsGetUniqueIDs)
 {
-  auto ids = GetLogicalIDsWithMultiThreads(kTableCapacity * 10);
+  auto &&ids = GetLogicalIDsWithMultiThreads(kMultipleTableCapacity);
   VerifyLogicalIDs(ids);
 }
 

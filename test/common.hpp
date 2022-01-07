@@ -14,11 +14,57 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef BW_TREE_TEST_COMMON_HPP
+#define BW_TREE_TEST_COMMON_HPP
 
 #include <functional>
 
 #include "bw_tree/utility.hpp"
+
+/*######################################################################################
+ * Classes for testing
+ *####################################################################################*/
+
+/**
+ * @brief An example class.
+ *
+ */
+class MyClass
+{
+ public:
+  constexpr MyClass() = default;
+
+  constexpr MyClass(const MyClass &) = default;
+  constexpr MyClass(MyClass &&) = default;
+
+  constexpr auto operator=(const MyClass &) -> MyClass & = default;
+  constexpr auto operator=(MyClass &&) -> MyClass & = default;
+
+  ~MyClass() = default;
+
+  constexpr auto
+  operator=(const uint64_t value)  //
+      -> MyClass &
+  {
+    data_ = value;
+    return *this;
+  }
+
+  // enable std::less to compare this class
+  constexpr auto
+  operator<(const MyClass &comp) const  //
+      -> bool
+  {
+    return data_ < comp.data_;
+  }
+
+ private:
+  uint64_t data_{};
+};
+
+/*######################################################################################
+ * Constants for testing
+ *####################################################################################*/
 
 #ifdef BW_TREE_TEST_THREAD_NUM
 static constexpr size_t kThreadNum = BW_TREE_TEST_THREAD_NUM;
@@ -30,11 +76,9 @@ constexpr size_t kVariableDataLength = 12;
 
 constexpr size_t kRandomSeed = 10;
 
-// aliases for typed tests
-using UInt32Comp = std::less<uint32_t>;
-using UInt64Comp = std::less<uint64_t>;
-using CStrComp = dbgroup::index::bw_tree::CompareAsCString;
-using PtrComp = std::less<uint64_t *>;
+/*######################################################################################
+ * Global utilities
+ *####################################################################################*/
 
 namespace dbgroup::index::bw_tree
 {
@@ -52,8 +96,9 @@ IsVariableLengthData<char *>()
 }  // namespace dbgroup::index::bw_tree
 
 template <class T>
-constexpr size_t
-GetDataLength()
+constexpr auto
+GetDataLength()  //
+    -> size_t
 {
   if constexpr (::dbgroup::index::bw_tree::IsVariableLengthData<T>()) {
     return kVariableDataLength;
@@ -71,14 +116,14 @@ PrepareTestData(  //
   if constexpr (::dbgroup::index::bw_tree::IsVariableLengthData<T>()) {
     // variable-length data
     for (size_t i = 0; i < data_num; ++i) {
-      auto data = reinterpret_cast<char *>(malloc(kVariableDataLength));
-      snprintf(data, kVariableDataLength, "%011lu", i);
+      auto *data = reinterpret_cast<char *>(malloc(kVariableDataLength));
+      snprintf(data, kVariableDataLength, "%011lu", i);  // NOLINT
       data_array[i] = reinterpret_cast<T>(data);
     }
   } else if constexpr (std::is_same_v<T, uint64_t *>) {
     // pointer data
     for (size_t i = 0; i < data_num; ++i) {
-      auto data = reinterpret_cast<uint64_t *>(malloc(sizeof(uint64_t)));
+      auto *data = reinterpret_cast<uint64_t *>(malloc(sizeof(uint64_t)));
       *data = i;
       data_array[i] = data;
     }
@@ -102,3 +147,47 @@ ReleaseTestData(  //
     }
   }
 }
+
+/*######################################################################################
+ * Type definitions for templated tests
+ *####################################################################################*/
+
+struct UInt8 {
+  using Data = uint64_t;
+  using Comp = std::less<uint64_t>;
+};
+
+struct Int8 {
+  using Data = int64_t;
+  using Comp = std::less<int64_t>;
+};
+
+struct UInt4 {
+  using Data = uint32_t;
+  using Comp = std::less<uint32_t>;
+};
+
+struct Ptr {
+  struct PtrComp {
+    constexpr bool
+    operator()(const uint64_t *a, const uint64_t *b) const noexcept
+    {
+      return *a < *b;
+    }
+  };
+
+  using Data = uint64_t *;
+  using Comp = PtrComp;
+};
+
+struct Var {
+  using Data = char *;
+  using Comp = dbgroup::index::bw_tree::CompareAsCString;
+};
+
+struct Original {
+  using Data = MyClass;
+  using Comp = std::less<MyClass>;
+};
+
+#endif  // BW_TREE_TEST_COMMON_HPP

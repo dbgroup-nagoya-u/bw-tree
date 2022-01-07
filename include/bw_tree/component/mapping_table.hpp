@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef BW_TREE_COMPONENT_MAPPING_TABLE_HPP
+#define BW_TREE_COMPONENT_MAPPING_TABLE_HPP
 
 #include <array>
 #include <atomic>
 #include <mutex>
 #include <vector>
 
+#include "delta_record.hpp"
 #include "node.hpp"
 
 namespace dbgroup::index::bw_tree::component
@@ -34,120 +36,17 @@ namespace dbgroup::index::bw_tree::component
 template <class Key, class Comp>
 class MappingTable
 {
+  /*####################################################################################
+   * Type aliases
+   *##################################################################################*/
+
   using Node_t = Node<Key, Comp>;
-  using Mapping_t = std::atomic<Node_t *>;
+  using DeltaRecord_t = DeltaRecord<Key, Comp>;
 
  public:
-  /*################################################################################################
-   * Public constants
-   *##############################################################################################*/
-
-  /// capacity of mapping information that can be maintained in each table.
-  static constexpr size_t kDefaultTableCapacity =
-      (kPageSize - sizeof(std::atomic_size_t)) / sizeof(Mapping_t);
-
- private:
-  /*################################################################################################
-   * Internal classes
-   *##############################################################################################*/
-
-  /**
-   * @brief An internal class to represent a certain mapping table.
-   *
-   */
-  class BufferedMap
-  {
-   private:
-    /*##############################################################################################
-     * Internal member variables
-     *############################################################################################*/
-
-    /// the current head ID of this table (the total number of reserved IDs).
-    std::atomic_size_t head_id_;
-
-    /// an actual mapping table.
-    std::array<Mapping_t, kDefaultTableCapacity> logical_ids_;
-
-   public:
-    /*##############################################################################################
-     * Public constructors/destructors
-     *############################################################################################*/
-
-    /**
-     * @brief Construct a new mapping buffer instance.
-     *
-     */
-    BufferedMap() { static_assert(sizeof(BufferedMap) == kPageSize); }
-
-    /**
-     * @brief Destroy the object.
-     *
-     * This dectructor will delete all the nodes in this table.
-     */
-    ~BufferedMap()
-    {
-      const size_t size = head_id_.load(mo_relax);
-      for (size_t i = 0; i < size; ++i) {
-        Node_t *node = logical_ids_[i].load(mo_relax);
-        if (node == nullptr) continue;
-
-        Node_t::DeleteNode(node);
-      }
-    }
-
-    /*##############################################################################################
-     * new/delete definitions
-     *############################################################################################*/
-
-    static void *operator new(std::size_t) { return calloc(1UL, kPageSize); }
-
-    static void
-    operator delete(void *p) noexcept
-    {
-      free(p);
-    }
-
-    /*##############################################################################################
-     * Public getters/setters
-     *############################################################################################*/
-
-    /**
-     * @brief Reserve a new logical ID (i.e., the pointer to a mapping record).
-     *
-     * If this function returns nullptr, it means that this table is full.
-     *
-     * @return Mapping_t*: a reserved logical ID.
-     */
-    Mapping_t *
-    ReserveNewID()
-    {
-      auto current_id = head_id_.load(mo_relax);
-      do {
-        // if the buffer is full, return NULL
-        if (current_id >= kDefaultTableCapacity) return nullptr;
-      } while (!head_id_.compare_exchange_weak(current_id, current_id + 1, mo_relax));
-
-      return &logical_ids_[current_id];
-    }
-  };
-
-  /*################################################################################################
-   * Internal variables
-   *##############################################################################################*/
-
-  /// a current mapping table.
-  std::atomic<BufferedMap *> table_;
-
-  /// full mapping tables.
-  std::vector<BufferedMap *> full_tables_;
-
-  /// a mutex object to modify full_tables_.
-  std::mutex full_tables_mtx_;
-
- public:
-  /*################################################################################################
-   * Public constructors/destructors
-   *##############################################################################################*/
+  /*####################################################################################
+   * Public constructors and assignment operators
+   *##################################################################################*/
 
   /**
    * @brief Construct a new MappingTable object.
@@ -155,10 +54,23 @@ class MappingTable
    */
   MappingTable()
   {
-    const auto table = new BufferedMap{};
-    table_.store(table, mo_relax);
+    auto *table = new BufferedMap{};
+    table_.store(table, std::memory_order_relaxed);
+
+    std::unique_lock guard{full_tables_mtx_};
+    full_tables_.reserve(kExpectedTableNum);
     full_tables_.emplace_back(table);
   }
+
+  MappingTable(const MappingTable &) = delete;
+  MappingTable(MappingTable &&) = delete;
+
+  MappingTable &operator=(const MappingTable &) = delete;
+  MappingTable &operator=(MappingTable &&) = delete;
+
+  /*####################################################################################
+   * Public destructors
+   *##################################################################################*/
 
   /**
    * @brief Destroy the MappingTable object.
@@ -172,42 +84,160 @@ class MappingTable
     }
   }
 
-  MappingTable(const MappingTable &) = delete;
-  MappingTable &operator=(const MappingTable &) = delete;
-  MappingTable(MappingTable &&) = delete;
-  MappingTable &operator=(MappingTable &&) = delete;
-
-  /*################################################################################################
+  /*####################################################################################
    * Public getters/setters
-   *##############################################################################################*/
+   *##################################################################################*/
 
   /**
    * @brief Get a new logical ID (i.e., an address to mapping information).
    *
-   * @return Mapping_t*: a reserved logical ID.
+   * @return std::atomic_uintptr_t*: a reserved logical ID.
    */
-  Mapping_t *
-  GetNewLogicalID()
+  auto
+  GetNewLogicalID()  //
+      -> std::atomic_uintptr_t *
   {
-    auto current_table = table_.load(mo_relax);
+    auto *current_table = table_.load(std::memory_order_relaxed);
     auto new_id = current_table->ReserveNewID();
     while (new_id == nullptr) {
-      auto new_table = new BufferedMap{};
-      if (table_.compare_exchange_weak(current_table, new_table, mo_relax)) {
-        // since install succeeds, get new ID from the new table
+      std::unique_lock guard{full_tables_mtx_, std::defer_lock};
+      if (guard.try_lock()) {
+        auto *new_table = new BufferedMap{};
+        table_.store(new_table, std::memory_order_relaxed);
         new_id = new_table->ReserveNewID();
 
         // retain the old table to release nodes in it
-        const auto guard = std::unique_lock<std::mutex>(full_tables_mtx_);
         full_tables_.emplace_back(new_table);
       } else {
         // since another thread may install a new mapping table, recheck a current table
-        delete new_table;
+        current_table = table_.load(std::memory_order_relaxed);
         new_id = current_table->ReserveNewID();
       }
     }
     return new_id;
   }
+
+ private:
+  /*####################################################################################
+   * Internal classes
+   *##################################################################################*/
+
+  /**
+   * @brief An internal class to represent a certain mapping table.
+   *
+   */
+  class BufferedMap
+  {
+   public:
+    /*##################################################################################
+     * Public constructors and assignment operators
+     *################################################################################*/
+
+    /**
+     * @brief Construct a new mapping buffer instance.
+     *
+     */
+    BufferedMap()
+    {
+      for (size_t i = 0; i < kMappingTableCapacity; ++i) {
+        auto *elem_ptr = reinterpret_cast<uintptr_t *>(&logical_ids_[i]);
+        *elem_ptr = kNullPtr;
+      }
+    }
+
+    BufferedMap(const BufferedMap &) = delete;
+    BufferedMap(BufferedMap &&) = delete;
+
+    BufferedMap &operator=(const BufferedMap &) = delete;
+    BufferedMap &operator=(BufferedMap &&) = delete;
+
+    /*##################################################################################
+     * Public destructors
+     *################################################################################*/
+
+    /**
+     * @brief Destroy the object.
+     *
+     * This dectructor will delete all the nodes in this table.
+     */
+    ~BufferedMap()
+    {
+      auto size = head_id_.load(std::memory_order_relaxed);
+      if (size > kMappingTableCapacity) {
+        size = kMappingTableCapacity;
+      }
+
+      for (size_t i = 0; i < size; ++i) {
+        auto ptr = logical_ids_[i].load(std::memory_order_acquire);
+        if (ptr == kNullPtr) continue;
+
+        // delete delta records
+        auto *rec = reinterpret_cast<DeltaRecord_t *>(ptr);
+        while (!rec->IsBaseNode()) {
+          ptr = rec->GetNext();
+          delete rec;
+          rec = reinterpret_cast<DeltaRecord_t *>(ptr);
+        }
+
+        // delete a base node
+        auto *node = reinterpret_cast<Node_t *>(ptr);
+        delete node;
+      }
+    }
+
+    /*##################################################################################
+     * Public getters/setters
+     *################################################################################*/
+
+    /**
+     * @brief Reserve a new logical ID (i.e., the pointer to a mapping record).
+     *
+     * If this function returns nullptr, it means that this table is full.
+     *
+     * @return std::atomic_uintptr_t*: a reserved logical ID.
+     */
+    auto
+    ReserveNewID()  //
+        -> std::atomic_uintptr_t *
+    {
+      auto current_id = head_id_.fetch_add(1, std::memory_order_relaxed);
+
+      if (current_id >= kMappingTableCapacity) return nullptr;
+      return &logical_ids_[current_id];
+    }
+
+   private:
+    /*##################################################################################
+     * Internal member variables
+     *################################################################################*/
+
+    /// the current head ID of this table (the total number of reserved IDs).
+    std::atomic_size_t head_id_{0};
+
+    /// an actual mapping table.
+    std::array<std::atomic_uintptr_t, kMappingTableCapacity> logical_ids_{};
+  };
+
+  /*####################################################################################
+   * Internal constants
+   *##################################################################################*/
+
+  static constexpr size_t kExpectedTableNum = 128;
+
+  /*####################################################################################
+   * Internal member variables
+   *##################################################################################*/
+
+  /// a current mapping table.
+  std::atomic<BufferedMap *> table_{};
+
+  /// full mapping tables.
+  std::vector<BufferedMap *> full_tables_{};
+
+  /// a mutex object to modify full_tables_.
+  std::mutex full_tables_mtx_{};
 };
 
 }  // namespace dbgroup::index::bw_tree::component
+
+#endif  // BW_TREE_COMPONENT_MAPPING_TABLE_HPP

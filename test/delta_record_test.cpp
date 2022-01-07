@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "bw_tree/component/node.hpp"
+#include "bw_tree/component/delta_record.hpp"
 
 #include <memory>
 #include <vector>
@@ -39,7 +39,7 @@ struct KeyPayload {
  *####################################################################################*/
 
 template <class KeyPayload>
-class NodeFixture : public testing::Test
+class DeltaRecordFixture : public testing::Test
 {
   /*####################################################################################
    * Type aliases
@@ -52,7 +52,7 @@ class NodeFixture : public testing::Test
   using PayComp = typename KeyPayload::Payload::Comp;
 
   // define type aliases for simplicity
-  using Node_t = Node<Key, std::less<>>;
+  using DeltaRecord_t = DeltaRecord<Key, std::less<>>;
 
  protected:
   /*####################################################################################
@@ -91,7 +91,29 @@ class NodeFixture : public testing::Test
   GetPage()  //
       -> void *
   {
-    return ::operator new(kPageSize);
+    return ::operator new(GetMaxDeltaSize<Key, Payload>());
+  }
+
+  auto
+  CreateLeafRecord(  //
+      const DeltaType type,
+      const Key &key,
+      const Payload &payload)  //
+      -> std::unique_ptr<DeltaRecord_t>
+  {
+    auto *raw_p = new (GetPage()) DeltaRecord_t{type, key, kKeyLen, payload, kPayLen};
+    return std::unique_ptr<DeltaRecord_t>{raw_p};
+  }
+
+  auto
+  CreateSplitRecord(  //
+      const DeltaType type,
+      const Key &key,
+      const Payload &payload)  //
+      -> std::unique_ptr<DeltaRecord_t>
+  {
+    auto *raw_p = new (GetPage()) DeltaRecord_t{type, key, kKeyLen, payload, kPayLen};
+    return std::unique_ptr<DeltaRecord_t>{raw_p};
   }
 
   /*####################################################################################
@@ -99,14 +121,46 @@ class NodeFixture : public testing::Test
    *##################################################################################*/
 
   void
-  VerifyInitialRootConstructor()
+  VerifyLeafConstructor(const DeltaType type)
   {
-    auto *raw_p = new (GetPage()) Node_t{};
-    std::unique_ptr<Node_t> node{raw_p};
+    const auto &key = keys_[0];
+    const auto &payload = payloads_[0];
+    const auto &delta = CreateLeafRecord(type, key, payload);
 
-    EXPECT_TRUE(node->IsLeaf());
-    EXPECT_TRUE(node->IsBaseNode());
-    EXPECT_EQ(nullptr, node->GetSiblingNode());
+    EXPECT_TRUE(delta->IsLeaf());
+    EXPECT_FALSE(delta->IsBaseNode());
+    EXPECT_EQ(kNullPtr, delta->GetNext());
+    EXPECT_TRUE(IsEqual<KeyComp>(key, delta->GetKey()));
+    EXPECT_TRUE(IsEqual<PayComp>(payload, delta->template GetPayload<Payload>()));
+  }
+
+  void
+  VerifySplitDeltaConstructor()
+  {
+    const auto &key = keys_[0];
+    const auto &right_node = CreateLeafRecord(DeltaType::kNotDelta, key, payloads_[0]);
+    const auto right_ptr = reinterpret_cast<uintptr_t>(right_node.get());
+    std::atomic_uintptr_t right_page{right_ptr};
+    auto sib_page = reinterpret_cast<uintptr_t>(&right_page);
+
+    // verify split delta
+    auto *raw_p = new (GetPage()) DeltaRecord_t{right_ptr, sib_page, sib_page};
+    std::unique_ptr<DeltaRecord_t> delta{raw_p};
+
+    EXPECT_TRUE(delta->IsLeaf());
+    EXPECT_FALSE(delta->IsBaseNode());
+    EXPECT_EQ(sib_page, delta->GetNext());
+    EXPECT_TRUE(IsEqual<KeyComp>(key, delta->GetKey()));
+    EXPECT_EQ(sib_page, delta->template GetPayload<uintptr_t>());
+
+    // verify index-entry delta
+    raw_p = new (GetPage()) DeltaRecord_t{delta.get()};
+    delta.reset(raw_p);
+
+    EXPECT_FALSE(delta->IsLeaf());
+    EXPECT_FALSE(delta->IsBaseNode());
+    EXPECT_TRUE(IsEqual<KeyComp>(key, delta->GetKey()));
+    EXPECT_EQ(sib_page, delta->template GetPayload<uintptr_t>());
   }
 
   /*####################################################################################
@@ -130,7 +184,7 @@ using KeyPayloadPairs = ::testing::Types<  //
     KeyPayload<Ptr, Ptr>,                  // pointer key/payload
     KeyPayload<Original, Original>         // original key/payload
     >;
-TYPED_TEST_SUITE(NodeFixture, KeyPayloadPairs);
+TYPED_TEST_SUITE(DeltaRecordFixture, KeyPayloadPairs);
 
 /*######################################################################################
  * Unit test definitions
@@ -140,9 +194,16 @@ TYPED_TEST_SUITE(NodeFixture, KeyPayloadPairs);
  * Constructor tests
  *------------------------------------------------------------------------------------*/
 
-TYPED_TEST(NodeFixture, ConstructInitialRoot)
+TYPED_TEST(DeltaRecordFixture, ConstructLeafDeltas)
+{
+  TestFixture::VerifyLeafConstructor(DeltaType::kInsert);
+  TestFixture::VerifyLeafConstructor(DeltaType::kModify);
+  TestFixture::VerifyLeafConstructor(DeltaType::kDelete);
+}
+
+TYPED_TEST(DeltaRecordFixture, ConstructSplitDeltas)
 {  //
-  TestFixture::VerifyInitialRootConstructor();
+  TestFixture::VerifySplitDeltaConstructor();
 }
 
 }  // namespace dbgroup::index::bw_tree::component::test

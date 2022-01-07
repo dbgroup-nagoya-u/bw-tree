@@ -21,62 +21,69 @@
 
 namespace dbgroup::index::bw_tree::component::test
 {
+/*######################################################################################
+ * Global constants
+ *####################################################################################*/
+
+constexpr size_t kExpectedOffset = 256;
+constexpr size_t kExpectedKeyLength = 8;
+constexpr size_t kExpectedTotalLength = 16;
+constexpr size_t kExpectedPayloadLength = kExpectedTotalLength - kExpectedKeyLength;
+
 class MetadataFixture : public testing::Test
 {
  protected:
-  /*################################################################################################
-   * Internal constants
-   *##############################################################################################*/
-
-  static constexpr size_t kExpectedOffset = 256;
-  static constexpr size_t kExpectedKeyLength = 8;
-  static constexpr size_t kExpectedTotalLength = 16;
-
-  /*################################################################################################
+  /*####################################################################################
    * Setup/Teardown
-   *##############################################################################################*/
-
-  Metadata meta;
+   *##################################################################################*/
 
   void
   SetUp() override
   {
-    meta = Metadata{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
   }
 
   void
   TearDown() override
   {
   }
+
+  /*####################################################################################
+   * Internal member variables
+   *##################################################################################*/
+
+  Metadata meta_{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
 };
 
-/*--------------------------------------------------------------------------------------------------
+/*######################################################################################
+ * Unit test definitions
+ *####################################################################################*/
+
+/*--------------------------------------------------------------------------------------
  * Constructor tests
- *------------------------------------------------------------------------------------------------*/
+ *------------------------------------------------------------------------------------*/
 
-TEST_F(MetadataFixture, Construct_DefaultMetadata_CorrectlyInitialized)
+TEST_F(MetadataFixture, ConstructWithArgumentsCreateExpectedMetadata)
 {
-  EXPECT_EQ(kExpectedOffset, meta.GetOffset());
-  EXPECT_EQ(kExpectedKeyLength, meta.GetKeyLength());
-  EXPECT_EQ(kExpectedTotalLength, meta.GetTotalLength());
+  EXPECT_EQ(kExpectedOffset, meta_.GetOffset());
+  EXPECT_EQ(kExpectedKeyLength, meta_.GetKeyLength());
+  EXPECT_EQ(kExpectedPayloadLength, meta_.GetPayloadLength());
+  EXPECT_EQ(kExpectedTotalLength, meta_.GetTotalLength());
 }
 
-/*--------------------------------------------------------------------------------------------------
+/*--------------------------------------------------------------------------------------
  * Getter/setter tests
- *------------------------------------------------------------------------------------------------*/
+ *------------------------------------------------------------------------------------*/
 
-TEST_F(MetadataFixture, GetPayloadLength_DefaultMetadata_ReturnCorrectPayloadLength)
-{
-  EXPECT_EQ(kExpectedTotalLength - kExpectedKeyLength, meta.GetPayloadLength());
-}
-
-TEST_F(MetadataFixture, SetOffset_DefaultMetadata_GetUpdatedOffset)
+TEST_F(MetadataFixture, SetOffsetUpdateOffsetWOSideEffects)
 {
   const size_t updated_offset = kExpectedOffset / 2;
 
-  meta.SetOffset(updated_offset);
+  meta_.SetOffset(updated_offset);
 
-  EXPECT_EQ(updated_offset, meta.GetOffset());
+  EXPECT_EQ(updated_offset, meta_.GetOffset());
+  EXPECT_EQ(kExpectedKeyLength, meta_.GetKeyLength());
+  EXPECT_EQ(kExpectedPayloadLength, meta_.GetPayloadLength());
+  EXPECT_EQ(kExpectedTotalLength, meta_.GetTotalLength());
 }
 
 }  // namespace dbgroup::index::bw_tree::component::test

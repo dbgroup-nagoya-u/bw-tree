@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef BW_TREE_COMPONENT_COMMON_HPP
+#define BW_TREE_COMPONENT_COMMON_HPP
 
 #include <cstring>
 #include <memory>
 
-#include "../utility.hpp"
+#include "bw_tree/utility.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {
@@ -31,11 +32,25 @@ namespace dbgroup::index::bw_tree::component
  * @brief Internal return codes to represent results of node modification.
  *
  */
-enum NodeReturnCode
+enum NodeRC
 {
-  kSuccess = 0,
-  kKeyNotExist,
-  kKeyExist
+  kKeyNotExist = -100,
+  kKeyInDelta,
+  kKeyExist = 0
+};
+
+/**
+ * @brief Internal return codes for representing results of delta chain traversal.
+ *
+ */
+enum DeltaRC
+{
+  kRecordFound = -100,
+  kRecordDeleted,
+  kSplitMayIncomplete,
+  kNodeRemoved,
+  kMergeMayIncomplete,
+  kReachBase = 0
 };
 
 /**
@@ -52,7 +67,7 @@ enum NodeType : uint16_t
  * @brief A flag to represent the types of delta nodes
  *
  */
-enum DeltaNodeType : uint16_t
+enum DeltaType : uint16_t
 {
   kNotDelta = 0,
   kInsert,
@@ -67,148 +82,50 @@ enum DeltaNodeType : uint16_t
  * Internal constants
  *################################################################################################*/
 
-/// alias of memory order for simplicity.
-constexpr auto mo_relax = std::memory_order_relaxed;
-
 /// Header length in bytes.
 constexpr size_t kHeaderLength = 28;
+
+constexpr bool kClosed = true;
+
+constexpr bool kOpen = false;
+
+constexpr uintptr_t kNullPtr = 0;
+
+/// the capacity of each mapping table.
+constexpr size_t kMappingTableCapacity = (kPageSize - kWordSize) / kWordSize;
 
 /*##################################################################################################
  * Internal utility functions
  *################################################################################################*/
 
-template <class T>
-constexpr const void *
-GetAddr(const T &obj)
-{
-  if constexpr (IsVariableLengthData<T>()) {
-    return reinterpret_cast<const void *>(obj);
-  } else {
-    return reinterpret_cast<const void *>(&obj);
-  }
-}
-
-template <class Key, class Comp, class T1, class T2>
-constexpr bool
-LT(const T1 &a, const T2 &b)
-{
-  if constexpr (std::is_same_v<T1, Key> && std::is_same_v<T2, Key>) {
-    return Comp{}(a, b);
-  } else if constexpr (std::is_same_v<T1, Key> && std::is_same_v<T2, void *>) {
-    if constexpr (IsVariableLengthData<Key>()) {
-      return Comp{}(a, reinterpret_cast<const Key>(b));
-    } else {
-      return Comp{}(a, *reinterpret_cast<const Key *>(b));
-    }
-  } else if constexpr (std::is_same_v<T1, void *> && std::is_same_v<T2, Key>) {
-    if constexpr (IsVariableLengthData<Key>()) {
-      return Comp{}(reinterpret_cast<const Key>(a), b);
-    } else {
-      return Comp{}(*reinterpret_cast<const Key *>(a), b);
-    }
-  } else {
-    if constexpr (IsVariableLengthData<Key>()) {
-      return Comp{}(reinterpret_cast<Key>(const_cast<void *>(a)),
-                    reinterpret_cast<Key>(const_cast<void *>(b)));
-    } else {
-      return Comp{}(*reinterpret_cast<const Key *>(a), *reinterpret_cast<const Key *>(b));
-    }
-  }
-}
-
-/**
- * @brief Cast a given pointer to a specified pointer type.
- *
- * @tparam T a target pointer type.
- * @param addr a target pointer.
- * @return T: a casted pointer.
- */
-template <class T>
-constexpr T
-Cast(const void *addr)
-{
-  static_assert(std::is_pointer_v<T>);
-
-  return static_cast<T>(const_cast<void *>(addr));
-}
-
-/**
- * @brief Compute the maximum number of records in a node.
- *
- * @tparam Key a target key class.
- * @tparam Payload a target payload class.
- * @return size_t the expected maximum number of records.
- */
 template <class Key, class Payload>
-constexpr size_t
-GetMaxRecordNum()
+constexpr auto
+GetMaxDeltaSize()  //
+    -> size_t
 {
-  auto record_min_length = kWordLength;
-  if constexpr (std::is_same_v<Key, std::byte *>) {
-    record_min_length += 1;
-  } else {
-    record_min_length += sizeof(Key);
-  }
-  if constexpr (std::is_same_v<Payload, std::byte *>) {
-    record_min_length += 1;
-  } else {
-    record_min_length += sizeof(Payload);
-  }
-  return (kPageSize - kHeaderLength) / record_min_length;
+  auto key_length = (IsVariableLengthData<Key>()) ? kMaxVariableSize : sizeof(Key);
+  auto pay_length = (IsVariableLengthData<Payload>()) ? kMaxVariableSize : sizeof(Payload);
+  auto max_leaf_delta = kHeaderLength + key_length + pay_length;
+  auto max_internal_delta = kHeaderLength + 2 * key_length + sizeof(uintptr_t);
+
+  return (max_leaf_delta > max_internal_delta) ? max_leaf_delta : max_internal_delta;
 }
 
 /**
- * @tparam Comp a comparator class.
+ * @tparam Compare a comparator class.
  * @tparam T a target class.
  * @param obj_1 an object to be compared.
  * @param obj_2 another object to be compared.
  * @retval true if given objects are equivalent.
  * @retval false if given objects are different.
  */
-template <class Key, class Comp>
+template <class Compare, class T>
 constexpr bool
 IsEqual(  //
-    const void *obj_1,
-    const void *obj_2)
+    const T &obj_1,
+    const T &obj_2)
 {
-  return !LT<Key, Comp>(obj_1, obj_2) && !LT<Key, Comp>(obj_2, obj_1);
-}
-
-/**
- * @tparam Key a target key class.
- * @tparam Comp a comparator class for target keys.
- * @param key a target key.
- * @param begin_key a begin key of a range condition.
- * @param begin_closed a flag to indicate whether the begin side of range is closed.
- * @param end_key an end key of a range condition.
- * @param end_closed a flag to indicate whether the end side of range is closed.
- * @retval true if a target key is in a range.
- * @retval false if a target key is outside of a range.
- */
-template <class Key, class Comp>
-constexpr bool
-IsInRange(  //
-    const void *key,
-    const void *begin_key,
-    const bool begin_closed,
-    const void *end_key,
-    const bool end_closed)
-{
-  if (begin_key == nullptr && end_key == nullptr) {
-    // no range condition
-    return true;
-  } else if (begin_key == nullptr) {
-    // less than or equal to
-    return LT<Key, Comp>(key, end_key) || (end_closed && !LT<Key, Comp>(end_key, key));
-  } else if (end_key == nullptr) {
-    // greater than or equal to
-    return LT<Key, Comp>(begin_key, key) || (begin_closed && !LT<Key, Comp>(key, begin_key));
-  } else {
-    // between
-    return !((LT<Key, Comp>(key, begin_key) || LT<Key, Comp>(end_key, key))
-             || (!begin_closed && IsEqual<Key, Comp>(key, begin_key))
-             || (!end_closed && IsEqual<Key, Comp>(key, end_key)));
-  }
+  return !Compare{}(obj_1, obj_2) && !Compare{}(obj_2, obj_1);
 }
 
 /**
@@ -219,35 +136,13 @@ IsInRange(  //
  * @return void* a shifted address.
  */
 constexpr void *
-ShiftAddress(  //
+ShiftAddr(  //
     const void *addr,
     const size_t offset)
 {
   return static_cast<std::byte *>(const_cast<void *>(addr)) + offset;
 }
 
-/**
- * @brief A wrapper of a deleter class for unique_ptr/shared_ptr.
- *
- * @tparam Payload a class to be deleted by this deleter.
- */
-template <class Payload>
-struct PayloadDeleter {
-  constexpr PayloadDeleter() noexcept = default;
-
-  template <class Up, typename = typename std::enable_if_t<std::is_convertible_v<Up *, Payload *>>>
-  PayloadDeleter(const PayloadDeleter<Up> &) noexcept
-  {
-  }
-
-  void
-  operator()(Payload *ptr) const
-  {
-    static_assert(!std::is_void_v<Payload>, "can't delete pointer to incomplete type");
-    static_assert(sizeof(Payload) > 0, "can't delete pointer to incomplete type");
-
-    ::operator delete(ptr);
-  }
-};
-
 }  // namespace dbgroup::index::bw_tree::component
+
+#endif  // BW_TREE_COMPONENT_COMMON_HPP

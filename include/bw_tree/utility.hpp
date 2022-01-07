@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#pragma once
-
-#include <string.h>
+#ifndef BW_TREE_UTILITY_HPP
+#define BW_TREE_UTILITY_HPP
 
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 namespace dbgroup::index::bw_tree
 {
@@ -47,13 +47,9 @@ struct CompareAsCString {
   constexpr bool
   operator()(const void *a, const void *b) const noexcept
   {
-    if (a == nullptr) {
-      return false;
-    } else if (b == nullptr) {
-      return true;
-    } else {
-      return strcmp(static_cast<const char *>(a), static_cast<const char *>(b)) < 0;
-    }
+    if (a == nullptr) return false;
+    if (b == nullptr) return true;
+    return strcmp(static_cast<const char *>(a), static_cast<const char *>(b)) < 0;
   }
 };
 
@@ -75,7 +71,7 @@ IsVariableLengthData()
  *################################################################################################*/
 
 /// Assumes that one word is represented by 8 bytes
-constexpr size_t kWordLength = 8;
+constexpr size_t kWordSize = sizeof(uintptr_t);
 
 /// Assumes that one word is represented by 8 bytes
 constexpr size_t kCacheLineSize = 64;
@@ -96,7 +92,16 @@ constexpr size_t kMaxDeltaNodeNum = BW_TREE_MAX_DELTA_NODE_NUM;
 constexpr size_t kMaxDeltaNodeNum = 32;
 #endif
 
+#ifdef BW_TREE_MAX_VARIABLE_DATA_SIZE
+/// the maximun size of variable-length data
+constexpr size_t kMaxVariableSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
+#else
+/// the maximun size of variable-length data
+constexpr size_t kMaxVariableSize = 128;
+#endif
 /// check whether the specified page size is valid
-static_assert(kPageSize % kWordLength == 0);
+static_assert(kPageSize % kWordSize == 0);
 
 }  // namespace dbgroup::index::bw_tree
+
+#endif  // BW_TREE_UTILITY_HPP

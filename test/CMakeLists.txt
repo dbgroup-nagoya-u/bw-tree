@@ -39,49 +39,41 @@ endif()
 
 # define function to add unit tests in the same format
 function(ADD_BW_TREE_TEST BW_TREE_TEST_TARGET)
-  add_executable(
-    ${BW_TREE_TEST_TARGET}
+  add_executable(${BW_TREE_TEST_TARGET}
     "${CMAKE_CURRENT_SOURCE_DIR}/${BW_TREE_TEST_TARGET}.cpp"
   )
-  target_compile_features(
-    ${BW_TREE_TEST_TARGET} PRIVATE
+  target_compile_features(${BW_TREE_TEST_TARGET} PRIVATE
     "cxx_std_17"
   )
-  target_compile_options(
-    ${BW_TREE_TEST_TARGET} PRIVATE
+  target_compile_options(${BW_TREE_TEST_TARGET} PRIVATE
     -Wall
     -Wextra
     $<$<STREQUAL:${CMAKE_BUILD_TYPE},"Release">:"-O2 -march=native">
     $<$<STREQUAL:${CMAKE_BUILD_TYPE},"RelWithDebInfo">:"-g3 -Og -pg">
     $<$<STREQUAL:${CMAKE_BUILD_TYPE},"Debug">:"-g3 -O0 -pg">
   )
-  target_link_libraries(
-    ${BW_TREE_TEST_TARGET} PRIVATE
+  target_link_libraries(${BW_TREE_TEST_TARGET} PRIVATE
     bw_tree
     gtest_main
   )
 
   if(DEFINED BW_TREE_TEST_THREAD_NUM)
-    target_compile_definitions(
-      ${BW_TREE_TEST_TARGET} PRIVATE
+    target_compile_definitions(${BW_TREE_TEST_TARGET} PRIVATE
       BW_TREE_TEST_THREAD_NUM=${BW_TREE_TEST_THREAD_NUM}
     )
   endif()
 
   if(DEFINED BW_TREE_TEST_TOTAL_EXEC_NUM)
-    target_compile_definitions(
-      ${BW_TREE_TEST_TARGET} PRIVATE
+    target_compile_definitions(${BW_TREE_TEST_TARGET} PRIVATE
       BW_TREE_TEST_TOTAL_EXEC_NUM=${BW_TREE_TEST_TOTAL_EXEC_NUM}
     )
   endif()
 
   if(${BW_TREE_TEST_USE_JEMALLOC})
-    target_include_directories(
-      ${BW_TREE_TEST_TARGET} PRIVATE
+    target_include_directories(${BW_TREE_TEST_TARGET} PRIVATE
       ${JEMALLOC_INCLUDE_DIRS}
     )
-    target_link_libraries(
-      ${BW_TREE_TEST_TARGET} PRIVATE
+    target_link_libraries(${BW_TREE_TEST_TARGET} PRIVATE
       PkgConfig::JEMALLOC
     )
   endif()
@@ -94,7 +86,8 @@ endfunction()
 
 # add unit tests to build targets
 ADD_BW_TREE_TEST(metadata_test)
-ADD_BW_TREE_TEST(node_test)
 ADD_BW_TREE_TEST(mapping_table_test)
+ADD_BW_TREE_TEST(delta_record_test)
+ADD_BW_TREE_TEST(node_test)
 ADD_BW_TREE_TEST(bw_tree_test)
 ADD_BW_TREE_TEST(bw_tree_multi_thread_test)

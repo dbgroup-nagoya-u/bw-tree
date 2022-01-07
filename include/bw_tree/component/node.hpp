@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef BW_TREE_COMPONENT_NODE_HPP
+#define BW_TREE_COMPONENT_NODE_HPP
 
 #include <utility>
 
 #include "common.hpp"
+#include "delta_record.hpp"
 #include "memory/utility.hpp"
 #include "metadata.hpp"
 
@@ -35,86 +37,72 @@ namespace dbgroup::index::bw_tree::component
 template <class Key, class Comp>
 class Node
 {
-  using Mapping_t = std::atomic<Node *>;
-
- private:
-  /*################################################################################################
-   * Internal variables
-   *##############################################################################################*/
-
-  /// a flag to indicate whether this node is a leaf or internal node.
-  uint16_t node_type_ : 1;
-
-  /// a flag to indicate the types of a delta node.
-  uint16_t delta_type_ : 3;
-
-  /// a blank block for alignment.
-  uint16_t : 0;
-
-  /// the number of records in this node.
-  uint16_t record_count_;
-
-  /// a blank block for alignment.
-  uint64_t : 0;
-
-  /// the pointer to the next node.
-  uintptr_t next_node_;
-
-  /// metadata of a lowest key or a first record in a delta node
-  Metadata low_meta_;
-
-  /// metadata of a highest key or a second record in a delta node
-  Metadata high_meta_;
-
-  /// an actual data block (it starts with record metadata).
-  Metadata meta_array_[0];
-
-  /*################################################################################################
-   * Internal constructors/destructors
-   *##############################################################################################*/
+ public:
+  /*####################################################################################
+   * Public constructors and assignment operators
+   *##################################################################################*/
 
   /**
-   * @brief Construct a new base node object.
+   * @brief Construct an initial root node.
+   *
+   */
+  constexpr Node() : node_type_{NodeType::kLeaf}, delta_type_{DeltaType::kNotDelta} {}
+
+  /**
+   * @brief Construct a new root node.
+   *
+   * @param split_ptr
+   * @param left_page
+   */
+  Node(  //
+      const uintptr_t split_ptr,
+      std::atomic_uintptr_t *left_page)
+      : node_type_{NodeType::kInternal}, delta_type_{DeltaType::kNotDelta}, record_count_{2}
+  {
+    auto *split_delta = reinterpret_cast<const Node *>(split_ptr);
+
+    // set a split-left page
+    auto meta = split_delta->low_meta_;
+    auto &&sep_key = split_delta->GetKey(meta);
+    auto key_len = meta.GetKeyLength();
+    auto offset = SetData(kPageSize, left_page, kWordSize);
+    offset = SetData(offset, sep_key, key_len);
+    meta_array_[0] = Metadata{offset, key_len, key_len + kWordSize};
+
+    // set a split-right page
+    auto right_page = split_delta->template GetPayload<uintptr_t>(meta);
+    offset = SetData(offset, right_page, kWordSize);
+    meta_array_[1] = Metadata{offset, 0, kWordSize};
+  }
+
+  /**
+   * @brief Construct a consolidated base node object.
    *
    * @param node_type a flag to indicate whether a leaf or internal node is constructed.
    * @param record_count the number of records in this node.
    * @param sib_node the pointer to a sibling node.
    */
   Node(  //
-      const NodeType node_type,
-      const size_t record_count,
-      const Mapping_t *sib_node)
-      : node_type_{node_type},
-        delta_type_{DeltaNodeType::kNotDelta},
-        record_count_{static_cast<uint16_t>(record_count)},
-        next_node_{reinterpret_cast<const uintptr_t>(sib_node)}
+      const Node *node,
+      const Metadata high_meta,
+      const uintptr_t sib_page)
+      : node_type_{node->node_type_},
+        delta_type_{DeltaType::kNotDelta},
+        next_{sib_page},
+        low_meta_{node->low_meta_},
+        high_meta_{high_meta}
   {
   }
 
-  /**
-   * @brief Construct a new delta node object.
-   *
-   * @param node_type a flag to indicate whether a leaf or internal node is constructed.
-   * @param delta_type a flag to indicate the type of a constructed delta node.
-   * @param next_node the pointer to a next delta/base node.
-   */
-  Node(  //
-      const NodeType node_type,
-      const DeltaNodeType delta_type)
-      : node_type_{node_type}, delta_type_{delta_type}, next_node_{0}
-  {
-  }
+  Node(const Node &) = delete;
+  Node(Node &&) = delete;
 
- public:
-  /*################################################################################################
-   * Public constructors/destructors
-   *##############################################################################################*/
+  Node &operator=(const Node &) = delete;
+  Node &operator=(Node &&) = delete;
 
-  /**
-   * @brief Construct a new base node object.
-   *
-   */
-  constexpr Node() : node_type_{}, delta_type_{}, record_count_{}, next_node_{} {}
+  /*####################################################################################
+   * Public destructors
+   *##################################################################################*/
 
   /**
    * @brief Destroy the node object.
@@ -122,203 +110,93 @@ class Node
    */
   ~Node() = default;
 
-  Node(const Node &) = delete;
-  Node &operator=(const Node &) = delete;
-  Node(Node &&) = delete;
-  Node &operator=(Node &&) = delete;
-
-  /*################################################################################################
-   * Public node builders
-   *##############################################################################################*/
-
-  static Node *
-  CreateNode(  //
-      const size_t node_size,
-      const NodeType node_type,
-      const size_t record_count,
-      const Mapping_t *sib_node)
-  {
-    return new (::operator new(node_size)) Node{node_type, record_count, sib_node};
-  }
-
-  static void
-  DeleteNode(Node *node)
-  {
-    // release nodes recursively until it reaches a base node
-    while (node != nullptr && node->GetDeltaNodeType() != DeltaNodeType::kNotDelta) {
-      auto cur_node = node;
-      node = cur_node->GetNextNode();
-
-      cur_node->~Node();
-      ::operator delete(cur_node);
-    }
-
-    if (node != nullptr) {
-      node->~Node();
-      ::operator delete(node);
-    }
-  }
-
-  /*################################################################################################
-   * Public delta node builders
-   *##############################################################################################*/
-
-  template <class T>
-  static Node *
-  CreateDeltaNode(  //
-      const NodeType node_type,
-      const DeltaNodeType delta_type,
-      const void *key,
-      const size_t key_length,
-      const T &payload,
-      const size_t payload_length)
-  {
-    const size_t total_length = key_length + payload_length;
-    size_t offset = kHeaderLength + total_length;
-
-    Node *delta = new (::operator new(offset)) Node{node_type, delta_type};
-
-    delta->SetPayload(offset, payload, payload_length);
-    delta->SetKey(offset, key, key_length);
-    delta->SetLowMeta(Metadata{offset, key_length, total_length});
-
-    return delta;
-  }
-
-  static Node *
-  CreateIndexEntryDelta(  //
-      const void *sep_key,
-      const size_t sep_key_len,
-      const Mapping_t *split_page)
-  {
-    const auto total_length = sep_key_len + sizeof(Mapping_t *);
-    const Node *split_node = split_page->load(mo_relax);
-    const auto high_meta = split_node->GetHighMeta();
-    const auto high_key_len = high_meta.GetKeyLength();
-    size_t offset = kHeaderLength + total_length + high_key_len;
-
-    Node *delta = new (::operator new(offset)) Node{NodeType::kInternal, DeltaNodeType::kInsert};
-
-    if (high_key_len == 0) {
-      delta->SetHighMeta(high_meta);
-    } else {
-      const auto high_key = split_node->GetKeyAddr(high_meta);
-      delta->SetKey(offset, high_key, high_key_len);
-      delta->SetHighMeta(Metadata{offset, high_key_len, high_key_len});
-    }
-    delta->SetPayload(offset, split_page, sizeof(Mapping_t *));
-    delta->SetKey(offset, sep_key, sep_key_len);
-    delta->SetLowMeta(Metadata{offset, sep_key_len, total_length});
-
-    return delta;
-  }
-
-  /*################################################################################################
+  /*####################################################################################
    * Public getters/setters
-   *##############################################################################################*/
+   *##################################################################################*/
 
   /**
    * @retval true if this is a leaf node.
    * @retval false if this is an internal node.
    */
-  constexpr bool
-  IsLeaf() const
+  [[nodiscard]] constexpr auto
+  IsLeaf() const  //
+      -> bool
   {
     return node_type_;
   }
 
   /**
-   * @return DeltaNodeType: the type of a delta node.
+   * @retval true if this is a base node.
+   * @retval false if this is a delta record.
    */
-  constexpr DeltaNodeType
-  GetDeltaNodeType() const
+  [[nodiscard]] constexpr auto
+  IsBaseNode() const  //
+      -> bool
   {
-    return static_cast<DeltaNodeType>(delta_type_);
+    return delta_type_ == DeltaType::kNotDelta;
   }
 
   /**
-   * @return size_t: the number of records in this node.
+   * @return the number of records in this node.
    */
-  constexpr size_t
-  GetRecordCount() const
+  [[nodiscard]] constexpr auto
+  GetRecordCount() const  //
+      -> size_t
   {
     return record_count_;
   }
 
-  constexpr Node *
-  GetNextNode() const
+  [[nodiscard]] constexpr auto
+  GetSiblingNode() const  //
+      -> std::atomic_uintptr_t *
   {
-    return const_cast<Node *>(reinterpret_cast<const Node *>(next_node_));
-  }
-
-  constexpr Mapping_t *
-  GetSiblingNode() const
-  {
-    return const_cast<Mapping_t *>(reinterpret_cast<const Mapping_t *>(next_node_));
-  }
-
-  constexpr Metadata
-  GetLowMeta() const
-  {
-    return low_meta_;
-  }
-
-  constexpr Metadata
-  GetHighMeta() const
-  {
-    return high_meta_;
+    return reinterpret_cast<std::atomic_uintptr_t *>(next_);
   }
 
   /**
    * @param position the position of record metadata to be get.
    * @return Metadata: record metadata.
    */
-  constexpr Metadata
-  GetMetadata(const size_t position) const
+  [[nodiscard]] constexpr auto
+  GetMetadata(const size_t position) const  //
+      -> Metadata
   {
     return meta_array_[position];
   }
 
-  constexpr void *
-  GetLowKeyAddr() const
-  {
-    if (low_meta_.GetKeyLength() == 0) return nullptr;
-
-    return ShiftAddress(this, low_meta_.GetOffset());
-  }
-
-  constexpr void *
-  GetHighKeyAddr() const
-  {
-    if (high_meta_.GetKeyLength() == 0) return nullptr;
-
-    return ShiftAddress(this, high_meta_.GetOffset());
-  }
-
   /**
    * @param meta metadata of a corresponding record.
-   * @return auto: an address of a target key.
+   * @return a target key.
    */
-  constexpr void *
-  GetKeyAddr(const Metadata meta) const
+  [[nodiscard]] auto
+  GetKey(const Metadata meta) const  //
+      -> Key
   {
-    return ShiftAddress(this, meta.GetOffset());
+    if constexpr (IsVariableLengthData<Key>()) {
+      return reinterpret_cast<Key>(GetKeyAddr(meta));
+    } else {
+      Key key{};
+      memcpy(&key, GetKeyAddr(meta), sizeof(Key));
+      return key;
+    }
   }
 
   /**
    * @tparam T a class of a target payload.
    * @param meta metadata of a corresponding record.
-   * @return T: a target payload.
+   * @return a target payload.
    */
   template <class T>
-  constexpr T
-  GetPayload(const Metadata meta) const
+  [[nodiscard]] auto
+  GetPayload(const Metadata meta) const  //
+      -> T
   {
-    const auto offset = meta.GetOffset() + meta.GetKeyLength();
     if constexpr (IsVariableLengthData<T>()) {
-      return reinterpret_cast<T>(ShiftAddress(this, offset));
+      return reinterpret_cast<T>(GetPayloadAddr(meta));
     } else {
-      return *reinterpret_cast<T *>(ShiftAddress(this, offset));
+      T payload{};
+      memcpy(&payload, GetPayloadAddr(meta), sizeof(T));
+      return payload;
     }
   }
 
@@ -326,106 +204,52 @@ class Node
    * @brief Copy a target payload to a specified reference.
    *
    * @param meta metadata of a corresponding record.
-   * @param out_payload a reference to be copied a target payload.
-   */
-  template <class Payload>
-  void
-  CopyPayload(  //
-      const Metadata meta,
-      Payload &out_payload) const
-  {
-    const auto offset = meta.GetOffset() + meta.GetKeyLength();
-    if constexpr (IsVariableLengthData<Payload>()) {
-      const auto payload_length = meta.GetPayloadLength();
-      out_payload = reinterpret_cast<Payload>(::operator new(payload_length));
-      memcpy(out_payload, ShiftAddress(this, offset), payload_length);
-    } else {
-      memcpy(&out_payload, ShiftAddress(this, offset), sizeof(Payload));
-    }
-  }
-
-  void
-  SetNextNode(const Node *next_node)
-  {
-    next_node_ = reinterpret_cast<const uintptr_t>(next_node);
-  }
-
-  void
-  SetRecordCount(const size_t rec_num)
-  {
-    record_count_ = rec_num;
-  }
-
-  constexpr void
-  SetLowMeta(const Metadata meta)
-  {
-    low_meta_ = meta;
-  }
-
-  constexpr void
-  SetHighMeta(const Metadata meta)
-  {
-    high_meta_ = meta;
-  }
-
-  /**
-   * @brief Set record metadata.
-   *
-   * @param position the position of metadata to be set.
-   * @param new_meta metadata to be set.
-   */
-  constexpr void
-  SetMetadata(  //
-      const size_t position,
-      const Metadata meta)
-  {
-    meta_array_[position] = meta;
-  }
-
-  /**
-   * @brief Set a target key.
-   *
-   * @param offset an offset to set a target key.
-   * @param key a target key to be set.
-   * @param key_length the length of a target key.
-   */
-  void
-  SetKey(  //
-      size_t &offset,
-      const void *key,
-      const size_t key_length)
-  {
-    offset -= key_length;
-    memcpy(ShiftAddress(this, offset), key, key_length);
-  }
-
-  /**
-   * @brief Set a target payload.
-   *
-   * @tparam T a class of a target payload.
-   * @param offset an offset to set a target payload.
-   * @param payload a target payload to be set.
-   * @param payload_length the length of a target payload.
    */
   template <class T>
-  void
-  SetPayload(  //
-      size_t &offset,
-      const T &payload,
-      const size_t payload_length)
+  [[nodiscard]] auto
+  CopyPayload(const size_t pos) const  //
+      -> T
   {
     if constexpr (IsVariableLengthData<T>()) {
-      offset -= payload_length;
-      memcpy(ShiftAddress(this, offset), payload, payload_length);
+      const auto pay_len = meta_array_[pos].GetPayloadLength();
+      auto payload = reinterpret_cast<T>(::operator new(pay_len));
+      memcpy(payload, GetPayloadAddr(meta_array_[pos]), pay_len);
+      return payload;
     } else {
-      offset -= sizeof(T);
-      memcpy(ShiftAddress(this, offset), &payload, sizeof(T));
+      T payload{};
+      memcpy(&payload, GetPayloadAddr(meta_array_[pos]), sizeof(T));
+      return payload;
     }
   }
 
-  /*################################################################################################
-   * Public utility functions
-   *##############################################################################################*/
+  [[nodiscard]] auto
+  GetPageSize(  //
+      const std::optional<Key> &high_key,
+      const Metadata high_meta) const  //
+      -> std::pair<size_t, size_t>
+  {
+    if (record_count_ == 0) return {high_meta.GetKeyLength(), 0};
+
+    size_t rec_num{};
+    if (high_key) {
+      auto [rc, pos] = SearchRecord(*high_key);
+      rec_num = (rc == NodeRC::kKeyNotExist) ? pos : pos + 1;
+    } else {
+      rec_num = record_count_;
+    }
+    auto end_offset = meta_array_[0].GetOffset() + meta_array_[0].GetTotalLength();
+    auto begin_offset = meta_array_[rec_num - 1].GetOffset();
+
+    auto size = sizeof(Metadata) * rec_num                              // metadata
+                + end_offset - begin_offset                             // records
+                + low_meta_.GetKeyLength() + high_meta.GetKeyLength();  // low/high keys
+
+    return {size, rec_num};
+  }
+
+  /*####################################################################################
+   * Public utilities
+   *##################################################################################*/
 
   /**
    * @brief Get the position of a specified key by using binary search. If there is no
@@ -437,75 +261,402 @@ class Node
    * @return std::pair<ReturnCode, size_t>: record's existence and the position of a
    * specified key if exist.
    */
-  std::pair<ReturnCode, size_t>
-  SearchRecord(  //
-      const void *key,
-      const bool range_is_closed) const
+  [[nodiscard]] auto
+  SearchRecord(const Key &key) const  //
+      -> std::pair<NodeRC, size_t>
   {
-    int64_t begin_idx = 0;
-    int64_t end_idx = GetRecordCount() - 1;
-    int64_t idx = (begin_idx + end_idx) >> 1;
-    ReturnCode rc = ReturnCode::kKeyNotExist;
+    int64_t begin_pos = 0;
+    int64_t end_pos = record_count_ - 1;
+    while (begin_pos <= end_pos) {
+      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
 
-    while (begin_idx <= end_idx) {
-      const auto meta = GetMetadata(idx);
-      const auto idx_key = GetKeyAddr(meta);
+      const auto &index_key = GetKey(meta_array_[pos]);
 
-      if (meta.GetKeyLength() == 0 || LT<Key, Comp>(key, idx_key)) {
-        // a target key is in a left side
-        end_idx = idx - 1;
-      } else if (LT<Key, Comp>(idx_key, key)) {
-        // a target key is in a right side
-        begin_idx = idx + 1;
-      } else {
-        // find an equivalent key
-        if (!range_is_closed) ++idx;
-        begin_idx = idx;
-        rc = ReturnCode::kKeyExist;
-        break;
+      if (Comp{}(key, index_key)) {  // a target key is in a left side
+        end_pos = pos - 1;
+      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
+        begin_pos = pos + 1;
+      } else {  // find an equivalent key
+        return {NodeRC::kKeyExist, pos};
       }
-
-      idx = (begin_idx + end_idx) >> 1;
     }
 
-    return {rc, begin_idx};
+    return {NodeRC::kKeyNotExist, begin_pos};
+  }
+
+  /**
+   * @brief Get the position of a specified key by using binary search. If there is no
+   * specified key, this returns the minimum metadata index that is greater than the
+   * specified key
+   *
+   * @param key a target key.
+   * @param range_is_closed a flag to indicate that a target key is included.
+   * @return the position of a specified key.
+   */
+  [[nodiscard]] auto
+  SearchChild(  //
+      const Key &key,
+      const bool range_is_closed) const  //
+      -> size_t
+  {
+    int64_t begin_pos = 0;
+    int64_t end_pos = record_count_ - 2;
+    while (begin_pos <= end_pos) {
+      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
+
+      const auto &index_key = GetKey(meta_array_[pos]);
+
+      if (Comp{}(key, index_key)) {  // a target key is in a left side
+        end_pos = pos - 1;
+      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
+        begin_pos = pos + 1;
+      } else {  // find an equivalent key
+        if (!range_is_closed) ++pos;
+        begin_pos = pos;
+        break;
+      }
+    }
+
+    return begin_pos;
   }
 
   void
-  CopyRecordFrom(  //
-      const size_t position,
-      size_t &offset,
-      const Node *orig_node,
-      const Metadata meta)
+  LeafConsolidate(  //
+      const Node *node,
+      const std::vector<std::pair<Key, uintptr_t>> &records,
+      const std::optional<Key> &high_key,
+      size_t offset,
+      const size_t base_rec_num)
   {
-    const auto total_length = meta.GetTotalLength();
-    offset -= total_length;
+    if (low_meta_.GetKeyLength() > 0) {
+      offset = CopyKeyFrom(node, low_meta_, offset);
+    }
+    low_meta_.SetOffset(offset);
 
-    // copy a record
-    auto src_addr = ShiftAddress(orig_node, meta.GetOffset());
-    auto dest_addr = ShiftAddress(this, offset);
-    memcpy(dest_addr, src_addr, total_length);
+    // copy the lowest key
+    if (high_key) {
+      offset = SetData(offset, *high_key, high_meta_.GetKeyLength());
+    }
+    high_meta_.SetOffset(offset);
 
-    // set record metadata
-    SetMetadata(position, Metadata{offset, meta.GetKeyLength(), total_length});
+    // perform merge-sort to consolidate a node
+    const auto new_rec_num = records.size();
+    size_t rec_count = 0;
+    size_t j = 0;
+    Node *rec{};
+    for (size_t i = 0; i < base_rec_num; ++i) {
+      // copy new records
+      const auto meta = node->meta_array_[i];
+      const auto &key = (meta.GetKeyLength() > 0) ? std::make_optional(node->GetKey(meta))  //
+                                                  : std::nullopt;
+      for (; j < new_rec_num; ++j) {
+        const auto &[rec_key, rec_ptr] = records[j];
+        rec = reinterpret_cast<Node *>(rec_ptr);
+        if (key && !Comp{}(rec_key, *key)) break;
+
+        // check a new record has any payload
+        if (rec->HasPayload()) {
+          offset = CopyRecordFrom(rec, rec->low_meta_, rec_count++, offset);
+        }
+      }
+
+      // check a new record is updated one
+      if (j < new_rec_num && !Comp{}(*key, records[j].first)) {
+        if (rec->HasPayload()) {
+          offset = CopyRecordFrom(rec, rec->low_meta_, rec_count++, offset);
+        }
+        ++j;
+      } else {
+        offset = CopyRecordFrom(node, meta, rec_count++, offset);
+      }
+    }
+
+    // copy remaining new records
+    for (; j < new_rec_num; ++j) {
+      rec = reinterpret_cast<Node *>(records[j].second);
+      if (rec->HasPayload()) {
+        offset = CopyRecordFrom(rec, rec->low_meta_, rec_count++, offset);
+      }
+    }
+
+    // set header information
+    record_count_ = rec_count;
   }
 
   void
-  CopyRecordFrom(  //
-      const size_t position,
-      size_t &offset,
-      const Node *key_node,
-      const Metadata key_meta,
-      const Node *payload_node,
-      const Metadata payload_meta)
+  InternalConsolidate(  //
+      const Node *node,
+      const std::vector<std::pair<Key, uintptr_t>> &records,
+      const std::optional<Key> &high_key,
+      size_t offset,
+      const size_t base_rec_num)
   {
-    const auto key_len = key_meta.GetKeyLength();
-    const Mapping_t *ins_page = payload_node->template GetPayload<Mapping_t *>(payload_meta);
+    if (low_meta_.GetKeyLength() > 0) {
+      offset = CopyKeyFrom(node, low_meta_, offset);
+    }
+    low_meta_.SetOffset(offset);
 
-    SetPayload(offset, ins_page, sizeof(Mapping_t *));
-    SetKey(offset, key_node->GetKeyAddr(key_meta), key_len);
-    SetMetadata(position, Metadata{offset, key_len, key_len + sizeof(Mapping_t *)});
+    // copy the lowest key
+    if (high_key) {
+      offset = SetData(offset, *high_key, high_meta_.GetKeyLength());
+    }
+    high_meta_.SetOffset(offset);
+
+    // perform merge-sort to consolidate a node
+    const auto new_rec_num = records.size();
+    size_t rec_count = 0;
+    size_t j = 0;
+    Node *rec{};
+    for (size_t i = 0; i < base_rec_num; ++i) {
+      // copy a payload of a base node in advance to swap that of a new index entry
+      auto meta = node->meta_array_[i];
+      offset = CopyPayloadFrom(node, meta, offset);
+
+      // insert new index entries
+      const auto &key = (meta.GetKeyLength() > 0) ? std::make_optional(node->GetKey(meta))  //
+                                                  : std::nullopt;
+      for (; j < new_rec_num; ++j) {
+        const auto &[rec_key, rec_ptr] = records[j];
+        rec = reinterpret_cast<Node *>(rec_ptr);
+        if (key && !Comp{}(rec_key, *key)) break;
+
+        // check a new record has any payload
+        if (rec->HasPayload()) {
+          auto rec_meta = rec->low_meta_;
+          offset = CopyKeyFrom(rec, rec_meta, offset);
+          SetMetadata(rec_meta, rec_count++, offset);
+          offset = CopyPayloadFrom(rec, rec_meta, offset);
+        }
+      }
+
+      // Note: there are no duplicate keys in internal nodes
+      offset = CopyKeyFrom(node, meta, offset);
+      SetMetadata(meta, rec_count++, offset);
+    }
+
+    // copy remaining delta records
+    if (j < new_rec_num) {
+      // copy a payload of a base node in advance to swap that of a new index entry
+      offset = CopyPayloadFrom(node, node->meta_array_[base_rec_num], offset);
+
+      // insert new index entries
+      const auto tmp_rec_num = new_rec_num - 1;
+      for (; j < tmp_rec_num; ++j) {
+        rec = reinterpret_cast<Node *>(records[j].second);
+
+        // check a new record has any payload
+        if (rec->HasPayload()) {
+          auto rec_meta = rec->low_meta_;
+          offset = CopyKeyFrom(rec, rec_meta, offset);
+          SetMetadata(rec_meta, rec_count++, offset);
+          offset = CopyPayloadFrom(rec, rec_meta, offset);
+        }
+      }
+
+      // Note: there are no duplicate keys in internal nodes
+      rec = reinterpret_cast<Node *>(records[j].second);
+      auto rec_meta = rec->low_meta_;
+      offset = CopyKeyFrom(rec, rec_meta, offset);
+      SetMetadata(rec_meta, rec_count++, offset);
+    }
+
+    // set header information
+    record_count_ = rec_count;
   }
+
+  auto
+  Split()  //
+      -> std::pair<Key, size_t>
+  {
+    // get the number of records and metadata of a separator key
+    const auto l_num = record_count_ >> 1UL;
+    record_count_ -= l_num;
+    low_meta_ = meta_array_[l_num - 1];
+
+    // shift metadata to use a consolidated node as a split-right node
+    memmove(&meta_array_[0], &meta_array_[l_num], sizeof(Metadata) * record_count_);
+
+    return {GetKey(low_meta_), low_meta_.GetKeyLength()};
+  }
+
+ private:
+  /*####################################################################################
+   * Internal getters setters
+   *##################################################################################*/
+
+  [[nodiscard]] constexpr auto
+  HasPayload() const  //
+      -> bool
+  {
+    return delta_type_ == DeltaType::kInsert || delta_type_ == DeltaType::kModify;
+  }
+
+  /**
+   * @param meta metadata of a corresponding record.
+   * @return an address of a target key.
+   */
+  [[nodiscard]] constexpr auto
+  GetKeyAddr(const Metadata meta) const  //
+      -> void *
+  {
+    return ShiftAddr(this, meta.GetOffset());
+  }
+
+  /**
+   * @param meta metadata of a corresponding record.
+   * @return an address of a target payload.
+   */
+  [[nodiscard]] constexpr auto
+  GetPayloadAddr(const Metadata meta) const  //
+      -> void *
+  {
+    return ShiftAddr(this, meta.GetOffset() + meta.GetKeyLength());
+  }
+
+  void
+  SetMetadata(  //
+      Metadata meta,
+      const size_t rec_num,
+      const size_t offset)
+  {
+    meta.SetOffset(offset);
+    meta_array_[rec_num] = meta;
+  }
+
+  /**
+   * @brief Set a target data directly.
+   *
+   * @tparam T a class of data.
+   * @param offset an offset to set a target data.
+   * @param payload a target payload to be set.
+   * @param payload_length the length of a target payload.
+   */
+  template <class T>
+  auto
+  SetData(  //
+      size_t offset,
+      const T &data,
+      [[maybe_unused]] const size_t data_len)  //
+      -> size_t
+  {
+    if constexpr (IsVariableLengthData<T>()) {
+      offset -= data_len;
+      memcpy(ShiftAddr(this, offset), data, data_len);
+    } else {
+      offset -= sizeof(T);
+      memcpy(ShiftAddr(this, offset), &data, sizeof(T));
+    }
+
+    return offset;
+  }
+
+  /*####################################################################################
+   * Internal utilities
+   *##################################################################################*/
+
+  /**
+   * @brief Copy a record from a base node.
+   *
+   * @param node an original node that has a target record.
+   * @param meta the corresponding metadata of a target record.
+   * @param offset the current offset of this node.
+   * @return the updated offset value.
+   */
+  auto
+  CopyKeyFrom(  //
+      const Node *node,
+      const Metadata meta,
+      size_t offset)  //
+      -> size_t
+  {
+    // copy a record from the given node
+    const auto key_len = meta.GetKeyLength();
+    offset -= key_len;
+    memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
+
+    return offset;
+  }
+
+  /**
+   * @brief Copy a record from a base node.
+   *
+   * @param node an original node that has a target record.
+   * @param meta the corresponding metadata of a target record.
+   * @param offset the current offset of this node.
+   * @return the updated offset value.
+   */
+  auto
+  CopyPayloadFrom(  //
+      const Node *node,
+      const Metadata meta,
+      size_t offset)  //
+      -> size_t
+  {
+    // copy a record from the given node
+    const auto pay_len = meta.GetPayloadLength();
+    offset -= pay_len;
+    memcpy(ShiftAddr(this, offset), node->GetPayloadAddr(meta), pay_len);
+
+    return offset;
+  }
+
+  /**
+   * @brief Copy a record from a delta record.
+   *
+   * @param rec an original delta record.
+   * @param rec_count the current number of records in this node.
+   * @param offset the current offset of this node.
+   * @return the updated offset value.
+   */
+  auto
+  CopyRecordFrom(  //
+      const Node *node,
+      Metadata meta,
+      const size_t rec_num,
+      size_t offset)  //
+      -> size_t
+  {
+    // copy a record from the given delta record
+    const auto rec_len = meta.GetTotalLength();
+    offset -= rec_len;
+    memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), rec_len);
+
+    // update metadata
+    SetMetadata(meta, rec_num, offset);
+
+    return offset;
+  }
+
+  /*####################################################################################
+   * Internal variables
+   *##################################################################################*/
+
+  /// a flag to indicate whether this node is a leaf or internal node.
+  uint16_t node_type_ : 1;
+
+  /// a flag to indicate the types of a delta node.
+  uint16_t delta_type_ : 3;
+
+  /// a blank block for alignment.
+  uint16_t : 0;
+
+  /// the number of records in this node.
+  uint16_t record_count_{0};
+
+  /// a blank block for alignment.
+  uint64_t : 0;
+
+  /// the pointer to the next node.
+  uintptr_t next_{kNullPtr};
+
+  /// metadata of a lowest key or a first record in a delta node
+  Metadata low_meta_{kPageSize, 0, 0};
+
+  /// metadata of a highest key or a second record in a delta node
+  Metadata high_meta_{kPageSize, 0, 0};
+
+  /// an actual data block (it starts with record metadata).
+  Metadata meta_array_[0];
 };
 
 }  // namespace dbgroup::index::bw_tree::component
@@ -520,3 +671,5 @@ Delete(::dbgroup::index::bw_tree::component::Node<Key, Comp> *obj)
 }
 
 }  // namespace dbgroup::memory
+
+#endif  // BW_TREE_COMPONENT_NODE_HPP
