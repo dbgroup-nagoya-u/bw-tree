@@ -78,7 +78,7 @@ class BwTree
 
     RecordIterator(  //
         BwTree_t *bw_tree,
-        NodeGC_t &gc,
+        NodeGC_t *gc,
         Node_t *node,
         size_t begin_pos,
         size_t end_pos,
@@ -93,6 +93,14 @@ class BwTree
     {
     }
 
+    RecordIterator(  //
+        Node_t *node,
+        size_t begin_pos,
+        size_t end_pos)
+        : node_{node}, record_count_{end_pos}, current_pos_{begin_pos}
+    {
+    }
+
     RecordIterator(const RecordIterator &) = delete;
     RecordIterator(RecordIterator &&) = delete;
 
@@ -102,12 +110,11 @@ class BwTree
     operator=(RecordIterator &&obj) noexcept  //
         -> RecordIterator &
     {
-      auto *old_node = node_;
       node_ = obj.node_;
-      obj.node_ = old_node;
+      obj.node_ = nullptr;
       record_count_ = obj.record_count_;
       current_pos_ = obj.current_pos_;
-      current_meta_ = obj.current_meta_;
+      current_meta_ = node_->GetMetadata(current_pos_);
 
       return *this;
     }
@@ -116,7 +123,12 @@ class BwTree
      * Public destructors
      *################################################################################*/
 
-    ~RecordIterator() { gc_.AddGarbage(node_); }
+    ~RecordIterator()
+    {
+      if (node_ != nullptr) {
+        gc_->AddGarbage(node_);
+      }
+    }
 
     /*##################################################################################
      * Public operators for iterators
@@ -167,7 +179,7 @@ class BwTree
       if (sib_page == nullptr) return false;
 
       // go to the sibling node and continue scaning
-      *this = bw_tree_->SiblingScan(sib_page, end_key_);
+      *this = bw_tree_->SiblingScan(sib_page, node_, end_key_);
       return HasNext();
     }
 
@@ -200,7 +212,7 @@ class BwTree
     BwTree_t *bw_tree_{nullptr};
 
     /// garbage collector
-    NodeGC_t &gc_{};
+    NodeGC_t *gc_{nullptr};
 
     /// the pointer to a node that includes partial scan results
     Node_t *node_{nullptr};
@@ -357,7 +369,7 @@ class BwTree
       }
     }
 
-    return RecordIterator{this, gc_, node, begin_pos, end_pos, end_key};
+    return RecordIterator{this, &gc_, node, begin_pos, end_pos, end_key};
   }
 
   /*####################################################################################
@@ -780,11 +792,12 @@ class BwTree
   auto
   SiblingScan(  //
       const std::atomic_uintptr_t *page_id,
+      Node_t *page,
       const std::optional<std::pair<const Key &, bool>> &end_key)  //
       -> RecordIterator
   {
     auto cur_head = page_id->load(std::memory_order_acquire);
-    auto *node = Consolidate(cur_head).first;
+    auto *node = Consolidate(cur_head, page).first;
 
     auto rec_num = node->GetRecordCount();
     if (end_key) {
@@ -792,10 +805,11 @@ class BwTree
       if (!Comp{}(node->GetKey(node->GetMetadata(rec_num - 1)), e_key)) {
         auto [rc, pos] = node->SearchRecord(e_key);
         rec_num = (rc == NodeRC::kKeyExist && e_closed) ? pos + 1 : pos;
+        node->RemoveSideLink();
       }
     }
 
-    return RecordIterator{this, gc_, node, 0, rec_num, end_key};
+    return RecordIterator{node, 0, rec_num};
   }
 
   /*####################################################################################
@@ -844,7 +858,9 @@ class BwTree
   }
 
   auto
-  Consolidate(const uintptr_t head)  //
+  Consolidate(  //
+      const uintptr_t head,
+      void *page = nullptr)  //
       -> std::pair<Node_t *, size_t>
   {
     // sort delta records
@@ -856,7 +872,13 @@ class BwTree
     // reserve a page for a consolidated node
     auto [block_size, rec_num] = node->GetPageSize(high_key, h_meta);
     auto size = kHeaderLength + block_size + diff;
-    auto *new_node = new (GetNodePage(size)) Node_t{node, h_meta, sib_ptr};
+    if (page == nullptr) {
+      page = GetNodePage(size);
+    } else if (size > kPageSize) {
+      AddToGC(reinterpret_cast<uintptr_t>(page));
+      page = GetNodePage(size);
+    }
+    auto *new_node = new (page) Node_t{node, h_meta, sib_ptr};
     if (new_node->IsLeaf()) {
       new_node->LeafConsolidate(node, sorted, high_key, size, rec_num);
     } else {

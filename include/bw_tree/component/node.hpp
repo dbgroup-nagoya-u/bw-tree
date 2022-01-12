@@ -251,6 +251,12 @@ class Node
    * Public utilities
    *##################################################################################*/
 
+  void
+  RemoveSideLink()
+  {
+    next_ = kNullPtr;
+  }
+
   /**
    * @brief Get the position of a specified key by using binary search. If there is no
    * specified key, this returns the minimum metadata position that is greater than the
