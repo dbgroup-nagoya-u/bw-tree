@@ -37,25 +37,14 @@ if(NOT TARGET bw_tree::bw_tree)
   target_include_directories(bw_tree INTERFACE
     "${BW_TREE_SOURCE_DIR}/include"
   )
+  target_compile_definitions(bw_tree INTERFACE
+    $<$<BOOL:${BW_TREE_PAGE_SIZE}>:BW_TREE_PAGE_SIZE>
+    $<$<BOOL:${BW_TREE_MAX_DELTA_NODE_NUM}>:BW_TREE_MAX_DELTA_NODE_NUM>
+    $<$<BOOL:${BW_TREE_MAX_VARIABLE_DATA_SIZE}>:BW_TREE_MAX_VARIABLE_DATA_SIZE>
+  )
   target_link_libraries(bw_tree INTERFACE
     memory_manager::memory_manager
   )
-
-  #------------------------------------------------------------------------------------#
-  # Add compile options
-  #------------------------------------------------------------------------------------#
-
-  if(DEFINED BW_TREE_PAGE_SIZE)
-    target_compile_definitions(bw_tree INTERFACE
-      BW_TREE_PAGE_SIZE=${BW_TREE_PAGE_SIZE}
-    )
-  endif()
-
-  if(DEFINED BW_TREE_MAX_DELTA_NODE_NUM)
-    target_compile_definitions(bw_tree INTERFACE
-      BW_TREE_MAX_DELTA_NODE_NUM=${BW_TREE_MAX_DELTA_NODE_NUM}
-    )
-  endif()
 endif()
 
 #--------------------------------------------------------------------------------------#
