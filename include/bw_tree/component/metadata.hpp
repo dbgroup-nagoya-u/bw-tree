@@ -127,7 +127,7 @@ class Metadata
    *##################################################################################*/
 
   /// an offset to a corresponding record.
-  uint16_t offset_{};
+  uint32_t offset_{};
 
   /// the length of a key in a corresponding record.
   uint16_t key_length_{};
