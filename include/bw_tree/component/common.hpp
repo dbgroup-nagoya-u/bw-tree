@@ -83,7 +83,7 @@ enum DeltaType : uint16_t
  *################################################################################################*/
 
 /// Header length in bytes.
-constexpr size_t kHeaderLength = 28;
+constexpr size_t kHeaderLength = 4 * kWordSize;
 
 constexpr bool kClosed = true;
 
