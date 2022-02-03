@@ -48,7 +48,7 @@ class DeltaRecord
    *##################################################################################*/
 
   /**
-   * @brief Construct a new delta record for leaf-insert/modify/delete.
+   * @brief Construct a new delta record for leaf-insert/modify.
    *
    * @tparam T a target payload class.
    * @param delta_type
@@ -64,11 +64,28 @@ class DeltaRecord
       const size_t key_len,
       const T &payload,
       const size_t pay_len)
-      : node_type_{NodeType::kLeaf}, delta_type_{delta_type}
+      : node_type_{NodeType::kLeaf},
+        delta_type_{delta_type},
+        meta_{kHeaderLength, key_len, key_len + pay_len}
   {
-    meta_ = Metadata{kHeaderLength, key_len, key_len + pay_len};
     auto offset = SetData(kHeaderLength, key, key_len);
     SetData(offset, payload, pay_len);
+  }
+
+  /**
+   * @brief Construct a new delta record for leaf-delete.
+   *
+   * @param key
+   * @param key_length
+   */
+  DeltaRecord(  //
+      const Key &key,
+      const size_t key_len)
+      : node_type_{NodeType::kLeaf},
+        delta_type_{DeltaType::kDelete},
+        meta_{kHeaderLength, key_len, key_len}
+  {
+    SetData(kHeaderLength, key, key_len);
   }
 
   /**
