@@ -549,17 +549,43 @@ class BwTree
    * bytes.
    *
    * @param key a target key to be written.
-   * @param key_length the length of a target key.
+   * @param key_len the length of a target key.
    * @retval kSuccess if deleted.
    * @retval kKeyNotExist if a specified key does not exist.
    */
   auto
   Delete(  //
       [[maybe_unused]] const Key &key,
-      [[maybe_unused]] const size_t key_length = sizeof(Key))  //
+      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    // not implemented yet
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
+    // traverse to a target leaf node
+    consol_page_ = nullptr;
+    auto &&stack = SearchLeafNode(key, kClosed);
+
+    // insert a delta record
+    auto *rec = new (GetRecPage()) Delta_t{key, key_len};
+    auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
+    auto prev_head = kNullPtr;
+    while (true) {
+      // check whether the target node includes incomplete SMOs
+      auto head = ValidateNode(key, kClosed, prev_head, stack);
+
+      // check target key/value existence
+      const auto rc = CheckExistence(key, stack).second;
+      if (rc == NodeRC::kKeyNotExist) return ReturnCode::kKeyNotExist;
+
+      // try to insert the delta record
+      rec->SetNext(head);
+      prev_head = head;
+      if (stack.back()->compare_exchange_weak(head, rec_ptr, std::memory_order_release)) break;
+    }
+
+    if (consol_page_ != nullptr) {
+      TryConsolidation(consol_page_, key, kClosed, stack);
+    }
 
     return ReturnCode::kSuccess;
   }

@@ -193,6 +193,17 @@ class BwTreeFixture : public testing::Test
     EXPECT_EQ(expected_rc, rc);
   }
 
+  void
+  VerifyDelete(  //
+      const size_t key_id,
+      const bool expect_success)
+  {
+    ReturnCode expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
+
+    auto rc = bw_tree_->Delete(keys_[key_id], kKeyLen);
+    EXPECT_EQ(expected_rc, rc);
+  }
+
   /*####################################################################################
    * Internal member variables
    *##################################################################################*/
@@ -451,5 +462,36 @@ TYPED_TEST(BwTreeFixture, UpdateNotInsertedKeysFail)
 //     TestFixture::VerifyRead(i, i, kExpectFailed);
 //   }
 // }
+
+/*--------------------------------------------------------------------------------------
+ * Update operation
+ *------------------------------------------------------------------------------------*/
+
+TYPED_TEST(BwTreeFixture, DeleteWithDuplicateKeysReadFail)
+{
+  const size_t rec_num = TestFixture::kMaxRecNumForTest;
+
+  for (size_t i = 0; i < rec_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+  for (size_t i = 0; i < rec_num; ++i) {
+    TestFixture::VerifyDelete(i, kExpectSuccess);
+  }
+  for (size_t i = 0; i < rec_num; ++i) {
+    TestFixture::VerifyRead(i, i, kExpectFailed);
+  }
+}
+
+TYPED_TEST(BwTreeFixture, DeleteNotInsertedKeysFail)
+{
+  const size_t rec_num = TestFixture::kMaxRecNumForTest;
+
+  for (size_t i = 0; i < rec_num; ++i) {
+    TestFixture::VerifyDelete(i, kExpectFailed);
+  }
+  for (size_t i = 0; i < rec_num; ++i) {
+    TestFixture::VerifyRead(i, i, kExpectFailed);
+  }
+}
 
 }  // namespace dbgroup::index::bw_tree::test

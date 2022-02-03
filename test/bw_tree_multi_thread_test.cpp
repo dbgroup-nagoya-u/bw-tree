@@ -42,6 +42,8 @@ struct KeyPayload {
  *####################################################################################*/
 
 constexpr size_t kGCTime = 1000;
+constexpr bool kExpectSuccess = true;
+constexpr bool kExpectFailed = false;
 
 /*######################################################################################
  * Fixture class definition
@@ -131,7 +133,7 @@ class BwTreeFixture : public testing::Test
       case WriteType::kUpdate:
         return index_->Update(key, payload, kKeyLen, kPayLen);
       case WriteType::kDelete:
-        // return index_->Delete(key, kKeyLen);
+        return index_->Delete(key, kKeyLen);
       case WriteType::kWrite:
       default:
         return index_->Write(key, payload, kKeyLen, kPayLen);
@@ -240,7 +242,7 @@ class BwTreeFixture : public testing::Test
   VerifyRead(  //
       const size_t key_id,
       const size_t expected_id,
-      const bool expect_success = true)
+      const bool expect_success)
   {
     const auto read_val = index_->Read(keys_[key_id]);
     if (expect_success) {
@@ -264,7 +266,7 @@ class BwTreeFixture : public testing::Test
 
     auto &&written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kWrite);
     for (auto &&id : written_ids) {
-      VerifyRead(id, id);
+      VerifyRead(id, id, kExpectSuccess);
     }
   }
 
@@ -275,7 +277,7 @@ class BwTreeFixture : public testing::Test
 
     auto &&written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kInsert);
     for (auto &&id : written_ids) {
-      VerifyRead(id, id);
+      VerifyRead(id, id, kExpectSuccess);
     }
 
     written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kInsert);
@@ -298,7 +300,27 @@ class BwTreeFixture : public testing::Test
 
     EXPECT_EQ(written_ids.size(), updated_ids.size());
     for (auto &&id : updated_ids) {
-      VerifyRead(id, id + 1);
+      VerifyRead(id, id + 1, kExpectSuccess);
+    }
+  }
+
+  void
+  VerifyDelete()
+  {
+    const size_t write_num = (kKeyNumForTest - 1) / kThreadNum;
+
+    auto &&written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kDelete);
+    EXPECT_EQ(0, written_ids.size());
+
+    written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kInsert);
+    auto &&deleted_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kDelete);
+
+    std::sort(deleted_ids.begin(), deleted_ids.end());
+    deleted_ids.erase(std::unique(deleted_ids.begin(), deleted_ids.end()), deleted_ids.end());
+
+    EXPECT_EQ(written_ids.size(), deleted_ids.size());
+    for (auto &&id : deleted_ids) {
+      VerifyRead(id, id, kExpectFailed);
     }
   }
 
@@ -351,6 +373,11 @@ TYPED_TEST(BwTreeFixture, InsertWithMultiThreadsReadInsertedPayloads)
 TYPED_TEST(BwTreeFixture, UpdateWithMultiThreadsReadUpdatedPayloads)
 {  //
   TestFixture::VerifyUpdate();
+}
+
+TYPED_TEST(BwTreeFixture, DeleteWithMultiThreadsReadDeletedKeysFail)
+{  //
+  TestFixture::VerifyDelete();
 }
 
 }  // namespace dbgroup::index::bw_tree::test
