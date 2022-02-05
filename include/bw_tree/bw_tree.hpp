@@ -863,7 +863,9 @@ class BwTree
 
       // perform consolidation
       auto [consol_node, size] = Consolidate(cur_head);
-      if (size <= kPageSize) {
+      if (size <= kMinNodeSize) {  // perform merging
+        // TryMerge();
+      } else if (size <= kPageSize) {  // perform consolidation
         new_head = reinterpret_cast<uintptr_t>(consol_node);
         break;
       }
@@ -1010,6 +1012,12 @@ class BwTree
       return;
     }
     stack.emplace_back(new_root_p);
+  }
+
+  void TryMerge(  //
+  )
+  {
+    //
   }
 
   /*####################################################################################
