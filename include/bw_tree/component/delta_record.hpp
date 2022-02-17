@@ -89,17 +89,17 @@ class DeltaRecord
   }
 
   /**
-   * @brief Construct a new delta record for split deltas.
+   * @brief Construct a new delta record for split.
    *
    * @param split_delta
    */
   DeltaRecord(  //
       const uintptr_t right_ptr,
-      const uintptr_t sib_page,
+      const uintptr_t sib_page_id,
       const uintptr_t next)
       : delta_type_{DeltaType::kSplit}, next_{next}
   {
-    auto *right_node = reinterpret_cast<DeltaRecord *>(right_ptr);
+    const auto *right_node = reinterpret_cast<const DeltaRecord *>(right_ptr);
     node_type_ = right_node->node_type_;
 
     // copy a lowest key
@@ -108,12 +108,12 @@ class DeltaRecord
     memcpy(&data_block_, right_node->GetKeyAddr(right_node->meta_), key_len);
 
     // set a sibling node
-    const auto offset = SetData(kHeaderLength + key_len, sib_page, kWordSize);
+    const auto offset = SetData(kHeaderLength + key_len, sib_page_id, kWordSize);
 
     // copy a highest key
     key_len = right_node->high_key_meta_.GetKeyLength();
     high_key_meta_ = Metadata{offset, key_len, key_len};
-    memcpy(ShiftAddr(this, offset), right_node->GetKeyAddr(right_node->meta_), key_len);
+    memcpy(ShiftAddr(this, offset), right_node->GetKeyAddr(right_node->high_key_meta_), key_len);
   }
 
   /**
