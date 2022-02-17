@@ -131,6 +131,45 @@ class DeltaRecord
     memcpy(&data_block_, &(delta->data_block_), rec_len);
   }
 
+  /**
+   * @brief Construct a new delta record for removing-node.
+   *
+   * @param next a pointer to the removed node.
+   */
+  explicit DeltaRecord(const uintptr_t next) : delta_type_{DeltaType::kRemoveNode}, next_{next}
+  {
+    auto *removed_node = reinterpret_cast<DeltaRecord *>(next);
+    node_type_ = removed_node->node_type_;
+  }
+
+  /**
+   * @brief Construct a new delta record for merge.
+   *
+   * @param right_ptr a pointer to the removed node.
+   * @param next a pointer to the next delta record or base node.
+   */
+  DeltaRecord(  //
+      const uintptr_t right_ptr,
+      const void *next)
+      : delta_type_{DeltaType::kMerge}, next_{reinterpret_cast<const uintptr_t>(next)}
+  {
+    const auto *right_node = reinterpret_cast<DeltaRecord *>(right_ptr);
+    node_type_ = right_node->node_type_;
+
+    // copy a lowest key
+    auto key_len = right_node->meta_.GetKeyLength();
+    meta_ = Metadata{kHeaderLength, key_len, key_len + kWordSize};
+    memcpy(&data_block_, right_node->GetKeyAddr(right_node->meta_), key_len);
+
+    // set a removed node
+    const auto offset = SetData(kHeaderLength + key_len, right_node, kWordSize);
+
+    // copy a highest key
+    key_len = right_node->high_key_meta_.GetKeyLength();
+    high_key_meta_ = Metadata{offset, key_len, key_len};
+    memcpy(ShiftAddr(this, offset), right_node->GetKeyAddr(right_node->high_key_meta_), key_len);
+  }
+
   constexpr DeltaRecord(const DeltaRecord &) = default;
   constexpr DeltaRecord(DeltaRecord &&) noexcept = default;
 
