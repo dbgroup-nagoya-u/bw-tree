@@ -654,6 +654,38 @@ class BwTree
     gc_.AddGarbage(node);
   }
 
+  void
+  SearchChildNode(  //
+      const Key &key,
+      const bool closed,
+      NodeStack &stack)
+  {
+    auto [ptr, rc] = Delta_t::SearchChildNode(key, closed, stack.back());
+    switch (rc) {
+      case DeltaRC::kRecordFound: {
+        stack.emplace_back(reinterpret_cast<std::atomic_uintptr_t *>(ptr));
+        break;
+      }
+      case DeltaRC::kNodeRemoved: {
+        stack.pop_back();
+        break;
+      }
+      case DeltaRC::kReachBase:
+      default: {
+        if (static_cast<size_t>(rc) >= kMaxDeltaNodeNum) {
+          consol_page_ = stack.back();
+        }
+
+        // search a child node in a base node
+        const auto *base_node = reinterpret_cast<Node_t *>(ptr);
+        const auto pos = base_node->SearchChild(key, closed);
+        const auto meta = base_node->GetMetadata(pos);
+        stack.emplace_back(base_node->template GetPayload<std::atomic_uintptr_t *>(meta));
+        break;
+      }
+    }
+  }
+
   auto
   SearchLeafNode(  //
       const Key &key,
@@ -665,40 +697,14 @@ class BwTree
 
     // get a logical page of a root node
     auto *page_id = root_.load(std::memory_order_relaxed);
+    stack.emplace_back(page_id);
     auto *head = reinterpret_cast<Node_t *>(page_id->load(std::memory_order_relaxed));
 
     // traverse a Bw-tree
     while (!head->IsLeaf()) {
-      auto [ptr, rc] = Delta_t::SearchChildNode(key, closed, page_id);
-      switch (rc) {
-        case DeltaRC::kRecordFound: {
-          stack.emplace_back(page_id);
-          page_id = reinterpret_cast<std::atomic_uintptr_t *>(ptr);
-          break;
-        }
-        case DeltaRC::kNodeRemoved: {
-          page_id = stack.back();
-          stack.pop_back();
-          continue;
-        }
-        case DeltaRC::kReachBase:
-        default: {
-          stack.emplace_back(page_id);
-          if (static_cast<size_t>(rc) >= kMaxDeltaNodeNum) {
-            consol_page_ = page_id;
-          }
-
-          // search a child node in a base node
-          auto *base_node = reinterpret_cast<Node_t *>(ptr);
-          auto pos = base_node->SearchChild(key, closed);
-          auto meta = base_node->GetMetadata(pos);
-          page_id = base_node->template GetPayload<std::atomic_uintptr_t *>(meta);
-          break;
-        }
-      }
-      head = reinterpret_cast<Node_t *>(page_id->load(std::memory_order_relaxed));
+      SearchChildNode(key, closed, stack);
+      head = reinterpret_cast<Node_t *>(stack.back()->load(std::memory_order_relaxed));
     }
-    stack.emplace_back(page_id);
 
     return stack;
   }
