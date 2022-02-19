@@ -137,6 +137,17 @@ class Node
   }
 
   /**
+   * @retval true if this node has a left sibling node.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] constexpr auto
+  HasLeftSibling() const  //
+      -> bool
+  {
+    return low_meta_.GetKeyLength() > 0;
+  }
+
+  /**
    * @return the number of records in this node.
    */
   [[nodiscard]] constexpr auto
@@ -179,6 +190,21 @@ class Node
       memcpy(&key, GetKeyAddr(meta), sizeof(Key));
       return key;
     }
+  }
+
+  /**
+   * @brief Get the lowest key in this node.
+   *
+   * This function assumes that the node has the lowest key (i.e., has a left sibling
+   * node) and does not check its existence.
+   *
+   * @return the lowest key.
+   */
+  [[nodiscard]] auto
+  GetLowKey() const  //
+      -> Key
+  {
+    return GetKey(low_meta_);
   }
 
   /**
