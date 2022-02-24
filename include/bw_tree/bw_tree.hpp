@@ -344,7 +344,7 @@ class BwTree
       // traverse to a leaf node and sort records for scanning
       consol_page_ = nullptr;
       auto &&stack = SearchLeafNode(b_key, b_closed);
-      auto cur_head = ValidateNode(b_key, b_closed, kNullPtr, stack);
+      auto cur_head = GetTargetHead(b_key, b_closed, stack);
       node = Consolidate(cur_head).first;
       auto [rc, pos] = node->SearchRecord(b_key);
       begin_pos = (rc == NodeRC::kKeyNotExist || b_closed) ? pos : pos + 1;
@@ -409,14 +409,12 @@ class BwTree
     // insert a delta record
     auto *rec = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload, pay_len};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
-    auto prev_head = kNullPtr;
     while (true) {
       // check whether the target node includes incomplete SMOs
-      auto head = ValidateNode(key, kClosed, prev_head, stack);
+      auto head = GetTargetHead(key, kClosed, stack);
 
       // try to insert the delta record
       rec->SetNext(head);
-      prev_head = head;
       if (stack.back()->compare_exchange_weak(head, rec_ptr, std::memory_order_release)) break;
     }
 
@@ -461,10 +459,9 @@ class BwTree
     // insert a delta record
     auto *rec = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload, pay_len};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
-    auto prev_head = kNullPtr;
     while (true) {
       // check whether the target node includes incomplete SMOs
-      auto head = ValidateNode(key, kClosed, prev_head, stack);
+      auto head = GetTargetHead(key, kClosed, stack);
 
       // check target key/value existence
       const auto rc = CheckExistence(key, stack).second;
@@ -472,7 +469,6 @@ class BwTree
 
       // try to insert the delta record
       rec->SetNext(head);
-      prev_head = head;
       if (stack.back()->compare_exchange_weak(head, rec_ptr, std::memory_order_release)) break;
     }
 
@@ -516,10 +512,9 @@ class BwTree
     // insert a delta record
     auto *rec = new (GetRecPage()) Delta_t{DeltaType::kModify, key, key_len, payload, pay_len};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
-    auto prev_head = kNullPtr;
     while (true) {
       // check whether the target node includes incomplete SMOs
-      auto head = ValidateNode(key, kClosed, prev_head, stack);
+      auto head = GetTargetHead(key, kClosed, stack);
 
       // check target key/value existence
       const auto rc = CheckExistence(key, stack).second;
@@ -527,7 +522,6 @@ class BwTree
 
       // try to insert the delta record
       rec->SetNext(head);
-      prev_head = head;
       if (stack.back()->compare_exchange_weak(head, rec_ptr, std::memory_order_release)) break;
     }
 
@@ -568,10 +562,9 @@ class BwTree
     // insert a delta record
     auto *rec = new (GetRecPage()) Delta_t{key, key_len};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
-    auto prev_head = kNullPtr;
     while (true) {
       // check whether the target node includes incomplete SMOs
-      auto head = ValidateNode(key, kClosed, prev_head, stack);
+      auto head = GetTargetHead(key, kClosed, stack);
 
       // check target key/value existence
       const auto rc = CheckExistence(key, stack).second;
@@ -579,7 +572,6 @@ class BwTree
 
       // try to insert the delta record
       rec->SetNext(head);
-      prev_head = head;
       if (stack.back()->compare_exchange_weak(head, rec_ptr, std::memory_order_release)) break;
     }
 
@@ -670,7 +662,7 @@ class BwTree
         stack.pop_back();
         break;
       }
-      case DeltaRC::kReachBase:
+      case DeltaRC::kKeyIsInThisNode:
       default: {
         if (static_cast<size_t>(rc) >= kMaxDeltaNodeNum) {
           consol_page_ = stack.back();
@@ -743,41 +735,49 @@ class BwTree
   }
 
   auto
-  ValidateNode(  //
+  GetTargetHead(  //
       const Key &key,
       const bool closed,
-      const uintptr_t prev_head,
       NodeStack &stack)  //
       -> uintptr_t
   {
     while (true) {
-      auto [ptr, rc] = Delta_t::Validate(key, closed, prev_head, stack);
-      switch (rc) {
-        case DeltaRC::kSplitMayIncomplete: {
+      // check whether the node has partial SMOs
+      auto head = stack.back()->load(std::memory_order_acquire);
+      switch (Delta_t::GetSMOStatus(head)) {
+        case SMOStatus::kSplitMayIncomplete:
           // complete splitting and traverse to a sibling node
-          CompleteSplit(ptr, stack);
+          CompleteSplit(head, stack);
+          break;
 
-          // insert a new current-level node (an old node was popped in parent-update)
-          auto *rec = reinterpret_cast<Delta_t *>(ptr);
-          auto *page_id = rec->template GetPayload<std::atomic_uintptr_t *>();
-          stack.emplace_back(page_id);
+        case SMOStatus::kMergeMayIncomplete:
+          // complete merging
+          CompleteMerge(reinterpret_cast<Delta_t *>(head), stack);
           break;
+
+        case SMOStatus::kNoPartialSMOs:
+        default:  // do nothing
+      }
+
+      auto [ptr, rc] = Delta_t::Validate(key, closed, head);
+      switch (rc) {
+        case DeltaRC::kKeyIsInSibling: {
+          // swap a current node in a stack and retry
+          *stack.rbegin() = reinterpret_cast<std::atomic_uintptr_t *>(ptr);
+          continue;
         }
-        case DeltaRC::kMergeMayIncomplete: {
-          // ...not implemented yet
-          break;
-        }
-        case DeltaRC::kNodeRemoved: {
-          // ...not implemented yet
-          break;
-        }
-        case DeltaRC::kReachBase:
-        default: {
+
+        case DeltaRC::kNodeRemoved:
+          // retry from the parent node
+          stack.pop_back();
+          continue;
+
+        case DeltaRC::kKeyIsInThisNode:
+        default:
           if (static_cast<size_t>(rc) >= kMaxDeltaNodeNum) {
             consol_page_ = stack.back();
           }
-          return ptr;
-        }
+          return head;
       }
     }
   }
@@ -864,7 +864,7 @@ class BwTree
 
       // check whether the target node is valid (containing a target key and no incomplete SMOs)
       consol_page_ = nullptr;
-      cur_head = ValidateNode(key, closed, kNullPtr, stack);
+      cur_head = GetTargetHead(key, closed, stack);
       if (consol_page_ != target_page) return;
 
       // perform consolidation
@@ -881,12 +881,12 @@ class BwTree
     }
 
     // install a consolidated node
-    auto old_head = cur_head;
-    if (!target_page->compare_exchange_strong(old_head, new_head, std::memory_order_release)) {
+    if (!target_page->compare_exchange_strong(cur_head, new_head, std::memory_order_release)) {
       // no CAS retry for consolidation
       AddToGC(new_head);
       return;
     }
+
     // delete consolidated delta records and a base node
     AddToGC(cur_head);
   }
@@ -981,7 +981,7 @@ class BwTree
     // insert the delta record into a parent node
     stack.pop_back();  // remove a split child node to modify its parent node
     while (true) {
-      auto head = ValidateNode(sep_key, kClosed, kNullPtr, stack);
+      auto head = GetTargetHead(sep_key, kClosed, stack);
 
       // check whether another thread has already completed this split
       if (CheckExistence(sep_key, stack).second != NodeRC::kKeyNotExist) {

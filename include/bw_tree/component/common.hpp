@@ -47,10 +47,16 @@ enum DeltaRC
 {
   kRecordFound = -100,
   kRecordDeleted,
-  kSplitMayIncomplete,
   kNodeRemoved,
+  kKeyIsInSibling,
+  kKeyIsInThisNode = 0
+};
+
+enum SMOStatus
+{
+  kSplitMayIncomplete = -100,
   kMergeMayIncomplete,
-  kReachBase = 0
+  kNoPartialSMOs = 0
 };
 
 /**
