@@ -34,9 +34,9 @@ namespace dbgroup::index::bw_tree
  */
 enum ReturnCode
 {
-  kSuccess = 0,
-  kKeyNotExist,
-  kKeyExist
+  kKeyNotExist = -2,
+  kKeyExist,
+  kSuccess = 0
 };
 
 /**

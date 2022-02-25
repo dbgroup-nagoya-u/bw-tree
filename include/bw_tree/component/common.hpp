@@ -29,17 +29,6 @@ namespace dbgroup::index::bw_tree::component
  *################################################################################################*/
 
 /**
- * @brief Internal return codes to represent results of node modification.
- *
- */
-enum NodeRC
-{
-  kKeyNotExist = -100,
-  kKeyInDelta,
-  kKeyExist = 0
-};
-
-/**
  * @brief Internal return codes for representing results of delta chain traversal.
  *
  */
@@ -49,7 +38,7 @@ enum DeltaRC
   kRecordDeleted,
   kNodeRemoved,
   kKeyIsInSibling,
-  kKeyIsInThisNode = 0
+  kReachBaseNode = 0
 };
 
 enum SMOStatus

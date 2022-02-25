@@ -295,7 +295,7 @@ class Node
    */
   [[nodiscard]] auto
   SearchRecord(const Key &key) const  //
-      -> std::pair<NodeRC, size_t>
+      -> std::pair<ReturnCode, size_t>
   {
     int64_t begin_pos = 0;
     int64_t end_pos = record_count_ - 1;
@@ -309,11 +309,11 @@ class Node
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
       } else {  // find an equivalent key
-        return {NodeRC::kKeyExist, pos};
+        return {kKeyExist, pos};
       }
     }
 
-    return {NodeRC::kKeyNotExist, begin_pos};
+    return {kKeyNotExist, begin_pos};
   }
 
   /**

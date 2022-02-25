@@ -376,81 +376,74 @@ class DeltaRecord
   static auto
   SearchRecord(  //
       const Key &key,
-      NodeStack &stack)  //
-      -> std::pair<uintptr_t, DeltaRC>
+      uintptr_t ptr,
+      uintptr_t &out_ptr,
+      size_t &delta_num)  //
+      -> DeltaRC
   {
-    auto *page_id = stack.back();
-    auto ptr = page_id->load(std::memory_order_acquire);
     auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-    int64_t delta_chain_length = 0;
 
     // traverse a delta chain
     while (true) {
       switch (cur_rec->delta_type_) {
-        case DeltaType::kInsert:
-        case DeltaType::kModify: {
+        case kInsert:
+        case kModify: {
+          // check whether a target record is inserted
           const auto &rec_key = cur_rec->GetKey();
           if (!Comp{}(key, rec_key) && !Comp{}(rec_key, key)) {
-            // this delta record contains a target key
-            return {ptr, kRecordFound};
+            out_ptr = ptr;
+            return kRecordFound;
           }
           break;
         }
-        case DeltaType::kDelete: {
-          const auto &rec_key = cur_rec->GetKey();
-          if (!Comp{}(key, rec_key) && !Comp{}(rec_key, key)) {
-            // a target key is deleted
-            return {ptr, kRecordDeleted};
-          }
-          break;
-        }
-        case DeltaType::kSplit: {
-          const auto &rec_key = cur_rec->GetKey();
-          if (Comp{}(rec_key, key)) {
-            // a sibling node may include a target key
-            page_id = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
-            ptr = page_id->load(std::memory_order_acquire);
-            cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-            delta_chain_length = 0;
 
-            // swap a current node in a stack
-            *stack.rbegin() = page_id;
-            continue;
+        case kDelete: {
+          // check whether a target record is deleted
+          const auto &rec_key = cur_rec->GetKey();
+          if (!Comp{}(key, rec_key) && !Comp{}(rec_key, key)) return kRecordDeleted;
+          break;
+        }
+
+        case kSplit: {
+          // check whether the right-sibling node contains a target key
+          const auto &sep_key = cur_rec->GetKey();
+          if (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key))) {
+            out_ptr = cur_rec->template GetPayload<uintptr_t>();
+            return kKeyIsInSibling;
           }
           break;
         }
-        case DeltaType::kNotDelta: {
+
+        case kRemoveNode:
+          return kNodeRemoved;
+
+        case kMerge: {
+          // a target record may be in the merged node
+          const auto *sib_page = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
+          const auto *remove_d = sib_page->load(std::memory_order_acquire);
+          out_ptr = remove_d->next_;
+          return kReachBaseNode;
+        }
+
+        case kNotDelta:
+        default: {
+          // check whether the node contains a target key
           const auto &high_key = cur_rec->GetHighKey();
           if (high_key && Comp{}(*high_key, key)) {
-            // a sibling node includes a target key
-            page_id = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
-            ptr = page_id->load(std::memory_order_acquire);
-            cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-            delta_chain_length = 0;
-
-            // swap a current node in a stack
-            *stack.rbegin() = page_id;
-            continue;
+            out_ptr = cur_rec->next_;
+            return kKeyIsInSibling;
           }
-          // reach a base page
-          return {ptr, static_cast<DeltaRC>(delta_chain_length)};
+
+          // a target record may be in the base node
+          out_ptr = ptr;
+          return kReachBaseNode;
         }
-        case DeltaType::kMerge:
-          // ...not implemented yet
-          break;
-
-        case DeltaType::kRemoveNode:
-          // ...not implemented yet
-          break;
-
-        default:
-          break;
       }
 
       // go to the next delta record or base node
       ptr = cur_rec->next_;
       cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-      ++delta_chain_length;
+      ++delta_num;
     }
   }
 
@@ -458,11 +451,12 @@ class DeltaRecord
   Validate(  //
       const Key &key,
       const bool closed,
-      uintptr_t ptr)  //
-      -> std::pair<uintptr_t, DeltaRC>
+      uintptr_t ptr,
+      uintptr_t &out_ptr,
+      size_t &delta_num)  //
+      -> DeltaRC
   {
     auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-    int64_t delta_chain_length = 0;
 
     // traverse a delta chain
     while (true) {
@@ -470,34 +464,38 @@ class DeltaRecord
         case kSplit: {
           // check whether the right-sibling node contains a target key
           const auto &sep_key = cur_rec->GetKey();
-          if (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key)))
-            return {cur_rec->template GetPayload<uintptr_t>(), kKeyIsInSibling};
+          if (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key))) {
+            out_ptr = cur_rec->template GetPayload<uintptr_t>();
+            return kKeyIsInSibling;
+          }
           break;
         }
 
         case kRemoveNode:
           return kNodeRemoved;
 
-        case kMerge:  // a target key must be in the merged node
-          return {kNullPtr, static_cast<DeltaRC>(delta_chain_length)};
+        case kMerge:
+          // a target key must be in the merged node
+          return kReachBaseNode;
 
-        case kNotDelta: {  // reach a base page
+        case kNotDelta: {
           // check whether the node contains a target key
           const auto &high_key = cur_rec->GetHighKey();
-          if (high_key && (Comp{}(*high_key, key) || (!closed && !Comp{}(key, *high_key))))
-            return {cur_rec->next_, kKeyIsInSibling};
-
-          // return the number of delta records as SUCCESS
-          return {kNullPtr, static_cast<DeltaRC>(delta_chain_length)};
+          if (high_key && (Comp{}(*high_key, key) || (!closed && !Comp{}(key, *high_key)))) {
+            out_ptr = cur_rec->next_;
+            return kKeyIsInSibling;
+          }
+          return kReachBaseNode;
         }
 
-        default:  // do nothing
+        default:
+          // do nothing
       }
 
       // go to the next delta record or base node
       ptr = cur_rec->next_;
       cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-      ++delta_chain_length;
+      ++delta_num;
     }
   }
 

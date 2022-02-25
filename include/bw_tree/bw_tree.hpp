@@ -46,8 +46,8 @@ class BwTree
 
   using NodeType = component::NodeType;
   using DeltaType = component::DeltaType;
-  using NodeRC = component::NodeRC;
   using DeltaRC = component::DeltaRC;
+  using SMOStatus = component::SMOStatus;
   using Metadata = component::Metadata;
   using Node_t = component::Node<Key, Comp>;
   using Delta_t = component::DeltaRecord<Key, Comp>;
@@ -298,26 +298,53 @@ class BwTree
     // check whether the leaf node has a target key
     consol_page_ = nullptr;
     auto &&stack = SearchLeafNode(key, kClosed);
-    auto [ptr, rc] = CheckExistence(key, stack);
 
-    // if a long delta-chain is found, consolidate it
-    if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, key, kClosed, stack);
-    }
+    ReturnCode rc{};
+    Payload payload{};
+    while (true) {
+      // check whether the node is active and has a target key
+      auto head = stack.back()->load(std::memory_order_acquire);
+      size_t delta_num = 0;
+      switch (uintptr_t out_ptr{}; Delta_t::SearchRecord(key, head, out_ptr, delta_num)) {
+        case DeltaRC::kRecordFound:
+          rc = kKeyExist;
+          payload = reinterpret_cast<Delta_t *>(out_ptr)->template CopyPayload<Payload>();
+          break;
 
-    switch (rc) {
-      case NodeRC::kKeyNotExist: {
-        return std::nullopt;
+        case DeltaRC::kRecordDeleted:
+          rc = kKeyNotExist;
+          break;
+
+        case DeltaRC::kKeyIsInSibling:
+          // swap a current node in a stack and retry
+          *stack.rbegin() = reinterpret_cast<std::atomic_uintptr_t *>(out_ptr);
+          continue;
+
+        case DeltaRC::kNodeRemoved:
+          // retry from the parent node
+          stack.pop_back();
+          SearchChildNode(key, kClosed, stack);
+          continue;
+
+        case DeltaRC::kReachBaseNode:
+        default: {
+          // search a target key in the base node
+          const auto *node = reinterpret_cast<Node_t *>(out_ptr);
+          std::tie(rc, out_ptr) = node->SearchRecord(key);
+          if (rc == kKeyExist) {
+            payload = node->template CopyPayload<Payload>(out_ptr);
+          }
+        }
       }
-      case NodeRC::kKeyInDelta: {
-        auto *delta = reinterpret_cast<Delta_t *>(ptr);
-        return std::make_optional(delta->template CopyPayload<Payload>());
+
+      if (delta_num >= kMaxDeltaNodeNum) {
+        TryConsolidation(stack.back(), key, kClosed, stack);
+      } else if (consol_page_ != nullptr) {
+        TryConsolidation(consol_page_, key, kClosed, stack);
       }
-      case NodeRC::kKeyExist:
-      default: {
-        auto *node = reinterpret_cast<Node_t *>(ptr);
-        return std::make_optional(node->template CopyPayload<Payload>(rc));
-      }
+
+      if (rc == kKeyNotExist) return std::nullopt;
+      return payload;
     }
   }
 
@@ -344,10 +371,10 @@ class BwTree
       // traverse to a leaf node and sort records for scanning
       consol_page_ = nullptr;
       auto &&stack = SearchLeafNode(b_key, b_closed);
-      auto cur_head = GetTargetHead(b_key, b_closed, stack);
+      auto cur_head = GetHead(b_key, b_closed, stack);
       node = Consolidate(cur_head).first;
       auto [rc, pos] = node->SearchRecord(b_key);
-      begin_pos = (rc == NodeRC::kKeyNotExist || b_closed) ? pos : pos + 1;
+      begin_pos = (rc == kKeyNotExist || b_closed) ? pos : pos + 1;
 
       // if a long delta-chain is found, consolidate it
       if (consol_page_ != nullptr) {
@@ -365,7 +392,7 @@ class BwTree
       auto &&[e_key, e_closed] = *end_key;
       if (!Comp{}(node->GetKey(node->GetMetadata(end_pos - 1)), e_key)) {
         auto [rc, pos] = node->SearchRecord(e_key);
-        end_pos = (rc == NodeRC::kKeyExist && e_closed) ? pos + 1 : pos;
+        end_pos = (rc == kKeyExist && e_closed) ? pos + 1 : pos;
       }
     }
 
@@ -411,7 +438,7 @@ class BwTree
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
     while (true) {
       // check whether the target node includes incomplete SMOs
-      auto head = GetTargetHead(key, kClosed, stack);
+      auto head = GetHead(key, kClosed, stack);
 
       // try to insert the delta record
       rec->SetNext(head);
@@ -422,7 +449,7 @@ class BwTree
       TryConsolidation(consol_page_, key, kClosed, stack);
     }
 
-    return ReturnCode::kSuccess;
+    return kSuccess;
   }
 
   /**
@@ -460,12 +487,9 @@ class BwTree
     auto *rec = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload, pay_len};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
     while (true) {
-      // check whether the target node includes incomplete SMOs
-      auto head = GetTargetHead(key, kClosed, stack);
-
-      // check target key/value existence
-      const auto rc = CheckExistence(key, stack).second;
-      if (rc != NodeRC::kKeyNotExist) return ReturnCode::kKeyExist;
+      // check target record's existence and get a head pointer
+      auto [head, rc] = GetHeadWithKeyCheck(key, stack);
+      if (rc == kKeyExist) return kKeyExist;
 
       // try to insert the delta record
       rec->SetNext(head);
@@ -476,7 +500,7 @@ class BwTree
       TryConsolidation(consol_page_, key, kClosed, stack);
     }
 
-    return ReturnCode::kSuccess;
+    return kSuccess;
   }
 
   /**
@@ -513,12 +537,9 @@ class BwTree
     auto *rec = new (GetRecPage()) Delta_t{DeltaType::kModify, key, key_len, payload, pay_len};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
     while (true) {
-      // check whether the target node includes incomplete SMOs
-      auto head = GetTargetHead(key, kClosed, stack);
-
-      // check target key/value existence
-      const auto rc = CheckExistence(key, stack).second;
-      if (rc == NodeRC::kKeyNotExist) return ReturnCode::kKeyNotExist;
+      // check target record's existence and get a head pointer
+      auto [head, rc] = GetHeadWithKeyCheck(key, stack);
+      if (rc == kKeyNotExist) return kKeyNotExist;
 
       // try to insert the delta record
       rec->SetNext(head);
@@ -529,7 +550,7 @@ class BwTree
       TryConsolidation(consol_page_, key, kClosed, stack);
     }
 
-    return ReturnCode::kSuccess;
+    return kSuccess;
   }
 
   /**
@@ -549,8 +570,8 @@ class BwTree
    */
   auto
   Delete(  //
-      [[maybe_unused]] const Key &key,
-      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
+      const Key &key,
+      const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
@@ -563,12 +584,9 @@ class BwTree
     auto *rec = new (GetRecPage()) Delta_t{key, key_len};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
     while (true) {
-      // check whether the target node includes incomplete SMOs
-      auto head = GetTargetHead(key, kClosed, stack);
-
-      // check target key/value existence
-      const auto rc = CheckExistence(key, stack).second;
-      if (rc == NodeRC::kKeyNotExist) return ReturnCode::kKeyNotExist;
+      // check target record's existence and get a head pointer
+      auto [head, rc] = GetHeadWithKeyCheck(key, stack);
+      if (rc == kKeyNotExist) return kKeyNotExist;
 
       // try to insert the delta record
       rec->SetNext(head);
@@ -579,7 +597,7 @@ class BwTree
       TryConsolidation(consol_page_, key, kClosed, stack);
     }
 
-    return ReturnCode::kSuccess;
+    return kSuccess;
   }
 
  private:
@@ -662,7 +680,7 @@ class BwTree
         stack.pop_back();
         break;
       }
-      case DeltaRC::kKeyIsInThisNode:
+      case DeltaRC::kReachBaseNode:
       default: {
         if (static_cast<size_t>(rc) >= kMaxDeltaNodeNum) {
           consol_page_ = stack.back();
@@ -734,8 +752,27 @@ class BwTree
     return stack;
   }
 
+  void
+  CompletePartialSMOsIfExist(const uintptr_t head)
+  {
+    switch (Delta_t::GetSMOStatus(head)) {
+      case SMOStatus::kSplitMayIncomplete:
+        // complete splitting and traverse to a sibling node
+        CompleteSplit(head, stack);
+        break;
+
+      case SMOStatus::kMergeMayIncomplete:
+        // complete merging
+        CompleteMerge(reinterpret_cast<Delta_t *>(head), stack);
+        break;
+
+      case SMOStatus::kNoPartialSMOs:
+      default:  // do nothing
+    }
+  }
+
   auto
-  GetTargetHead(  //
+  GetHead(  //
       const Key &key,
       const bool closed,
       NodeStack &stack)  //
@@ -744,70 +781,80 @@ class BwTree
     while (true) {
       // check whether the node has partial SMOs
       auto head = stack.back()->load(std::memory_order_acquire);
-      switch (Delta_t::GetSMOStatus(head)) {
-        case SMOStatus::kSplitMayIncomplete:
-          // complete splitting and traverse to a sibling node
-          CompleteSplit(head, stack);
-          break;
+      CompletePartialSMOsIfExist(head);
 
-        case SMOStatus::kMergeMayIncomplete:
-          // complete merging
-          CompleteMerge(reinterpret_cast<Delta_t *>(head), stack);
-          break;
-
-        case SMOStatus::kNoPartialSMOs:
-        default:  // do nothing
-      }
-
-      auto [ptr, rc] = Delta_t::Validate(key, closed, head);
-      switch (rc) {
-        case DeltaRC::kKeyIsInSibling: {
+      // check whether the node is active and can include a target key
+      size_t delta_num = 0;
+      switch (uintptr_t sib_page{}; Delta_t::Validate(key, closed, head, sib_page, delta_num)) {
+        case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
-          *stack.rbegin() = reinterpret_cast<std::atomic_uintptr_t *>(ptr);
+          *stack.rbegin() = reinterpret_cast<std::atomic_uintptr_t *>(sib_page);
           continue;
-        }
 
         case DeltaRC::kNodeRemoved:
           // retry from the parent node
           stack.pop_back();
+          SearchChildNode(key, closed, stack);
           continue;
 
-        case DeltaRC::kKeyIsInThisNode:
+        case DeltaRC::kReachBaseNode:
         default:
-          if (static_cast<size_t>(rc) >= kMaxDeltaNodeNum) {
-            consol_page_ = stack.back();
-          }
-          return head;
+          // do nothing
       }
+
+      if (delta_num >= kMaxDeltaNodeNum) {
+        consol_page_ = stack.back();
+      }
+
+      return head;
     }
   }
 
   auto
-  CheckExistence(  //
+  GetHeadWithKeyCheck(  //
       const Key &key,
       NodeStack &stack)  //
-      -> std::pair<uintptr_t, NodeRC>
+      -> std::pair<uintptr_t, ReturnCode>
   {
-    auto [ptr, delta_rc] = Delta_t::SearchRecord(key, stack);
-    switch (delta_rc) {
-      case DeltaRC::kRecordFound: {
-        return {ptr, NodeRC::kKeyInDelta};
-      }
-      case DeltaRC::kRecordDeleted: {
-        return {uintptr_t{}, NodeRC::kKeyNotExist};
-      }
-      case DeltaRC::kReachBase:
-      default: {
-        if (static_cast<size_t>(delta_rc) >= kMaxDeltaNodeNum) {
-          consol_page_ = stack.back();
-        }
-        // search a target key
-        auto *node = reinterpret_cast<Node_t *>(ptr);
-        auto [node_rc, pos] = node->SearchRecord(key);
+    ReturnCode rc{};
+    while (true) {
+      // check whether the node has partial SMOs
+      auto head = stack.back()->load(std::memory_order_acquire);
+      CompletePartialSMOsIfExist(head);
 
-        if (node_rc == NodeRC::kKeyNotExist) return {ptr, NodeRC::kKeyNotExist};
-        return {ptr, static_cast<NodeRC>(pos)};
+      // check whether the node is active and has a target key
+      size_t delta_num = 0;
+      switch (uintptr_t out_ptr{}; Delta_t::SearchRecord(key, head, out_ptr, delta_num)) {
+        case DeltaRC::kRecordFound:
+          rc = kKeyExist;
+          break;
+
+        case DeltaRC::kRecordDeleted:
+          rc = kKeyNotExist;
+          break;
+
+        case DeltaRC::kKeyIsInSibling:
+          // swap a current node in a stack and retry
+          *stack.rbegin() = reinterpret_cast<std::atomic_uintptr_t *>(out_ptr);
+          continue;
+
+        case DeltaRC::kNodeRemoved:
+          // retry from the parent node
+          stack.pop_back();
+          SearchChildNode(key, kClosed, stack);
+          continue;
+
+        case DeltaRC::kReachBaseNode:
+        default:
+          // search a target key in the base node
+          rc = reinterpret_cast<Node_t *>(out_ptr)->SearchRecord(key).first;
       }
+
+      if (delta_num >= kMaxDeltaNodeNum) {
+        consol_page_ = stack.back();
+      }
+
+      return {head, rc};
     }
   }
 
@@ -864,7 +911,7 @@ class BwTree
 
       // check whether the target node is valid (containing a target key and no incomplete SMOs)
       consol_page_ = nullptr;
-      cur_head = GetTargetHead(key, closed, stack);
+      cur_head = GetHead(key, closed, stack);
       if (consol_page_ != target_page) return;
 
       // perform consolidation
@@ -979,12 +1026,11 @@ class BwTree
     auto &&sep_key = split_delta->GetKey();
 
     // insert the delta record into a parent node
-    stack.pop_back();  // remove a split child node to modify its parent node
+    stack.pop_back();  // remove the split child node to modify its parent node
     while (true) {
-      auto head = GetTargetHead(sep_key, kClosed, stack);
-
-      // check whether another thread has already completed this split
-      if (CheckExistence(sep_key, stack).second != NodeRC::kKeyNotExist) {
+      // check whether another thread has already completed this splitting
+      auto [head, rc] = GetHeadWithKeyCheck(key, stack);
+      if (rc == kKeyExist) {
         entry_delta->SetNext(kNullPtr);
         AddToGC(new_head);
         return;
