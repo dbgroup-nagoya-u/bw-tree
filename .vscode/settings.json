@@ -154,6 +154,10 @@
     "bit": "cpp",
     "any": "cpp",
     "variant": "cpp",
-    "complex": "cpp"
+    "complex": "cpp",
+    "strstream": "cpp",
+    "cfenv": "cpp",
+    "typeindex": "cpp",
+    "valarray": "cpp"
   }
 }

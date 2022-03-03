@@ -89,15 +89,16 @@ class DeltaRecord
   }
 
   /**
-   * @brief Construct a new delta record for split.
+   * @brief Construct a new delta record for split/merge.
    *
    * @param split_delta
    */
   DeltaRecord(  //
-      const uintptr_t right_ptr,
-      const uintptr_t sib_page_id,
-      const uintptr_t next)
-      : delta_type_{DeltaType::kSplit}, next_{next}
+      const DeltaType delta_type,
+      const void *right_ptr,
+      const std::atomic_uintptr_t *sib_page_id,
+      const uintptr_t next = kNullPtr)
+      : delta_type_{delta_type}, next_{next}
   {
     const auto *right_node = reinterpret_cast<const DeltaRecord *>(right_ptr);
     node_type_ = right_node->node_type_;
@@ -401,7 +402,7 @@ class DeltaRecord
         case kSplit: {
           // check whether the right-sibling node contains a target key
           const auto &sep_key = cur_rec->GetKey();
-          if (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key))) {
+          if (Comp{}(sep_key, key)) {
             out_ptr = cur_rec->template GetPayload<uintptr_t>();
             return kKeyIsInSibling;
           }
@@ -414,8 +415,8 @@ class DeltaRecord
         case kMerge: {
           // a target record may be in the merged node
           const auto *sib_page = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
-          const auto *remove_d = sib_page->load(std::memory_order_acquire);
-          out_ptr = remove_d->next_;
+          const auto remove_d = sib_page->load(std::memory_order_acquire);
+          out_ptr = reinterpret_cast<DeltaRecord *>(remove_d)->next_;
           return kReachBaseNode;
         }
 
@@ -483,7 +484,7 @@ class DeltaRecord
         }
 
         default:
-          // do nothing
+          break;  // do nothing
       }
 
       // go to the next delta record or base node

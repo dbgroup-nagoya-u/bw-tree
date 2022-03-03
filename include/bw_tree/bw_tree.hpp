@@ -753,7 +753,9 @@ class BwTree
   }
 
   void
-  CompletePartialSMOsIfExist(const uintptr_t head)
+  CompletePartialSMOsIfExist(  //
+      const uintptr_t head,
+      NodeStack &stack)
   {
     switch (Delta_t::GetSMOStatus(head)) {
       case SMOStatus::kSplitMayIncomplete:
@@ -767,7 +769,8 @@ class BwTree
         break;
 
       case SMOStatus::kNoPartialSMOs:
-      default:  // do nothing
+      default:
+        break;  // do nothing
     }
   }
 
@@ -781,7 +784,7 @@ class BwTree
     while (true) {
       // check whether the node has partial SMOs
       auto head = stack.back()->load(std::memory_order_acquire);
-      CompletePartialSMOsIfExist(head);
+      CompletePartialSMOsIfExist(head, stack);
 
       // check whether the node is active and can include a target key
       size_t delta_num = 0;
@@ -799,7 +802,7 @@ class BwTree
 
         case DeltaRC::kReachBaseNode:
         default:
-          // do nothing
+          break;  // do nothing
       }
 
       if (delta_num >= kMaxDeltaNodeNum) {
@@ -820,7 +823,7 @@ class BwTree
     while (true) {
       // check whether the node has partial SMOs
       auto head = stack.back()->load(std::memory_order_acquire);
-      CompletePartialSMOsIfExist(head);
+      CompletePartialSMOsIfExist(head, stack);
 
       // check whether the node is active and has a target key
       size_t delta_num = 0;
@@ -883,7 +886,7 @@ class BwTree
       auto &&[e_key, e_closed] = *end_key;
       if (!Comp{}(node->GetKey(node->GetMetadata(rec_num - 1)), e_key)) {
         auto [rc, pos] = node->SearchRecord(e_key);
-        rec_num = (rc == NodeRC::kKeyExist && e_closed) ? pos + 1 : pos;
+        rec_num = (rc == kKeyExist && e_closed) ? pos + 1 : pos;
         node->RemoveSideLink();
       }
     }
@@ -987,10 +990,8 @@ class BwTree
 
     // create a split-delta record
     std::atomic_uintptr_t *sib_page = mapping_table_.GetNewLogicalID();
-    auto right_ptr = reinterpret_cast<uintptr_t>(split_node);
-    sib_page->store(right_ptr, std::memory_order_release);
-    auto sib_ptr = reinterpret_cast<uintptr_t>(sib_page);
-    auto *delta = new (GetRecPage()) Delta_t{right_ptr, sib_ptr, cur_head};
+    sib_page->store(reinterpret_cast<uintptr_t>(split_node), std::memory_order_release);
+    auto *delta = new (GetRecPage()) Delta_t{DeltaType::kSplit, split_node, sib_page, cur_head};
 
     // install the delta record for splitting a child node
     auto old_head = cur_head;
@@ -999,7 +1000,7 @@ class BwTree
       // retry from consolidation
       delta->SetNext(kNullPtr);
       AddToGC(delta_ptr);
-      AddToGC(right_ptr);
+      AddToGC(reinterpret_cast<uintptr_t>(split_node));
       sib_page->store(kNullPtr, std::memory_order_relaxed);
       return false;
     }
@@ -1036,7 +1037,7 @@ class BwTree
     stack.pop_back();  // remove the split child node to modify its parent node
     while (true) {
       // check whether another thread has already completed this splitting
-      auto [head, rc] = GetHeadWithKeyCheck(key, stack);
+      auto [head, rc] = GetHeadWithKeyCheck(sep_key, stack);
       if (rc == kKeyExist) {
         entry_delta->SetNext(kNullPtr);
         AddToGC(new_head);

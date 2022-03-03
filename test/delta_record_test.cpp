@@ -144,7 +144,7 @@ class DeltaRecordFixture : public testing::Test
     auto sib_page = reinterpret_cast<uintptr_t>(&right_page);
 
     // verify split delta
-    auto *raw_p = new (GetPage()) DeltaRecord_t{right_ptr, sib_page, sib_page};
+    auto *raw_p = new (GetPage()) DeltaRecord_t{kSplit, right_node.get(), &right_page, sib_page};
     std::unique_ptr<DeltaRecord_t> delta{raw_p};
 
     EXPECT_TRUE(delta->IsLeaf());

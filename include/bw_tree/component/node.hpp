@@ -279,7 +279,7 @@ class Node
     size_t rec_num{};
     if (high_key) {
       auto [rc, pos] = SearchRecord(*high_key);
-      rec_num = (rc == NodeRC::kKeyNotExist) ? pos : pos + 1;
+      rec_num = (rc == kKeyNotExist) ? pos : pos + 1;
     } else {
       rec_num = record_count_;
     }
