@@ -670,28 +670,37 @@ class BwTree
       const bool closed,
       NodeStack &stack)
   {
-    auto [ptr, rc] = Delta_t::SearchChildNode(key, closed, stack.back());
-    switch (rc) {
-      case DeltaRC::kRecordFound: {
-        stack.emplace_back(reinterpret_cast<std::atomic_uintptr_t *>(ptr));
-        break;
-      }
-      case DeltaRC::kNodeRemoved: {
-        stack.pop_back();
-        break;
-      }
-      case DeltaRC::kReachBaseNode:
-      default: {
-        if (static_cast<size_t>(rc) >= kMaxDeltaNodeNum) {
-          consol_page_ = stack.back();
-        }
+    while (true) {
+      size_t delta_num = 0;
+      auto out_ptr = stack.back()->load(std::memory_order_acquire);
+      switch (Delta_t::SearchChildNode(key, closed, out_ptr, delta_num)) {
+        case DeltaRC::kRecordFound:
+          stack.emplace_back(reinterpret_cast<std::atomic_uintptr_t *>(out_ptr));
+          return;
 
-        // search a child node in a base node
-        const auto *base_node = reinterpret_cast<Node_t *>(ptr);
-        const auto pos = base_node->SearchChild(key, closed);
-        const auto meta = base_node->GetMetadata(pos);
-        stack.emplace_back(base_node->template GetPayload<std::atomic_uintptr_t *>(meta));
-        break;
+        case DeltaRC::kKeyIsInSibling:
+          // swap a current node in a stack and retry
+          *stack.rbegin() = reinterpret_cast<std::atomic_uintptr_t *>(out_ptr);
+          continue;
+
+        case DeltaRC::kNodeRemoved:
+          // retry from the parent node
+          stack.pop_back();
+          continue;
+
+        case DeltaRC::kReachBaseNode:
+        default: {
+          if (delta_num >= kMaxDeltaNodeNum) {
+            consol_page_ = stack.back();
+          }
+
+          // search a child node in a base node
+          const auto *base_node = reinterpret_cast<Node_t *>(out_ptr);
+          const auto pos = base_node->SearchChild(key, closed);
+          const auto meta = base_node->GetMetadata(pos);
+          stack.emplace_back(base_node->template GetPayload<std::atomic_uintptr_t *>(meta));
+          return;
+        }
       }
     }
   }
@@ -781,6 +790,8 @@ class BwTree
       NodeStack &stack)  //
       -> uintptr_t
   {
+    uintptr_t sib_page{};
+
     while (true) {
       // check whether the node has partial SMOs
       auto head = stack.back()->load(std::memory_order_acquire);
@@ -788,7 +799,7 @@ class BwTree
 
       // check whether the node is active and can include a target key
       size_t delta_num = 0;
-      switch (uintptr_t sib_page{}; Delta_t::Validate(key, closed, head, sib_page, delta_num)) {
+      switch (Delta_t::Validate(key, closed, head, sib_page, delta_num)) {
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
           *stack.rbegin() = reinterpret_cast<std::atomic_uintptr_t *>(sib_page);
@@ -819,7 +830,9 @@ class BwTree
       NodeStack &stack)  //
       -> std::pair<uintptr_t, ReturnCode>
   {
+    uintptr_t out_ptr{};
     ReturnCode rc{};
+
     while (true) {
       // check whether the node has partial SMOs
       auto head = stack.back()->load(std::memory_order_acquire);
@@ -827,7 +840,7 @@ class BwTree
 
       // check whether the node is active and has a target key
       size_t delta_num = 0;
-      switch (uintptr_t out_ptr{}; Delta_t::SearchRecord(key, head, out_ptr, delta_num)) {
+      switch (Delta_t::SearchRecord(key, head, out_ptr, delta_num)) {
         case DeltaRC::kRecordFound:
           rc = kKeyExist;
           break;
