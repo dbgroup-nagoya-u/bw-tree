@@ -413,11 +413,22 @@ class DeltaRecord
           return kNodeRemoved;
 
         case kMerge: {
-          // a target record may be in the merged node
-          const auto *sib_page = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
-          const auto remove_d = sib_page->load(std::memory_order_acquire);
-          out_ptr = reinterpret_cast<DeltaRecord *>(remove_d)->next_;
-          return kReachBaseNode;
+          // check whether the merged node contains a target key
+          const auto &sep_key = cur_rec->GetKey();
+          if (Comp{}(sep_key, key)) {
+            // check whether the merging is aborted
+            const auto *sib_page = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
+            const auto *remove_d =
+                reinterpret_cast<DeltaRecord *>(sib_page->load(std::memory_order_acquire));
+            if (remove_d->IsRemoveNodeDelta()) {
+              // a target record may be in the merged node
+              out_ptr = remove_d->next_;
+              return kReachBaseNode;
+            }
+            // merging was aborted, so check the sibling node
+            return kKeyIsInSibling;
+          }
+          break;
         }
 
         case kNotDelta:
@@ -469,9 +480,20 @@ class DeltaRecord
         case kRemoveNode:
           return kNodeRemoved;
 
-        case kMerge:
+        case kMerge: {
+          // check whether the merging is aborted and the sibling node includes a target key
+          const auto &sep_key = cur_rec->GetKey();
+          const auto *sib_page = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
+          const auto *remove_d =
+              reinterpret_cast<DeltaRecord *>(sib_page->load(std::memory_order_acquire));
+          if (!remove_d->IsRemoveNodeDelta()
+              && (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key)))) {
+            // merging was aborted, so check the sibling node
+            return kKeyIsInSibling;
+          }
           // a target key must be in the merged node
           return kReachBaseNode;
+        }
 
         case kNotDelta: {
           // check whether the node contains a target key
