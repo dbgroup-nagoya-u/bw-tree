@@ -140,11 +140,31 @@ class Node
    * @retval true if this node has a left sibling node.
    * @retval false otherwise.
    */
-  [[nodiscard]] constexpr auto
-  HasLeftSibling() const  //
+  [[nodiscard]] auto
+  IsLeftmostChildIn(const std::vector<std::atomic_uintptr_t *> &stack) const  //
       -> bool
   {
-    return low_meta_.GetKeyLength() > 0;
+    const auto depth = stack.size();
+    if (depth <= 1) return false;
+
+    const auto child_len = low_meta_.GetKeyLength();
+    if (child_len == 0) return true;
+
+    const auto *parent_page = stack.at(depth - 1);
+    const auto *parent = reinterpret_cast<Node *>(parent_page->load(std::memory_order_acquire));
+    const auto parent_len = parent->low_meta_.GetKeyLength();
+    if (parent_len == 0) return false;
+
+    return IsEqual<Comp>(GetLowKey(), parent->GetLowKey());
+  }
+
+  [[nodiscard]] auto
+  HasSameLowKeyWith(const Key &key)  //
+      -> bool
+  {
+    if (low_meta_.GetKeyLength() == 0) return false;
+
+    return IsEqual<Comp>(GetLowKey(), key);
   }
 
   /**

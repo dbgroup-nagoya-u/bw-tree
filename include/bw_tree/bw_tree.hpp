@@ -914,17 +914,24 @@ class BwTree
       cur_head = GetHead(key, closed, stack);
       if (consol_page_ != target_page) return;
 
-      // perform consolidation
+      // prepare a consolidated node
       auto [consol_node, size] = Consolidate(cur_head);
-      if (size <= kMinNodeSize) {  // perform merging
-        // TryMerge();
-      } else if (size <= kPageSize) {  // perform consolidation
-        new_head = reinterpret_cast<uintptr_t>(consol_node);
-        break;
+
+      if (size > kPageSize) {
+        // switch to splitting
+        if (HalfSplit(target_page, cur_head, consol_node, stack)) return;
+        continue;  // retry splitting
       }
 
-      // perform splitting if needed
-      if (HalfSplit(target_page, cur_head, consol_node, stack)) return;
+      if (size <= kMinNodeSize && !consol_node->IsLeftmostChildIn(stack)) {
+        // switch to merging
+        TryMerge(cur_head, consol_node, stack);
+        return;  // no retry for merging
+      }
+
+      // perform consolidation
+      new_head = reinterpret_cast<uintptr_t>(consol_node);
+      break;
     }
 
     // install a consolidated node
@@ -1066,10 +1073,97 @@ class BwTree
     stack.emplace_back(new_root_p);
   }
 
-  void TryMerge(  //
-  )
+  void
+  TryMerge(  //
+      uintptr_t head,
+      const Node_t *merged_node,
+      NodeStack &stack)
   {
-    //
+    auto *merged_page = stack.back();
+
+    // insert a remove-node delta to prevent other threads from modifying this node
+    auto *remove_delta = new (GetRecPage()) Delta_t{reinterpret_cast<uintptr_t>(merged_node)};
+    auto delta_ptr = reinterpret_cast<uintptr_t>(remove_delta);
+    if (!merged_page->compare_exchange_strong(head, delta_ptr, std::memory_order_release)) {
+      // no retry for merging
+      AddToGC(delta_ptr);
+      return;
+    }
+
+    // search a left sibling node
+    stack.pop_back();
+    const auto &low_key = merged_node->GetLowKey();
+    SearchChildNode(low_key, kClosed, stack);
+
+    // insert a merge delta into the left sibling node
+    auto *sib_page = stack.back();
+    auto *merge_delta = new (GetRecPage()) Delta_t{DeltaType::kMerge, merged_node, merged_page};
+    delta_ptr = reinterpret_cast<uintptr_t>(merge_delta);
+    while (true) {  // continue until insertion succeeds
+      head = GetHead(low_key, kClosed, stack);
+      merge_delta->SetNext(head);
+      if (sib_page->compare_exchange_weak(head, delta_ptr, std::memory_order_release)) break;
+    }
+
+    CompleteMerge(merge_delta, stack);
+  }
+
+  void
+  CompleteMerge(  //
+      const Delta_t *merge_delta,
+      NodeStack &stack)
+  {
+    // create an index-delete delta record to complete merging
+    auto *del_delta = new (GetRecPage()) Delta_t{merge_delta, stack.back()};
+    const auto new_head = reinterpret_cast<uintptr_t>(del_delta);
+    const auto &del_key = merge_delta->GetKey();
+
+    // insert the delta record into a parent node
+    stack.pop_back();  // remove the merged child node to modify its parent node
+    while (true) {
+      // check whether another thread has already completed this merging
+      auto [head, rc] = GetHeadWithKeyCheck(del_key, stack);
+      if (rc == kKeyNotExist) {
+        // another thread has already deleted the merged node
+        del_delta->SetNext(kNullPtr);
+        AddToGC(new_head);
+        return;
+      }
+
+      // check concurrent splitting
+      auto *cur_page = stack.back();
+      auto sib_head = GetHead(del_key, !kClosed, stack);
+      if (cur_page != stack.back()) {
+        // the target node was split, so check whether the merged nodes span two parent nodes
+        for (auto *delta = reinterpret_cast<Delta_t *>(sib_head); !delta->IsBaseNode();) {
+          sib_head = delta->GetNext();
+          delta = reinterpret_cast<Delta_t *>(sib_head);
+        }
+        if (reinterpret_cast<Node_t *>(sib_head)->HasSameLowKeyWith(del_key)) {
+          // the merged nodes have different parent nodes, so abort
+          AbortMerge(merge_delta);
+          return;
+        }
+        continue;  // the merged nodes have the same parent node, so retry
+      }
+
+      // try to insert the index-delete delta record
+      del_delta->SetNext(head);
+      if (cur_page->compare_exchange_weak(head, new_head, std::memory_order_release)) return;
+    }
+  }
+
+  void
+  AbortMerge(const Delta_t *merge_delta)
+  {
+    // check this merging is still active
+    auto *sib_page = merge_delta->template GetPayload<std::atomic_uintptr_t *>();
+    auto head = sib_page->load(std::memory_order_acquire);
+    const auto *remove_d = reinterpret_cast<Delta_t *>(head);
+    if (!remove_d->IsRemoveNodeDelta()) return;  // merging has been already aborted
+
+    // delete the remove-node delta to allow other threads to modify the node
+    sib_page->compare_exchange_strong(head, remove_d->GetNext(), std::memory_order_release);
   }
 
   /*####################################################################################
