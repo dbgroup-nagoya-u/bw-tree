@@ -525,24 +525,27 @@ class DeltaRecord
   static auto
   Sort(  //
       uintptr_t ptr,
-      std::vector<std::pair<Key, uintptr_t>> &records)  //
-      -> std::tuple<uintptr_t, std::optional<Key>, Metadata, uintptr_t, int64_t>
+      std::vector<std::pair<Key, uintptr_t>> &records,
+      std::vector<std::tuple<uintptr_t, uintptr_t, Metadata>> &nodes)  //
+      -> std::tuple<uintptr_t, Metadata, int64_t>
   {
-    auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-    std::optional<Key> high_key = std::nullopt;
+    uintptr_t high_node = kNullPtr;
     Metadata high_meta{};
-    uintptr_t sib_node{};
-    int64_t size_diff = 0;
+    std::optional<Key> sep_key = std::nullopt;
+    uintptr_t sep_node{};
+    Metadata sep_meta{};
 
     // traverse and sort a delta chain
+    auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+    int64_t size_diff = 0;
     while (true) {
       switch (cur_rec->delta_type_) {
-        case DeltaType::kInsert:
-        case DeltaType::kModify:
-        case DeltaType::kDelete: {
+        case kInsert:
+        case kModify:
+        case kDelete: {
           // check whether this record is in a target node
           auto &&key = cur_rec->GetKey();
-          if (!high_key || !Comp{}(*high_key, key)) {
+          if (!sep_key || !Comp{}(*sep_key, key)) {
             // check uniqueness
             auto it = records.cbegin();
             const auto it_end = records.cend();
@@ -556,9 +559,9 @@ class DeltaRecord
             }
 
             // update the page size
-            if (cur_rec->delta_type_ == DeltaType::kInsert) {
+            if (cur_rec->delta_type_ == kInsert) {
               size_diff += cur_rec->meta_.GetTotalLength() + sizeof(Metadata);
-            } else if (cur_rec->delta_type_ == DeltaType::kDelete) {
+            } else if (cur_rec->delta_type_ == kDelete) {
               size_diff -= cur_rec->meta_.GetTotalLength() + sizeof(Metadata);
             } else if constexpr (IsVariableLengthData<Payload>()) {
               size_diff += cur_rec->meta_.GetPayloadLength();
@@ -566,30 +569,52 @@ class DeltaRecord
           }
           break;
         }
-        case DeltaType::kSplit: {
-          if (!high_key) {
-            // the first split delta has a highest key and a sibling node
-            high_meta = cur_rec->meta_;
-            high_key = cur_rec->GetKey();
-            sib_node = cur_rec->template GetPayload<uintptr_t>();
-          }
-          break;
-        }
-        case DeltaType::kNotDelta: {
-          if (!high_key) {
-            // if there are no SMOs, a base node has a highest key and a sibling node
-            high_meta = cur_rec->high_key_meta_;
-            high_key = cur_rec->GetHighKey();
-            sib_node = cur_rec->next_;
-          }
-          return {ptr, high_key, high_meta, sib_node, size_diff};
-        }
-        case DeltaType::kMerge:
-          // ...not implemented yet
-          break;
 
-        default:
+        case kSplit: {
+          if (high_node == kNullPtr) {
+            // the first split delta has a highest key and a sibling node
+            high_node = ptr;
+            high_meta = cur_rec->meta_;
+          }
+
+          const auto &cur_key = cur_rec->GetKey();
+          if (!sep_key || Comp{}(cur_key, sep_key)) {
+            // keep a separator key to exclude out-of-range records
+            sep_key = cur_key;
+            sep_node = ptr;
+            sep_meta = cur_rec->meta_;
+          }
           break;
+        }
+
+        case kMerge: {
+          // check whether the merging was aborted
+          const auto *sib_page = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
+          const auto sib_ptr = sib_page->load(std::memory_order_acquire);
+          const auto *remove_d = reinterpret_cast<DeltaRecord *>(sib_ptr);
+          if (remove_d->delta_type_ != kRemoveNode) break;  // merging was aborted
+
+          if (high_node == kNullPtr) {
+            // the first merge delta has a highest key and a sibling node
+            high_node = ptr;
+            high_meta = cur_rec->high_key_meta_;
+          }
+
+          // keep the merged node and the corresponding separator key
+          nodes.emplace_back(remove_d->next_, sep_node, sep_meta);
+          break;
+        }
+
+        case kNotDelta:
+        default: {
+          if (high_node == kNullPtr) {
+            // if there are no SMOs, a base node has a highest key and a sibling node
+            high_node = ptr;
+            high_meta = cur_rec->high_key_meta_;
+          }
+          nodes.emplace_back(ptr, sep_node, sep_meta);
+          return {high_node, high_meta, size_diff};
+        }
       }
 
       // go to the next delta record or base node
