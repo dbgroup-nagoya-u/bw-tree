@@ -1115,13 +1115,12 @@ class BwTree
     SearchChildNode(low_key, kClosed, stack);
 
     // insert a merge delta into the left sibling node
-    auto *sib_page = stack.back();
     auto *merge_delta = new (GetRecPage()) Delta_t{DeltaType::kMerge, merged_node, merged_page};
     delta_ptr = reinterpret_cast<uintptr_t>(merge_delta);
     while (true) {  // continue until insertion succeeds
       head = GetHead(low_key, kClosed, stack);
       merge_delta->SetNext(head);
-      if (sib_page->compare_exchange_weak(head, delta_ptr, std::memory_order_release)) break;
+      if (stack.back()->compare_exchange_weak(head, delta_ptr, std::memory_order_release)) break;
     }
 
     CompleteMerge(merge_delta, stack);
@@ -1138,7 +1137,8 @@ class BwTree
     const auto &del_key = merge_delta->GetKey();
 
     // insert the delta record into a parent node
-    stack.pop_back();  // remove the merged child node to modify its parent node
+    auto *child_page = stack.back();  // keep a current logical ID
+    stack.pop_back();                 // remove the split child node to modify its parent node
     while (true) {
       // check whether another thread has already completed this merging
       auto [head, rc] = GetHeadWithKeyCheck(del_key, stack);
@@ -1146,7 +1146,7 @@ class BwTree
         // another thread has already deleted the merged node
         del_delta->SetNext(kNullPtr);
         AddToGC(new_head);
-        return;
+        break;
       }
 
       // check concurrent splitting
@@ -1161,15 +1161,16 @@ class BwTree
         if (reinterpret_cast<Node_t *>(sib_head)->HasSameLowKeyWith(del_key)) {
           // the merged nodes have different parent nodes, so abort
           AbortMerge(merge_delta);
-          return;
+          break;
         }
         continue;  // the merged nodes have the same parent node, so retry
       }
 
       // try to insert the index-delete delta record
       del_delta->SetNext(head);
-      if (cur_page->compare_exchange_weak(head, new_head, std::memory_order_release)) return;
+      if (cur_page->compare_exchange_weak(head, new_head, std::memory_order_release)) break;
     }
+    stack.emplace_back(child_page);
   }
 
   void

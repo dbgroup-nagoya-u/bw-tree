@@ -155,8 +155,11 @@ class Node
     const auto child_len = low_meta_.GetKeyLength();
     if (child_len == 0) return true;
 
-    const auto *parent_page = stack.at(depth - 1);
-    const auto *parent = reinterpret_cast<Node *>(parent_page->load(std::memory_order_acquire));
+    const auto *parent_page = stack.at(depth - 2);
+    auto *parent = reinterpret_cast<Node *>(parent_page->load(std::memory_order_acquire));
+    while (parent->delta_type_ != kNotDelta) {
+      parent = reinterpret_cast<Node *>(parent->next_);
+    }
     const auto parent_len = parent->low_meta_.GetKeyLength();
     if (parent_len == 0) return false;
 
