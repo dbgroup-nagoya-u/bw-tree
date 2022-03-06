@@ -342,7 +342,7 @@ class DeltaRecord
             const auto *sib_page = reinterpret_cast<std::atomic_uintptr_t *>(out_ptr);
             const auto *remove_d =
                 reinterpret_cast<DeltaRecord *>(sib_page->load(std::memory_order_acquire));
-            if (remove_d->IsRemoveNodeDelta()) {
+            if (remove_d->delta_type_ == kRemoveNode) {
               // a target record may be in the merged node
               out_ptr = remove_d->next_;
               return kReachBaseNode;
@@ -425,7 +425,7 @@ class DeltaRecord
             const auto *sib_page = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
             const auto *remove_d =
                 reinterpret_cast<DeltaRecord *>(sib_page->load(std::memory_order_acquire));
-            if (remove_d->IsRemoveNodeDelta()) {
+            if (remove_d->delta_type_ == kRemoveNode) {
               // a target record may be in the merged node
               out_ptr = remove_d->next_;
               return kReachBaseNode;
@@ -491,7 +491,7 @@ class DeltaRecord
           const auto *sib_page = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
           const auto *remove_d =
               reinterpret_cast<DeltaRecord *>(sib_page->load(std::memory_order_acquire));
-          if (!remove_d->IsRemoveNodeDelta()
+          if (remove_d->delta_type_ != kRemoveNode
               && (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key)))) {
             // merging was aborted, so check the sibling node
             return kKeyIsInSibling;
