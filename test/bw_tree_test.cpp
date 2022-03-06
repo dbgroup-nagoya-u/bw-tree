@@ -396,23 +396,23 @@ TYPED_TEST(BwTreeFixture, InsertWithDuplicateKeysFail)
   }
 }
 
-// TYPED_TEST(BwTreeFixture, InsertWithDeletedKeysSucceed)
-// {
-//   const size_t rec_num = TestFixture::kMaxRecNumForTest;
+TYPED_TEST(BwTreeFixture, InsertWithDeletedKeysSucceed)
+{
+  const size_t rec_num = TestFixture::kMaxRecNumForTest;
 
-//   for (size_t i = 0; i < rec_num; ++i) {
-//     TestFixture::VerifyInsert(i, i, kExpectSuccess);
-//   }
-//   for (size_t i = 0; i < rec_num; ++i) {
-//     TestFixture::VerifyDelete(i, kExpectSuccess);
-//   }
-//   for (size_t i = 0; i < rec_num; ++i) {
-//     TestFixture::VerifyInsert(i, i + 1, kExpectSuccess);
-//   }
-//   for (size_t i = 0; i < rec_num; ++i) {
-//     TestFixture::VerifyRead(i, i + 1, kExpectSuccess);
-//   }
-// }
+  for (size_t i = 0; i < rec_num; ++i) {
+    TestFixture::VerifyInsert(i, i, kExpectSuccess);
+  }
+  for (size_t i = 0; i < rec_num; ++i) {
+    TestFixture::VerifyDelete(i, kExpectSuccess);
+  }
+  for (size_t i = 0; i < rec_num; ++i) {
+    TestFixture::VerifyInsert(i, i + 1, kExpectSuccess);
+  }
+  for (size_t i = 0; i < rec_num; ++i) {
+    TestFixture::VerifyRead(i, i + 1, kExpectSuccess);
+  }
+}
 
 /*--------------------------------------------------------------------------------------
  * Update operation
@@ -445,26 +445,26 @@ TYPED_TEST(BwTreeFixture, UpdateNotInsertedKeysFail)
   }
 }
 
-// TYPED_TEST(BwTreeFixture, UpdateWithDeletedKeysFail)
-// {
-//   const size_t rec_num = TestFixture::kMaxRecNumForTest;
+TYPED_TEST(BwTreeFixture, UpdateWithDeletedKeysFail)
+{
+  const size_t rec_num = TestFixture::kMaxRecNumForTest;
 
-//   for (size_t i = 0; i < rec_num; ++i) {
-//     TestFixture::VerifyWrite(i, i);
-//   }
-//   for (size_t i = 0; i < rec_num; ++i) {
-//     TestFixture::VerifyDelete(i, kExpectSuccess);
-//   }
-//   for (size_t i = 0; i < rec_num; ++i) {
-//     TestFixture::VerifyUpdate(i, i, kExpectFailed);
-//   }
-//   for (size_t i = 0; i < rec_num; ++i) {
-//     TestFixture::VerifyRead(i, i, kExpectFailed);
-//   }
-// }
+  for (size_t i = 0; i < rec_num; ++i) {
+    TestFixture::VerifyWrite(i, i);
+  }
+  for (size_t i = 0; i < rec_num; ++i) {
+    TestFixture::VerifyDelete(i, kExpectSuccess);
+  }
+  for (size_t i = 0; i < rec_num; ++i) {
+    TestFixture::VerifyUpdate(i, i, kExpectFailed);
+  }
+  for (size_t i = 0; i < rec_num; ++i) {
+    TestFixture::VerifyRead(i, i, kExpectFailed);
+  }
+}
 
 /*--------------------------------------------------------------------------------------
- * Update operation
+ * Delete operation
  *------------------------------------------------------------------------------------*/
 
 TYPED_TEST(BwTreeFixture, DeleteWithDuplicateKeysReadFail)
