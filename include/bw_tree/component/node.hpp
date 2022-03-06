@@ -83,15 +83,20 @@ class Node
    * @param sib_node the pointer to a sibling node.
    */
   Node(  //
-      const Node *node,
-      const Metadata high_meta,
-      const uintptr_t sib_page)
-      : node_type_{node->node_type_},
-        delta_type_{DeltaType::kNotDelta},
-        next_{sib_page},
-        low_meta_{node->low_meta_},
-        high_meta_{high_meta}
+      const uintptr_t low_ptr,
+      const uintptr_t high_ptr,
+      const Metadata high_meta)
+      : delta_type_{kNotDelta}, high_meta_{high_meta}
   {
+    const auto *low_node = reinterpret_cast<Node *>(low_ptr);
+    node_type_ = low_node->node_type_;
+    low_meta_ = low_node->low_meta_;
+    const auto *high_node = reinterpret_cast<Node *>(high_ptr);
+    if (high_node->delta_type_ == kNotDelta) {
+      next_ = high_node->next_;
+    } else {  // a split-delta record
+      next_ = high_node->template GetPayload<uintptr_t>(high_meta);
+    }
   }
 
   Node(const Node &) = delete;
@@ -268,29 +273,43 @@ class Node
     }
   }
 
-  [[nodiscard]] auto
+  [[nodiscard]] static auto
   GetPageSize(  //
-      const std::optional<Key> &high_key,
-      const Metadata high_meta) const  //
-      -> std::pair<size_t, size_t>
+      std::vector<std::tuple<uintptr_t, uintptr_t, Metadata>> &nodes,
+      const Metadata h_meta)  //
+      -> size_t
   {
-    if (record_count_ == 0) return {high_meta.GetKeyLength(), 0};
-
     size_t rec_num{};
-    if (high_key) {
-      auto [rc, pos] = SearchRecord(*high_key);
-      rec_num = (rc == kKeyNotExist) ? pos : pos + 1;
-    } else {
-      rec_num = record_count_;
+    auto size = reinterpret_cast<Node *>(std::get<0>(nodes.back()))->low_meta_.GetKeyLength()
+                + h_meta.GetKeyLength();
+
+    for (auto &[node_ptr, sep_ptr, sep_meta] : nodes) {
+      const auto *node = reinterpret_cast<Node *>(node_ptr);
+      if (node->record_count_ == 0) {
+        // if a base node does not have any record, skip it
+        sep_ptr = 0;  // update the 2nd member as the number of records
+        continue;
+      }
+
+      // check the number of records to be consolidated
+      if (sep_meta.GetKeyLength() > 0) {
+        const auto *sep_node = reinterpret_cast<Node *>(sep_ptr);
+        const auto &sep_key = sep_node->GetKey(sep_meta);
+        auto [rc, pos] = node->SearchRecord(sep_key);
+        rec_num = (rc == kKeyNotExist) ? pos : pos + 1;
+      } else {  //
+        rec_num = node->record_count_;
+      }
+      sep_ptr = rec_num;  // update the 2nd member as the number of records
+      if (rec_num == 0) continue;
+
+      // compute the size of records
+      auto end_offset = node->meta_array_[0].GetOffset() + node->meta_array_[0].GetTotalLength();
+      auto begin_offset = node->meta_array_[rec_num - 1].GetOffset();
+      size += sizeof(Metadata) * rec_num + (end_offset - begin_offset);
     }
-    auto end_offset = meta_array_[0].GetOffset() + meta_array_[0].GetTotalLength();
-    auto begin_offset = meta_array_[rec_num - 1].GetOffset();
 
-    auto size = sizeof(Metadata) * rec_num                              // metadata
-                + end_offset - begin_offset                             // records
-                + low_meta_.GetKeyLength() + high_meta.GetKeyLength();  // low/high keys
-
-    return {size, rec_num};
+    return size;
   }
 
   /*####################################################################################
@@ -374,20 +393,21 @@ class Node
 
   void
   LeafConsolidate(  //
-      const Node *node,
+      const std::vector<std::tuple<uintptr_t, uintptr_t, Metadata>> &nodes,
       const std::vector<std::pair<Key, uintptr_t>> &records,
-      const std::optional<Key> &high_key,
-      size_t offset,
-      const size_t base_rec_num)
+      const uintptr_t high_ptr,
+      size_t offset)
   {
     if (low_meta_.GetKeyLength() > 0) {
+      const auto *node = reinterpret_cast<Node *>(std::get<0>(nodes.back()));
       offset = CopyKeyFrom(node, low_meta_, offset);
     }
     low_meta_.SetOffset(offset);
 
     // copy the lowest key
-    if (high_key) {
-      offset = SetData(offset, *high_key, high_meta_.GetKeyLength());
+    if (high_meta_.GetKeyLength() > 0) {
+      const auto *high_node = reinterpret_cast<Node *>(high_ptr);
+      offset = CopyKeyFrom(high_node, high_meta_, offset);
     }
     high_meta_.SetOffset(offset);
 
@@ -396,30 +416,33 @@ class Node
     size_t rec_count = 0;
     size_t j = 0;
     Node *rec{};
-    for (size_t i = 0; i < base_rec_num; ++i) {
-      // copy new records
-      const auto meta = node->meta_array_[i];
-      const auto &key = (meta.GetKeyLength() > 0) ? std::make_optional(node->GetKey(meta))  //
-                                                  : std::nullopt;
-      for (; j < new_rec_num; ++j) {
-        const auto &[rec_key, rec_ptr] = records[j];
-        rec = reinterpret_cast<Node *>(rec_ptr);
-        if (key && !Comp{}(rec_key, *key)) break;
+    for (int64_t k = nodes.size() - 1; k >= 0; --k) {
+      const auto [node_ptr, base_rec_num, dummy] = nodes.at(k);
+      const auto *node = reinterpret_cast<Node *>(node_ptr);
+      for (size_t i = 0; i < base_rec_num; ++i) {
+        // copy new records
+        const auto meta = node->meta_array_[i];
+        const auto &key = node->GetKey(meta);
+        for (; j < new_rec_num; ++j) {
+          const auto &[rec_key, rec_ptr] = records[j];
+          rec = reinterpret_cast<Node *>(rec_ptr);
+          if (!Comp{}(rec_key, key)) break;
 
-        // check a new record has any payload
-        if (rec->HasPayload()) {
-          offset = CopyRecordFrom(rec, rec->low_meta_, rec_count++, offset);
+          // check a new record has any payload
+          if (rec->HasPayload()) {
+            offset = CopyRecordFrom(rec, rec->low_meta_, rec_count++, offset);
+          }
         }
-      }
 
-      // check a new record is updated one
-      if (j < new_rec_num && !Comp{}(*key, records[j].first)) {
-        if (rec->HasPayload()) {
-          offset = CopyRecordFrom(rec, rec->low_meta_, rec_count++, offset);
+        // check a new record is updated one
+        if (j < new_rec_num && !Comp{}(key, records[j].first)) {
+          if (rec->HasPayload()) {
+            offset = CopyRecordFrom(rec, rec->low_meta_, rec_count++, offset);
+          }
+          ++j;
+        } else {
+          offset = CopyRecordFrom(node, meta, rec_count++, offset);
         }
-        ++j;
-      } else {
-        offset = CopyRecordFrom(node, meta, rec_count++, offset);
       }
     }
 
@@ -437,20 +460,21 @@ class Node
 
   void
   InternalConsolidate(  //
-      const Node *node,
+      const std::vector<std::tuple<uintptr_t, uintptr_t, Metadata>> &nodes,
       const std::vector<std::pair<Key, uintptr_t>> &records,
-      const std::optional<Key> &high_key,
-      size_t offset,
-      const size_t base_rec_num)
+      const uintptr_t high_ptr,
+      size_t offset)
   {
     if (low_meta_.GetKeyLength() > 0) {
+      const auto *node = reinterpret_cast<Node *>(std::get<0>(nodes.back()));
       offset = CopyKeyFrom(node, low_meta_, offset);
     }
     low_meta_.SetOffset(offset);
 
     // copy the lowest key
-    if (high_key) {
-      offset = SetData(offset, *high_key, high_meta_.GetKeyLength());
+    if (high_meta_.GetKeyLength() > 0) {
+      const auto *high_node = reinterpret_cast<Node *>(high_ptr);
+      offset = CopyKeyFrom(high_node, high_meta_, offset);
     }
     high_meta_.SetOffset(offset);
 
@@ -459,57 +483,45 @@ class Node
     size_t rec_count = 0;
     size_t j = 0;
     Node *rec{};
-    for (size_t i = 0; i < base_rec_num; ++i) {
-      // copy a payload of a base node in advance to swap that of a new index entry
-      auto meta = node->meta_array_[i];
-      offset = CopyPayloadFrom(node, meta, offset);
+    for (int64_t k = nodes.size() - 1; k >= 0; --k) {
+      const auto [node_ptr, base_rec_num, dummy] = nodes.at(k);
+      const auto *node = reinterpret_cast<Node *>(node_ptr);
+      bool prev_rec_deleted = false;
+      for (size_t i = 0; i < base_rec_num; ++i) {
+        // copy a payload of a base node in advance to swap that of a new index entry
+        auto meta = node->meta_array_[i];
+        if (!prev_rec_deleted) {
+          offset = CopyPayloadFrom(node, meta, offset);
+        }
 
-      // insert new index entries
-      const auto &key = (meta.GetKeyLength() > 0) ? std::make_optional(node->GetKey(meta))  //
-                                                  : std::nullopt;
-      for (; j < new_rec_num; ++j) {
-        const auto &[rec_key, rec_ptr] = records[j];
-        rec = reinterpret_cast<Node *>(rec_ptr);
-        if (key && !Comp{}(rec_key, *key)) break;
+        // insert new index entries
+        const auto &key = (meta.GetKeyLength() > 0) ? std::make_optional(node->GetKey(meta))  //
+                                                    : std::nullopt;
+        for (; j < new_rec_num; ++j) {
+          const auto &[rec_key, rec_ptr] = records[j];
+          rec = reinterpret_cast<Node *>(rec_ptr);
+          if (key && !Comp{}(rec_key, *key)) break;
 
-        // check a new record has any payload
-        if (rec->HasPayload()) {
-          auto rec_meta = rec->low_meta_;
-          offset = CopyKeyFrom(rec, rec_meta, offset);
-          SetMetadata(rec_meta, rec_count++, offset);
-          offset = CopyPayloadFrom(rec, rec_meta, offset);
+          // check a new record has any payload
+          if (rec->HasPayload()) {
+            auto rec_meta = rec->low_meta_;
+            offset = CopyKeyFrom(rec, rec_meta, offset);
+            SetMetadata(rec_meta, rec_count++, offset);
+            offset = CopyPayloadFrom(rec, rec_meta, offset);
+          }
+        }
+
+        if (j < new_rec_num && !Comp{}(*key, records[j].first)) {
+          // the record is deleted
+          ++j;
+          prev_rec_deleted = true;
+        } else {
+          // finalize setting a record
+          offset = CopyKeyFrom(node, meta, offset);
+          SetMetadata(meta, rec_count++, offset);
+          prev_rec_deleted = false;
         }
       }
-
-      // Note: there are no duplicate keys in internal nodes
-      offset = CopyKeyFrom(node, meta, offset);
-      SetMetadata(meta, rec_count++, offset);
-    }
-
-    // copy remaining delta records
-    if (j < new_rec_num) {
-      // copy a payload of a base node in advance to swap that of a new index entry
-      offset = CopyPayloadFrom(node, node->meta_array_[base_rec_num], offset);
-
-      // insert new index entries
-      const auto tmp_rec_num = new_rec_num - 1;
-      for (; j < tmp_rec_num; ++j) {
-        rec = reinterpret_cast<Node *>(records[j].second);
-
-        // check a new record has any payload
-        if (rec->HasPayload()) {
-          auto rec_meta = rec->low_meta_;
-          offset = CopyKeyFrom(rec, rec_meta, offset);
-          SetMetadata(rec_meta, rec_count++, offset);
-          offset = CopyPayloadFrom(rec, rec_meta, offset);
-        }
-      }
-
-      // Note: there are no duplicate keys in internal nodes
-      rec = reinterpret_cast<Node *>(records[j].second);
-      auto rec_meta = rec->low_meta_;
-      offset = CopyKeyFrom(rec, rec_meta, offset);
-      SetMetadata(rec_meta, rec_count++, offset);
     }
 
     // set header information

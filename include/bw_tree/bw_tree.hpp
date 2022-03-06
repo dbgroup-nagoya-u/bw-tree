@@ -968,25 +968,28 @@ class BwTree
       -> std::pair<Node_t *, size_t>
   {
     // sort delta records
-    std::vector<std::pair<Key, uintptr_t>> sorted{};
-    sorted.reserve(kMaxDeltaNodeNum * 4);
-    auto &&[ptr, high_key, h_meta, sib_ptr, diff] = Delta_t::template Sort<Payload>(head, sorted);
-    auto *node = reinterpret_cast<Node_t *>(ptr);
+    std::vector<std::pair<Key, uintptr_t>> records{};
+    std::vector<std::tuple<uintptr_t, uintptr_t, Metadata>> nodes{};
+    records.reserve(kMaxDeltaNodeNum * 4);
+    nodes.reserve(kMaxDeltaNodeNum);
+    const auto &[h_node, h_meta, diff] = Delta_t::template Sort<Payload>(head, records, nodes);
 
-    // reserve a page for a consolidated node
-    auto [block_size, rec_num] = node->GetPageSize(high_key, h_meta);
-    auto size = kHeaderLength + block_size + diff;
+    // calculate the size a consolidated node
+    const auto size = kHeaderLength + Node_t::GetPageSize(nodes, h_meta) + diff;
+    // in the follwing lines, `nodes` have base nodes and its record counts (ignore 3rd member)
+
+    // consolidate a target node
     if (page == nullptr) {
       page = GetNodePage(size);
     } else if (size > kPageSize) {
       AddToGC(reinterpret_cast<uintptr_t>(page));
       page = GetNodePage(size);
     }
-    auto *new_node = new (page) Node_t{node, h_meta, sib_ptr};
+    auto *new_node = new (page) Node_t{std::get<0>(nodes.back()), h_node, h_meta};
     if (new_node->IsLeaf()) {
-      new_node->LeafConsolidate(node, sorted, high_key, size, rec_num);
+      new_node->LeafConsolidate(nodes, records, h_node, size);
     } else {
-      new_node->InternalConsolidate(node, sorted, high_key, size, rec_num);
+      new_node->InternalConsolidate(nodes, records, h_node, size);
     }
 
     return {new_node, size};

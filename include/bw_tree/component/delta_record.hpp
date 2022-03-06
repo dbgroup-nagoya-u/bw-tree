@@ -578,7 +578,7 @@ class DeltaRecord
           }
 
           const auto &cur_key = cur_rec->GetKey();
-          if (!sep_key || Comp{}(cur_key, sep_key)) {
+          if (!sep_key || Comp{}(cur_key, *sep_key)) {
             // keep a separator key to exclude out-of-range records
             sep_key = cur_key;
             sep_node = ptr;
