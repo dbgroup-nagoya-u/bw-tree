@@ -1050,20 +1050,22 @@ class BwTree
     auto &&sep_key = split_delta->GetKey();
 
     // insert the delta record into a parent node
-    stack.pop_back();  // remove the split child node to modify its parent node
+    auto *cur_page = stack.back();  // keep a current logical ID
+    stack.pop_back();               // remove the split child node to modify its parent node
     while (true) {
       // check whether another thread has already completed this splitting
       auto [head, rc] = GetHeadWithKeyCheck(sep_key, stack);
       if (rc == kKeyExist) {
         entry_delta->SetNext(kNullPtr);
         AddToGC(new_head);
-        return;
+        break;
       }
 
       // try to insert the index-entry delta record
       entry_delta->SetNext(head);
-      if (stack.back()->compare_exchange_weak(head, new_head, std::memory_order_release)) return;
+      if (stack.back()->compare_exchange_weak(head, new_head, std::memory_order_release)) break;
     }
+    stack.emplace_back(cur_page);
   }
 
   void

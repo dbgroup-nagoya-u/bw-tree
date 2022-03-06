@@ -150,7 +150,7 @@ class Node
       -> bool
   {
     const auto depth = stack.size();
-    if (depth <= 1) return false;
+    if (depth <= 1) return true;
 
     const auto child_len = low_meta_.GetKeyLength();
     if (child_len == 0) return true;
