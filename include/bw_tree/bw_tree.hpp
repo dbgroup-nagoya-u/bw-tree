@@ -717,12 +717,12 @@ class BwTree
     // get a logical page of a root node
     auto *page_id = root_.load(std::memory_order_relaxed);
     stack.emplace_back(page_id);
-    auto *head = reinterpret_cast<Node_t *>(page_id->load(std::memory_order_relaxed));
+    auto *head = reinterpret_cast<Node_t *>(page_id->load(std::memory_order_acquire));
 
     // traverse a Bw-tree
     while (!head->IsLeaf()) {
       SearchChildNode(key, closed, stack);
-      head = reinterpret_cast<Node_t *>(stack.back()->load(std::memory_order_relaxed));
+      head = reinterpret_cast<Node_t *>(stack.back()->load(std::memory_order_acquire));
     }
 
     return stack;
