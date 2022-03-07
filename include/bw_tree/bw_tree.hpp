@@ -941,8 +941,8 @@ class BwTree
 
       if (size <= kMinNodeSize && !consol_node->IsLeftmostChildIn(stack)) {
         // switch to merging
-        TryMerge(cur_head, consol_node, stack);
-        return;  // no retry for merging
+        if (TryMerge(cur_head, consol_node, stack)) return;
+        continue;  // retry merging
       }
 
       // perform consolidation
@@ -1092,11 +1092,12 @@ class BwTree
     stack.emplace_back(new_root_p);
   }
 
-  void
+  auto
   TryMerge(  //
       uintptr_t head,
       const Node_t *merged_node,
-      NodeStack &stack)
+      NodeStack &stack)  //
+      -> bool
   {
     auto *merged_page = stack.back();
 
@@ -1106,7 +1107,7 @@ class BwTree
     if (!merged_page->compare_exchange_strong(head, delta_ptr, std::memory_order_release)) {
       // no retry for merging
       AddToGC(delta_ptr);
-      return;
+      return false;
     }
 
     // search a left sibling node
@@ -1124,6 +1125,7 @@ class BwTree
     }
 
     CompleteMerge(merge_delta, stack);
+    return true;
   }
 
   void
