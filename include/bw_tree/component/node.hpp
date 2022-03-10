@@ -528,6 +528,33 @@ class Node
       }
     }
 
+    // copy remaining delta records
+    if (j < new_rec_num) {
+      // copy a payload of a base node in advance to swap that of a new index entry
+      const auto [node_ptr, base_rec_num, dummy] = nodes.front();
+      const auto *node = reinterpret_cast<Node *>(node_ptr);
+      offset = CopyPayloadFrom(node, node->meta_array_[base_rec_num], offset);
+
+      // insert new index entries
+      const auto tmp_rec_num = new_rec_num - 1;
+      for (; j < tmp_rec_num; ++j) {
+        rec = reinterpret_cast<Node *>(records[j].second);
+
+        // check a new record has any payload
+        if (rec->HasPayload()) {
+          auto rec_meta = rec->low_meta_;
+          offset = CopyKeyFrom(rec, rec_meta, offset);
+          SetMetadata(rec_meta, rec_count++, offset);
+          offset = CopyPayloadFrom(rec, rec_meta, offset);
+        }
+      }
+
+      rec = reinterpret_cast<Node *>(records[j].second);
+      auto rec_meta = rec->low_meta_;
+      offset = CopyKeyFrom(rec, rec_meta, offset);
+      SetMetadata(rec_meta, rec_count++, offset);
+    }
+
     // set header information
     record_count_ = rec_count;
   }
