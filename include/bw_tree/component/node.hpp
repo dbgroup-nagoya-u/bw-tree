@@ -341,6 +341,7 @@ class Node
   {
     int64_t begin_pos = 0;
     int64_t end_pos = record_count_ - 1;
+    if (meta_array_[end_pos].GetKeyLength() == 0) --end_pos;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
 
