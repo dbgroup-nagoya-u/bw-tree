@@ -308,7 +308,7 @@ class BwTree
       switch (uintptr_t out_ptr{}; Delta_t::SearchRecord(key, head, out_ptr, delta_num)) {
         case DeltaRC::kRecordFound:
           rc = kKeyExist;
-          payload = reinterpret_cast<Delta_t *>(out_ptr)->template CopyPayload<Payload>();
+          payload = reinterpret_cast<Delta_t *>(out_ptr)->template GetPayload<Payload>();
           break;
 
         case DeltaRC::kRecordDeleted:
@@ -332,7 +332,7 @@ class BwTree
           const auto *node = reinterpret_cast<Node_t *>(out_ptr);
           std::tie(rc, out_ptr) = node->SearchRecord(key);
           if (rc == kKeyExist) {
-            payload = node->template CopyPayload<Payload>(out_ptr);
+            payload = node->template GetPayload<Payload>(node->GetMetadata(out_ptr));
           }
         }
       }

@@ -68,8 +68,8 @@ class DeltaRecord
         delta_type_{delta_type},
         meta_{kHeaderLength, key_len, key_len + pay_len}
   {
-    auto offset = SetData(kHeaderLength, key, key_len);
-    SetData(offset, payload, pay_len);
+    auto offset = SetKey(kHeaderLength, key, key_len);
+    SetPayload(offset, payload);
   }
 
   /**
@@ -85,7 +85,7 @@ class DeltaRecord
         delta_type_{DeltaType::kDelete},
         meta_{kHeaderLength, key_len, key_len}
   {
-    SetData(kHeaderLength, key, key_len);
+    SetKey(kHeaderLength, key, key_len);
   }
 
   /**
@@ -109,7 +109,7 @@ class DeltaRecord
     memcpy(&data_block_, right_node->GetKeyAddr(right_node->meta_), key_len);
 
     // set a sibling node
-    const auto offset = SetData(kHeaderLength + key_len, sib_page_id, kWordSize);
+    const auto offset = SetPayload(kHeaderLength + key_len, sib_page_id);
 
     // copy a highest key
     key_len = right_node->high_key_meta_.GetKeyLength();
@@ -155,7 +155,7 @@ class DeltaRecord
     memcpy(&data_block_, &(delta->data_block_), rec_len);
 
     // update a sibling node ID
-    SetData(kHeaderLength + meta_.GetKeyLength(), sib_page, kWordSize);
+    SetPayload(kHeaderLength + meta_.GetKeyLength(), sib_page);
   }
 
   constexpr DeltaRecord(const DeltaRecord &) = default;
@@ -236,35 +236,9 @@ class DeltaRecord
   GetPayload() const  //
       -> T
   {
-    if constexpr (IsVariableLengthData<T>()) {
-      return reinterpret_cast<T>(GetPayloadAddr());
-    } else {
-      T payload{};
-      memcpy(&payload, GetPayloadAddr(), sizeof(T));
-      return payload;
-    }
-  }
-
-  /**
-   * @brief Copy a target payload to a specified reference.
-   *
-   * @param out_payload a reference to be copied a target payload.
-   */
-  template <class T>
-  [[nodiscard]] auto
-  CopyPayload() const  //
-      -> T
-  {
-    if constexpr (IsVariableLengthData<T>()) {
-      const auto pay_len = meta_.GetPayloadLength();
-      auto payload = reinterpret_cast<T>(::operator new(pay_len));
-      memcpy(payload, GetPayloadAddr(), pay_len);
-      return payload;
-    } else {
-      T payload{};
-      memcpy(&payload, GetPayloadAddr(), sizeof(T));
-      return payload;
-    }
+    T payload{};
+    memcpy(&payload, GetPayloadAddr(), sizeof(T));
+    return payload;
   }
 
   void
@@ -678,20 +652,32 @@ class DeltaRecord
    */
   template <class T>
   auto
-  SetData(  //
+  SetKey(  //
       size_t offset,
-      const T &data,
-      [[maybe_unused]] const size_t data_len)  //
+      const T &key,
+      [[maybe_unused]] const size_t key_len)  //
       -> size_t
   {
     if constexpr (IsVariableLengthData<T>()) {
-      memcpy(ShiftAddr(this, offset), data, data_len);
-      offset += data_len;
+      memcpy(ShiftAddr(this, offset), key, key_len);
+      offset += key_len;
     } else {
-      memcpy(ShiftAddr(this, offset), &data, sizeof(T));
+      memcpy(ShiftAddr(this, offset), &key, sizeof(T));
       offset += sizeof(T);
     }
 
+    return offset;
+  }
+
+  template <class T>
+  auto
+  SetPayload(  //
+      size_t offset,
+      const T &payload)  //
+      -> size_t
+  {
+    memcpy(ShiftAddr(this, offset), &payload, sizeof(T));
+    offset += sizeof(T);
     return offset;
   }
 

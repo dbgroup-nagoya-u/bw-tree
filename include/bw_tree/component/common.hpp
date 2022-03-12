@@ -98,12 +98,9 @@ constexpr auto
 GetMaxDeltaSize()  //
     -> size_t
 {
-  auto key_length = (IsVariableLengthData<Key>()) ? kMaxVariableSize : sizeof(Key);
-  auto pay_length = (IsVariableLengthData<Payload>()) ? kMaxVariableSize : sizeof(Payload);
-  auto max_leaf_delta = kHeaderLength + key_length + pay_length;
-  auto max_internal_delta = kHeaderLength + 2 * key_length + sizeof(uintptr_t);
-
-  return (max_leaf_delta > max_internal_delta) ? max_leaf_delta : max_internal_delta;
+  const auto key_length = (IsVariableLengthData<Key>()) ? kMaxVariableSize : sizeof(Key);
+  const auto pay_length = (sizeof(Payload) > kWordSize) ? sizeof(Payload) : kWordSize;
+  return kHeaderLength + 2 * key_length + pay_length;
 }
 
 /**

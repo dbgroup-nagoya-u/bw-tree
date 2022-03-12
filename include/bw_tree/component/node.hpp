@@ -65,13 +65,13 @@ class Node
     auto meta = split_delta->low_meta_;
     auto &&sep_key = split_delta->GetKey(meta);
     auto key_len = meta.GetKeyLength();
-    auto offset = SetData(kPageSize, left_page, kWordSize);
-    offset = SetData(offset, sep_key, key_len);
+    auto offset = SetPayload(kPageSize, left_page);
+    offset = SetKey(offset, sep_key, key_len);
     meta_array_[0] = Metadata{offset, key_len, key_len + kWordSize};
 
     // set a split-right page
     auto right_page = split_delta->template GetPayload<uintptr_t>(meta);
-    offset = SetData(offset, right_page, kWordSize);
+    offset = SetPayload(offset, right_page);
     meta_array_[1] = Metadata{offset, 0, kWordSize};
   }
 
@@ -245,35 +245,9 @@ class Node
   GetPayload(const Metadata meta) const  //
       -> T
   {
-    if constexpr (IsVariableLengthData<T>()) {
-      return reinterpret_cast<T>(GetPayloadAddr(meta));
-    } else {
-      T payload{};
-      memcpy(&payload, GetPayloadAddr(meta), sizeof(T));
-      return payload;
-    }
-  }
-
-  /**
-   * @brief Copy a target payload to a specified reference.
-   *
-   * @param meta metadata of a corresponding record.
-   */
-  template <class T>
-  [[nodiscard]] auto
-  CopyPayload(const size_t pos) const  //
-      -> T
-  {
-    if constexpr (IsVariableLengthData<T>()) {
-      const auto pay_len = meta_array_[pos].GetPayloadLength();
-      auto payload = reinterpret_cast<T>(::operator new(pay_len));
-      memcpy(payload, GetPayloadAddr(meta_array_[pos]), pay_len);
-      return payload;
-    } else {
-      T payload{};
-      memcpy(&payload, GetPayloadAddr(meta_array_[pos]), sizeof(T));
-      return payload;
-    }
+    T payload{};
+    memcpy(&payload, GetPayloadAddr(meta), sizeof(T));
+    return payload;
   }
 
   [[nodiscard]] static auto
@@ -628,20 +602,32 @@ class Node
    */
   template <class T>
   auto
-  SetData(  //
+  SetKey(  //
       size_t offset,
-      const T &data,
-      [[maybe_unused]] const size_t data_len)  //
+      const T &key,
+      [[maybe_unused]] const size_t key_len)  //
       -> size_t
   {
     if constexpr (IsVariableLengthData<T>()) {
-      offset -= data_len;
-      memcpy(ShiftAddr(this, offset), data, data_len);
+      offset -= key_len;
+      memcpy(ShiftAddr(this, offset), key, key_len);
     } else {
       offset -= sizeof(T);
-      memcpy(ShiftAddr(this, offset), &data, sizeof(T));
+      memcpy(ShiftAddr(this, offset), &key, sizeof(T));
     }
 
+    return offset;
+  }
+
+  template <class T>
+  auto
+  SetPayload(  //
+      size_t offset,
+      const T &payload)  //
+      -> size_t
+  {
+    offset -= sizeof(T);
+    memcpy(ShiftAddr(this, offset), &payload, sizeof(T));
     return offset;
   }
 
