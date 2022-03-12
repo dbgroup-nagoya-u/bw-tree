@@ -376,64 +376,50 @@ class Node
       const uintptr_t high_ptr,
       size_t offset)
   {
-    if (low_meta_.GetKeyLength() > 0) {
-      const auto *node = reinterpret_cast<Node *>(std::get<0>(nodes.back()));
-      offset = CopyKeyFrom(node, low_meta_, offset);
-    }
-    low_meta_.SetOffset(offset);
-
-    // copy the lowest key
-    if (high_meta_.GetKeyLength() > 0) {
-      const auto *high_node = reinterpret_cast<Node *>(high_ptr);
-      offset = CopyKeyFrom(high_node, high_meta_, offset);
-    }
-    high_meta_.SetOffset(offset);
+    // copy low/high keys
+    const auto *node = reinterpret_cast<Node *>(std::get<0>(nodes.back()));
+    offset = CopyLowKeyFrom(node, low_meta_, offset);
+    node = reinterpret_cast<Node *>(high_ptr);
+    offset = CopyHighKeyFrom(node, high_meta_, offset);
 
     // perform merge-sort to consolidate a node
     const auto new_rec_num = records.size();
-    size_t rec_count = 0;
     size_t j = 0;
-    Node *rec{};
     for (int64_t k = nodes.size() - 1; k >= 0; --k) {
       const auto [node_ptr, base_rec_num, dummy] = nodes.at(k);
-      const auto *node = reinterpret_cast<Node *>(node_ptr);
+      node = reinterpret_cast<Node *>(node_ptr);
       for (size_t i = 0; i < base_rec_num; ++i) {
         // copy new records
         const auto meta = node->meta_array_[i];
         const auto &key = node->GetKey(meta);
-        for (; j < new_rec_num; ++j) {
-          const auto &[rec_key, rec_ptr] = records[j];
-          rec = reinterpret_cast<Node *>(rec_ptr);
-          if (!Comp{}(rec_key, key)) break;
-
+        for (; j < new_rec_num && Comp{}(records[j].first, key); ++j) {
           // check a new record has any payload
-          if (rec->HasPayload()) {
-            offset = CopyRecordFrom(rec, rec->low_meta_, rec_count++, offset);
+          auto *rec = reinterpret_cast<Node *>(records[j].second);
+          if (rec->delta_type_ != kDelete) {
+            offset = CopyRecordFrom(rec, rec->low_meta_, record_count_++, offset);
           }
         }
 
         // check a new record is updated one
         if (j < new_rec_num && !Comp{}(key, records[j].first)) {
-          if (rec->HasPayload()) {
-            offset = CopyRecordFrom(rec, rec->low_meta_, rec_count++, offset);
+          auto *rec = reinterpret_cast<Node *>(records[j].second);
+          if (rec->delta_type_ != kDelete) {
+            offset = CopyRecordFrom(rec, rec->low_meta_, record_count_++, offset);
           }
           ++j;
         } else {
-          offset = CopyRecordFrom(node, meta, rec_count++, offset);
+          offset = CopyRecordFrom(node, meta, record_count_++, offset);
         }
       }
     }
 
     // copy remaining new records
     for (; j < new_rec_num; ++j) {
-      rec = reinterpret_cast<Node *>(records[j].second);
-      if (rec->HasPayload()) {
-        offset = CopyRecordFrom(rec, rec->low_meta_, rec_count++, offset);
+      auto *rec = reinterpret_cast<Node *>(records[j].second);
+      if (rec->delta_type_ != kDelete) {
+        offset = CopyRecordFrom(rec, rec->low_meta_, record_count_++, offset);
       }
     }
-
-    // set header information
-    record_count_ = rec_count;
   }
 
   void
@@ -634,6 +620,58 @@ class Node
   /*####################################################################################
    * Internal utilities
    *##################################################################################*/
+
+  auto
+  CopyLowKeyFrom(  //
+      const Node *node,
+      const Metadata meta,
+      size_t offset)  //
+      -> size_t
+  {
+    const auto key_len = meta.GetKeyLength();
+
+    if (key_len > 0) {
+      if constexpr (IsVariableLengthData<Key>()) {
+        offset -= key_len;
+        memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
+        low_meta_ = Metadata(offset, key_len, key_len);
+      } else {
+        offset -= sizeof(Key);
+        memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), sizeof(Key));
+        low_meta_ = Metadata(offset, sizeof(Key), sizeof(Key));
+      }
+    } else {
+      low_meta_ = Metadata{offset, 0, 0};
+    }
+
+    return offset;
+  }
+
+  auto
+  CopyHighKeyFrom(  //
+      const Node *node,
+      const Metadata meta,
+      size_t offset)  //
+      -> size_t
+  {
+    const auto key_len = meta.GetKeyLength();
+
+    if (key_len > 0) {
+      if constexpr (IsVariableLengthData<Key>()) {
+        offset -= key_len;
+        memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
+        high_meta_ = Metadata(offset, key_len, key_len);
+      } else {
+        offset -= sizeof(Key);
+        memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), sizeof(Key));
+        high_meta_ = Metadata(offset, sizeof(Key), sizeof(Key));
+      }
+    } else {
+      high_meta_ = Metadata{offset, 0, 0};
+    }
+
+    return offset;
+  }
 
   /**
    * @brief Copy a record from a base node.
