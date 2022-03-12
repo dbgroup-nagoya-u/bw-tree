@@ -486,10 +486,14 @@ class BwTree
     // insert a delta record
     auto *rec = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload, pay_len};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
+    auto rc = kSuccess;
     while (true) {
       // check target record's existence and get a head pointer
-      auto [head, rc] = GetHeadWithKeyCheck(key, stack);
-      if (rc == kKeyExist) return kKeyExist;
+      auto [head, existence] = GetHeadWithKeyCheck(key, stack);
+      if (existence == kKeyExist) {
+        rc = kKeyExist;
+        break;
+      }
 
       // try to insert the delta record
       rec->SetNext(head);
@@ -500,7 +504,7 @@ class BwTree
       TryConsolidation(consol_page_, key, kClosed, stack);
     }
 
-    return kSuccess;
+    return rc;
   }
 
   /**
@@ -536,10 +540,14 @@ class BwTree
     // insert a delta record
     auto *rec = new (GetRecPage()) Delta_t{DeltaType::kModify, key, key_len, payload, pay_len};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
+    auto rc = kSuccess;
     while (true) {
       // check target record's existence and get a head pointer
-      auto [head, rc] = GetHeadWithKeyCheck(key, stack);
-      if (rc == kKeyNotExist) return kKeyNotExist;
+      auto [head, existence] = GetHeadWithKeyCheck(key, stack);
+      if (existence == kKeyNotExist) {
+        rc = kKeyNotExist;
+        break;
+      }
 
       // try to insert the delta record
       rec->SetNext(head);
@@ -550,7 +558,7 @@ class BwTree
       TryConsolidation(consol_page_, key, kClosed, stack);
     }
 
-    return kSuccess;
+    return rc;
   }
 
   /**
@@ -583,10 +591,14 @@ class BwTree
     // insert a delta record
     auto *rec = new (GetRecPage()) Delta_t{key, key_len};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
+    auto rc = kSuccess;
     while (true) {
       // check target record's existence and get a head pointer
-      auto [head, rc] = GetHeadWithKeyCheck(key, stack);
-      if (rc == kKeyNotExist) return kKeyNotExist;
+      auto [head, existence] = GetHeadWithKeyCheck(key, stack);
+      if (existence == kKeyNotExist) {
+        rc = kKeyNotExist;
+        break;
+      }
 
       // try to insert the delta record
       rec->SetNext(head);
@@ -597,7 +609,7 @@ class BwTree
       TryConsolidation(consol_page_, key, kClosed, stack);
     }
 
-    return kSuccess;
+    return rc;
   }
 
  private:
