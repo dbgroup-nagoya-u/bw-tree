@@ -129,14 +129,14 @@ class BwTreeFixture : public testing::Test
 
     switch (ops.w_type) {
       case WriteType::kInsert:
-        return index_->Insert(key, payload, kKeyLen, kPayLen);
+        return index_->Insert(key, payload, kKeyLen);
       case WriteType::kUpdate:
-        return index_->Update(key, payload, kKeyLen, kPayLen);
+        return index_->Update(key, payload, kKeyLen);
       case WriteType::kDelete:
         return index_->Delete(key, kKeyLen);
       case WriteType::kWrite:
       default:
-        return index_->Write(key, payload, kKeyLen, kPayLen);
+        return index_->Write(key, payload, kKeyLen);
     }
   }
 

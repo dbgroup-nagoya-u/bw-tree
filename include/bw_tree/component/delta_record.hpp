@@ -24,6 +24,7 @@
 
 #include "common.hpp"
 #include "metadata.hpp"
+#include "node_info.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {

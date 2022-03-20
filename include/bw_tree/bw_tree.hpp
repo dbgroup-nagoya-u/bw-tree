@@ -49,6 +49,7 @@ class BwTree
   using DeltaRC = component::DeltaRC;
   using SMOStatus = component::SMOStatus;
   using Metadata = component::Metadata;
+  using NodeInfo = component::NodeInfo;
   using Node_t = component::Node<Key, Comp>;
   using Delta_t = component::DeltaRecord<Key, Comp>;
   using MappingTable_t = component::MappingTable<Key, Comp>;
@@ -372,7 +373,7 @@ class BwTree
       consol_page_ = nullptr;
       auto &&stack = SearchLeafNode(b_key, b_closed);
       auto cur_head = GetHead(b_key, b_closed, stack);
-      node = Consolidate(cur_head).first;
+      node = Consolidate<Payload>(cur_head).first;
       auto [rc, pos] = node->SearchRecord(b_key);
       begin_pos = (rc == kKeyNotExist || b_closed) ? pos : pos + 1;
 
@@ -384,7 +385,7 @@ class BwTree
       // traverse to the leftmost leaf node directly
       auto &&stack = SearchLeftEdgeLeaf();
       auto cur_head = stack.back()->load(std::memory_order_acquire);
-      node = Consolidate(cur_head).first;
+      node = Consolidate<Payload>(cur_head).first;
     }
 
     auto end_pos = node->GetRecordCount();
@@ -423,8 +424,7 @@ class BwTree
   Write(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key),
-      const size_t pay_len = sizeof(Payload))  //
+      const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
@@ -434,7 +434,7 @@ class BwTree
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
-    auto *rec = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload, pay_len};
+    auto *rec = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
     while (true) {
       // check whether the target node includes incomplete SMOs
@@ -474,8 +474,7 @@ class BwTree
   Insert(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key),
-      const size_t pay_len = sizeof(Payload))
+      const size_t key_len = sizeof(Key))
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
@@ -484,7 +483,7 @@ class BwTree
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
-    auto *rec = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload, pay_len};
+    auto *rec = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
     auto rc = kSuccess;
     while (true) {
@@ -528,8 +527,7 @@ class BwTree
   Update(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key),
-      const size_t pay_len = sizeof(Payload))
+      const size_t key_len = sizeof(Key))
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
@@ -538,7 +536,7 @@ class BwTree
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
-    auto *rec = new (GetRecPage()) Delta_t{DeltaType::kModify, key, key_len, payload, pay_len};
+    auto *rec = new (GetRecPage()) Delta_t{DeltaType::kModify, key, key_len, payload};
     auto rec_ptr = reinterpret_cast<uintptr_t>(rec);
     auto rc = kSuccess;
     while (true) {

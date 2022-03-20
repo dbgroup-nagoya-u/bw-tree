@@ -23,6 +23,7 @@
 #include "delta_record.hpp"
 #include "memory/utility.hpp"
 #include "metadata.hpp"
+#include "node_info.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {
@@ -562,17 +563,15 @@ class Node
   SetKey(  //
       size_t offset,
       const T &key,
-      [[maybe_unused]] const size_t key_len)  //
+      const size_t key_len)  //
       -> size_t
   {
+    offset -= key_len;
     if constexpr (IsVariableLengthData<T>()) {
-      offset -= key_len;
       memcpy(ShiftAddr(this, offset), key, key_len);
     } else {
-      offset -= sizeof(T);
-      memcpy(ShiftAddr(this, offset), &key, sizeof(T));
+      memcpy(ShiftAddr(this, offset), &key, key_len);
     }
-
     return offset;
   }
 
@@ -591,58 +590,6 @@ class Node
   /*####################################################################################
    * Internal utilities
    *##################################################################################*/
-
-  auto
-  CopyLowKeyFrom(  //
-      const Node *node,
-      const Metadata meta,
-      size_t offset)  //
-      -> size_t
-  {
-    const auto key_len = meta.GetKeyLength();
-
-    if (key_len > 0) {
-      if constexpr (IsVariableLengthData<Key>()) {
-        offset -= key_len;
-        memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
-        low_meta_ = Metadata(offset, key_len, key_len);
-      } else {
-        offset -= sizeof(Key);
-        memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), sizeof(Key));
-        low_meta_ = Metadata(offset, sizeof(Key), sizeof(Key));
-      }
-    } else {
-      low_meta_ = Metadata{offset, 0, 0};
-    }
-
-    return offset;
-  }
-
-  auto
-  CopyHighKeyFrom(  //
-      const Node *node,
-      const Metadata meta,
-      size_t offset)  //
-      -> size_t
-  {
-    const auto key_len = meta.GetKeyLength();
-
-    if (key_len > 0) {
-      if constexpr (IsVariableLengthData<Key>()) {
-        offset -= key_len;
-        memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
-        high_meta_ = Metadata(offset, key_len, key_len);
-      } else {
-        offset -= sizeof(Key);
-        memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), sizeof(Key));
-        high_meta_ = Metadata(offset, sizeof(Key), sizeof(Key));
-      }
-    } else {
-      high_meta_ = Metadata{offset, 0, 0};
-    }
-
-    return offset;
-  }
 
   /**
    * @brief Copy a record from a base node.
@@ -663,6 +610,29 @@ class Node
     const auto key_len = meta.GetKeyLength();
     offset -= key_len;
     memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
+
+    return offset;
+  }
+
+  /**
+   * @brief Copy a record from a base node.
+   *
+   * @param node an original node that has a target record.
+   * @param meta the corresponding metadata of a target record.
+   * @param offset the current offset of this node.
+   * @return the updated offset value.
+   */
+  template <class T>
+  auto
+  CopyPayloadFrom(  //
+      const Node *node,
+      const Metadata meta,
+      size_t offset)  //
+      -> size_t
+  {
+    // copy a record from the given node
+    offset -= sizeof(T);
+    memcpy(ShiftAddr(this, offset), node->GetPayloadAddr(meta), sizeof(T));
 
     return offset;
   }
