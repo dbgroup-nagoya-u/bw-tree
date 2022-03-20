@@ -905,7 +905,7 @@ class BwTree
       -> RecordIterator
   {
     auto cur_head = page_id->load(std::memory_order_acquire);
-    auto *node = Consolidate(cur_head, page).first;
+    auto *node = Consolidate<Payload>(cur_head, page).first;
 
     auto rec_num = node->GetRecordCount();
     if (end_key) {
@@ -933,6 +933,9 @@ class BwTree
   {
     uintptr_t cur_head{};
     uintptr_t new_head{};
+    Node_t *consol_node{};
+    size_t size{};
+
     while (true) {
       // remove child nodes from a node stack
       while (!stack.empty() && stack.back() != target_page) stack.pop_back();
@@ -942,9 +945,14 @@ class BwTree
       consol_page_ = nullptr;
       cur_head = GetHead(key, closed, stack);
       if (consol_page_ != target_page) return;
+      if (stack.back() != target_page) return;
 
       // prepare a consolidated node
-      auto [consol_node, size] = Consolidate(cur_head);
+      if (reinterpret_cast<Node_t *>(cur_head)->IsLeaf()) {
+        std::tie(consol_node, size) = Consolidate<Payload>(cur_head);
+      } else {
+        std::tie(consol_node, size) = Consolidate<std::atomic_uintptr_t *>(cur_head);
+      }
 
       if (size > kPageSize) {
         // switch to splitting
@@ -974,35 +982,41 @@ class BwTree
     AddToGC(cur_head);
   }
 
+  template <class T>
   auto
   Consolidate(  //
       const uintptr_t head,
       void *page = nullptr)  //
       -> std::pair<Node_t *, size_t>
   {
+    constexpr auto kIsInternal = std::is_same_v<T, std::atomic_uintptr_t *>;
+
     // sort delta records
     std::vector<std::pair<Key, uintptr_t>> records{};
-    std::vector<std::tuple<uintptr_t, uintptr_t, Metadata>> nodes{};
+    std::vector<NodeInfo> nodes{};
     records.reserve(kMaxDeltaNodeNum * 4);
     nodes.reserve(kMaxDeltaNodeNum);
-    const auto &[h_node, h_meta, diff] = Delta_t::template Sort<Payload>(head, records, nodes);
+    const auto diff = Delta_t::template Sort<T>(head, records, nodes);
 
     // calculate the size a consolidated node
-    const auto size = kHeaderLength + Node_t::GetPageSize(nodes, h_meta) + diff;
-    // in the follwing lines, `nodes` have base nodes and its record counts (ignore 3rd member)
+    const auto cur_block_size = Node_t::template PrepareConsolidation<kIsInternal>(nodes);
+    const auto size = kHeaderLength + cur_block_size + diff;
 
-    // consolidate a target node
+    // prepare a page for a new node
     if (page == nullptr) {
       page = GetNodePage(size);
     } else if (size > kPageSize) {
       AddToGC(reinterpret_cast<uintptr_t>(page));
       page = GetNodePage(size);
     }
-    auto *new_node = new (page) Node_t{std::get<0>(nodes.back()), h_node, h_meta};
-    if (new_node->IsLeaf()) {
-      new_node->LeafConsolidate(nodes, records, h_node, size);
+
+    // consolidate a target node
+    auto offset = size;
+    auto *new_node = new (page) Node_t{!kIsInternal, nodes, offset};
+    if constexpr (kIsInternal) {
+      new_node->InternalConsolidate(nodes, records, offset);
     } else {
-      new_node->InternalConsolidate(nodes, records, h_node, size);
+      new_node->template LeafConsolidate<Payload>(nodes, records, offset);
     }
 
     return {new_node, size};
