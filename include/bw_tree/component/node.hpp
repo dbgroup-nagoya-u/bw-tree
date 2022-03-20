@@ -127,7 +127,7 @@ class Node
   IsLeaf() const  //
       -> bool
   {
-    return node_type_;
+    return node_type_ == kLeaf;
   }
 
   /**
@@ -138,7 +138,7 @@ class Node
   IsBaseNode() const  //
       -> bool
   {
-    return delta_type_ == DeltaType::kNotDelta;
+    return delta_type_ == kNotDelta;
   }
 
   /**
