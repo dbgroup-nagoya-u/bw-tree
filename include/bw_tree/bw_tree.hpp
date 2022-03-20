@@ -1114,10 +1114,13 @@ class BwTree
       // another thread has already inserted a new root
       new_root_p->store(kNullPtr, std::memory_order_relaxed);
       AddToGC(root_ptr);
-      stack.emplace_back(old_root_p);
-      return;
+
+      // push a new root node
+      stack.emplace_back(root_.load(std::memory_order_relaxed));
+    } else {
+      stack.emplace_back(new_root_p);
     }
-    stack.emplace_back(new_root_p);
+    stack.emplace_back(old_root_p);
   }
 
   auto
