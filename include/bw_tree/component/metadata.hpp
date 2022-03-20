@@ -115,10 +115,21 @@ class Metadata
   /**
    * @param offset the offset to a corresponding record to be set.
    */
-  constexpr void
-  SetOffset(const size_t offset)
+  [[nodiscard]] constexpr auto
+  UpdateForLeaf(const size_t offset) const  //
+      -> Metadata
   {
-    offset_ = offset;
+    return Metadata{offset, key_length_, total_length_};
+  }
+
+  /**
+   * @param offset the offset to a corresponding record to be set.
+   */
+  [[nodiscard]] constexpr auto
+  UpdateForInternal(const size_t offset) const  //
+      -> Metadata
+  {
+    return Metadata{offset, key_length_, key_length_ + kWordSize};
   }
 
  private:
