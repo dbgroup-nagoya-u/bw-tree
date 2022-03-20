@@ -313,12 +313,18 @@ class Node
   SearchRecord(const Key &key) const  //
       -> std::pair<ReturnCode, size_t>
   {
-    int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 1;
-    if (meta_array_[end_pos].GetKeyLength() == 0) --end_pos;
-    while (begin_pos <= end_pos) {
-      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
+    int64_t end_pos{};
+    if (node_type_ == kLeaf) {
+      end_pos = record_count_ - 1;
+    } else if (high_meta_.GetKeyLength() == 0 || Comp{}(key, GetKey(high_meta_))) {
+      end_pos = record_count_ - 2;
+    } else {
+      return {kKeyExist, record_count_ - 1};
+    }
 
+    int64_t begin_pos = 0;
+    while (begin_pos <= end_pos) {
+      const size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
       const auto &index_key = GetKey(meta_array_[pos]);
 
       if (Comp{}(key, index_key)) {  // a target key is in a left side
