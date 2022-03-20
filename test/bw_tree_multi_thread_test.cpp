@@ -347,12 +347,13 @@ class BwTreeFixture : public testing::Test
  *####################################################################################*/
 
 using KeyPayloadPairs = ::testing::Types<  //
-    KeyPayload<UInt8, UInt8>,              // both fixed
-    KeyPayload<Var, UInt8>,                // variable-fixed
-    KeyPayload<UInt8, Var>,                // fixed-variable
-    KeyPayload<Var, Var>,                  // both variable
+    KeyPayload<UInt8, UInt8>,              // fixed-length keys
+    KeyPayload<UInt4, UInt8>,              // small keys
+    KeyPayload<UInt8, UInt4>,              // small payloads
+    KeyPayload<UInt4, UInt4>,              // small keys/payloads
+    KeyPayload<Var, UInt8>,                // variable-length keys
     KeyPayload<Ptr, Ptr>,                  // pointer key/payload
-    KeyPayload<Original, Original>         // original key/payload
+    KeyPayload<Original, Original>         // original type key/payload
     >;
 TYPED_TEST_SUITE(BwTreeFixture, KeyPayloadPairs);
 
