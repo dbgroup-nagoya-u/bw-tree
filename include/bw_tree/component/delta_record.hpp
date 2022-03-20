@@ -276,9 +276,10 @@ class DeltaRecord
       size_t &delta_num)  //
       -> DeltaRC
   {
-    auto *cur_rec = reinterpret_cast<DeltaRecord *>(out_ptr);
+    auto has_smo = false;
 
     // traverse a delta chain
+    auto *cur_rec = reinterpret_cast<DeltaRecord *>(out_ptr);
     while (true) {
       switch (cur_rec->delta_type_) {
         case kInsert:
@@ -289,6 +290,7 @@ class DeltaRecord
               && (!high_key || Comp{}(key, *high_key) || (closed && !Comp{}(*high_key, key)))) {
             // this index-entry delta directly indicates a child node
             out_ptr = cur_rec->template GetPayload<uintptr_t>();
+            assert(out_ptr != kNullPtr);
             return kRecordFound;
           }
           break;
@@ -301,6 +303,8 @@ class DeltaRecord
             out_ptr = cur_rec->template GetPayload<uintptr_t>();
             return kKeyIsInSibling;
           }
+
+          has_smo = true;
           break;
         }
 
@@ -322,19 +326,25 @@ class DeltaRecord
               return kReachBaseNode;
             }
             // merging was aborted, so check the sibling node
+            out_ptr = reinterpret_cast<uintptr_t>(sib_page);
             return kKeyIsInSibling;
           }
+
+          has_smo = true;
           break;
         }
 
         case kNotDelta:
         default: {
-          const auto &high_key = cur_rec->GetHighKey();
-          if (high_key && (Comp{}(*high_key, key) || (!closed && !Comp{}(key, *high_key)))) {
-            // a sibling node includes a target key
-            out_ptr = cur_rec->next_;
-            return kKeyIsInSibling;
+          if (!has_smo) {
+            const auto &high_key = cur_rec->GetHighKey();
+            if (high_key && (Comp{}(*high_key, key) || (!closed && !Comp{}(key, *high_key)))) {
+              // a sibling node includes a target key
+              out_ptr = cur_rec->next_;
+              return kKeyIsInSibling;
+            }
           }
+
           // reach a base page
           return kReachBaseNode;
         }

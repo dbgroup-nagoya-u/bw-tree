@@ -698,6 +698,7 @@ class BwTree
         case DeltaRC::kNodeRemoved:
           // retry from the parent node
           stack.pop_back();
+          SearchChildNode(key, closed, stack);
           continue;
 
         case DeltaRC::kReachBaseNode:
