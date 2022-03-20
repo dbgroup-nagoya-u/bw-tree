@@ -1029,7 +1029,8 @@ class BwTree
       Node_t *split_node,
       NodeStack &stack)
   {
-    auto &&[sep_key, key_len] = split_node->Split();
+    // split a consolidated node
+    split_node->Split();
 
     // create a split-delta record
     std::atomic_uintptr_t *sib_page = mapping_table_.GetNewLogicalID();
@@ -1054,7 +1055,7 @@ class BwTree
 
     // execute parent consolidation/split if needed
     if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, sep_key, kClosed, stack);
+      TryConsolidation(consol_page_, split_node->GetLowKey(), kClosed, stack);
     }
 
     return true;

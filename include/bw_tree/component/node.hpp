@@ -510,9 +510,8 @@ class Node
     meta_array_[record_count_++] = Metadata{offset, 0, kWordSize};
   }
 
-  auto
-  Split()  //
-      -> std::pair<Key, size_t>
+  void
+  Split()
   {
     // get the number of records and metadata of a separator key
     const auto l_num = record_count_ >> 1UL;
@@ -521,8 +520,6 @@ class Node
 
     // shift metadata to use a consolidated node as a split-right node
     memmove(&meta_array_[0], &meta_array_[l_num], sizeof(Metadata) * record_count_);
-
-    return {GetKey(low_meta_), low_meta_.GetKeyLength()};
   }
 
  private:
