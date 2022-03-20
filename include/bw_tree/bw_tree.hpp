@@ -803,19 +803,19 @@ class BwTree
       NodeStack &stack)  //
       -> uintptr_t
   {
-    uintptr_t sib_page{};
+    uintptr_t out_ptr{};
 
     while (true) {
       // check whether the node has partial SMOs
-      auto head = stack.back()->load(std::memory_order_acquire);
+      const auto head = stack.back()->load(std::memory_order_acquire);
       CompletePartialSMOsIfExist(head, stack);
 
       // check whether the node is active and can include a target key
       size_t delta_num = 0;
-      switch (Delta_t::Validate(key, closed, head, sib_page, delta_num)) {
+      switch (Delta_t::Validate(key, closed, head, out_ptr, delta_num)) {
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
-          *stack.rbegin() = reinterpret_cast<std::atomic_uintptr_t *>(sib_page);
+          *stack.rbegin() = reinterpret_cast<std::atomic_uintptr_t *>(out_ptr);
           continue;
 
         case DeltaRC::kNodeRemoved:
@@ -848,7 +848,7 @@ class BwTree
 
     while (true) {
       // check whether the node has partial SMOs
-      auto head = stack.back()->load(std::memory_order_acquire);
+      const auto head = stack.back()->load(std::memory_order_acquire);
       CompletePartialSMOsIfExist(head, stack);
 
       // check whether the node is active and has a target key

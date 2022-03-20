@@ -549,16 +549,6 @@ class Node
     return ShiftAddr(this, meta.GetOffset() + meta.GetKeyLength());
   }
 
-  void
-  SetMetadata(  //
-      Metadata meta,
-      const size_t rec_num,
-      const size_t offset)
-  {
-    meta.SetOffset(offset);
-    meta_array_[rec_num] = meta;
-  }
-
   /**
    * @brief Set a target data directly.
    *
