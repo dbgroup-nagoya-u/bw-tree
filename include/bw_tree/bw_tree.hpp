@@ -1022,7 +1022,7 @@ class BwTree
 
   bool
   HalfSplit(  //
-      std::atomic_uintptr_t *split_page,
+      std::atomic_uintptr_t *cur_lid,
       const uintptr_t cur_head,
       Node_t *split_node,
       NodeStack &stack)
@@ -1031,19 +1031,19 @@ class BwTree
     split_node->Split();
 
     // create a split-delta record
-    std::atomic_uintptr_t *sib_page = mapping_table_.GetNewLogicalID();
-    sib_page->store(reinterpret_cast<uintptr_t>(split_node), std::memory_order_release);
-    auto *delta = new (GetRecPage()) Delta_t{DeltaType::kSplit, split_node, sib_page, cur_head};
+    auto *sib_lid = mapping_table_.GetNewLogicalID();
+    sib_lid->store(reinterpret_cast<uintptr_t>(split_node), std::memory_order_release);
+    auto *split_d = new (GetRecPage()) Delta_t{DeltaType::kSplit, split_node, sib_lid, cur_head};
 
     // install the delta record for splitting a child node
     auto old_head = cur_head;
-    auto delta_ptr = reinterpret_cast<uintptr_t>(delta);
-    if (!split_page->compare_exchange_strong(old_head, delta_ptr, std::memory_order_release)) {
+    const auto delta_ptr = reinterpret_cast<uintptr_t>(split_d);
+    if (!cur_lid->compare_exchange_strong(old_head, delta_ptr, std::memory_order_release)) {
       // retry from consolidation
-      delta->SetNext(kNullPtr);
+      split_d->SetNext(kNullPtr);
       AddToGC(delta_ptr);
       AddToGC(reinterpret_cast<uintptr_t>(split_node));
-      sib_page->store(kNullPtr, std::memory_order_relaxed);
+      sib_lid->store(kNullPtr, std::memory_order_relaxed);
       return false;
     }
 
@@ -1064,61 +1064,68 @@ class BwTree
       const uintptr_t split_ptr,
       NodeStack &stack)
   {
-    if (stack.size() <= 1) {  // a split node is root
-      RootSplit(split_ptr, stack);
-      return;
-    }
+    // check whether this splitting modifies a root node
+    if (stack.size() <= 1 && RootSplit(split_ptr, stack)) return;
 
     // create an index-entry delta record to complete split
-    auto *split_delta = reinterpret_cast<const Delta_t *>(split_ptr);
-    auto *entry_delta = new (GetRecPage()) Delta_t{split_delta};
-    auto new_head = reinterpret_cast<uintptr_t>(entry_delta);
-    auto &&sep_key = split_delta->GetKey();
+    const auto *split_d = reinterpret_cast<const Delta_t *>(split_ptr);
+    auto *entry_d = new (GetRecPage()) Delta_t{split_d};
+    const auto new_head = reinterpret_cast<uintptr_t>(entry_d);
+    const auto &sep_key = split_d->GetKey();
 
     // insert the delta record into a parent node
-    auto *cur_page = stack.back();  // keep a current logical ID
-    stack.pop_back();               // remove the split child node to modify its parent node
+    auto *cur_lid = stack.back();  // keep a current logical ID
+    stack.pop_back();              // remove the split child node to modify its parent node
     while (true) {
       // check whether another thread has already completed this splitting
       auto [head, rc] = GetHeadWithKeyCheck(sep_key, stack);
       if (rc == kKeyExist) {
-        entry_delta->SetNext(kNullPtr);
+        entry_d->SetNext(kNullPtr);
         AddToGC(new_head);
         break;
       }
 
       // try to insert the index-entry delta record
-      entry_delta->SetNext(head);
+      entry_d->SetNext(head);
       if (stack.back()->compare_exchange_weak(head, new_head, std::memory_order_release)) break;
     }
-    stack.emplace_back(cur_page);
+
+    // restore the current logical ID
+    stack.emplace_back(cur_lid);
   }
 
-  void
+  auto
   RootSplit(  //
       const uintptr_t split_delta,
-      NodeStack &stack)
+      NodeStack &stack)  //
+      -> bool
   {
     // create a new root node
-    std::atomic_uintptr_t *old_root_p = stack.back();
-    auto *new_root = new (GetNodePage(kPageSize)) Node_t{split_delta, old_root_p};
+    auto *child_lid = stack.back();
+    stack.pop_back();  // remove the current root to push a new one
+    auto *new_root = new (GetNodePage(kPageSize)) Node_t{split_delta, child_lid};
+
+    // prepare a new logical ID for the new root
+    auto *new_lid = mapping_table_.GetNewLogicalID();
     auto root_ptr = reinterpret_cast<uintptr_t>(new_root);
+    new_lid->store(root_ptr, std::memory_order_release);
 
     // install a new root page
-    auto *new_root_p = mapping_table_.GetNewLogicalID();
-    new_root_p->store(root_ptr, std::memory_order_release);
-    stack.pop_back();
-    if (!root_.compare_exchange_strong(old_root_p, new_root_p, std::memory_order_relaxed)) {
+    auto *cur_lid = child_lid;
+    const auto success = root_.compare_exchange_strong(cur_lid, new_lid, std::memory_order_relaxed);
+    if (!success) {
       // another thread has already inserted a new root
-      new_root_p->store(kNullPtr, std::memory_order_relaxed);
+      new_lid->store(kNullPtr, std::memory_order_relaxed);
       AddToGC(root_ptr);
-
-      // push a new root node
-      stack.emplace_back(root_.load(std::memory_order_relaxed));
     } else {
-      stack.emplace_back(new_root_p);
+      cur_lid = new_lid;
     }
-    stack.emplace_back(old_root_p);
+
+    // prepare a new node stack
+    stack.emplace_back(cur_lid);
+    stack.emplace_back(child_lid);
+
+    return success;
   }
 
   auto
