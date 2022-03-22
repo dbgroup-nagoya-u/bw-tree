@@ -21,6 +21,7 @@
 
 #include "common.hpp"
 #include "delta_record.hpp"
+#include "logical_id.hpp"
 #include "memory/utility.hpp"
 #include "metadata.hpp"
 #include "node_info.hpp"
@@ -53,11 +54,11 @@ class Node
    * @brief Construct a new root node.
    *
    * @param split_ptr
-   * @param left_page
+   * @param left_lid
    */
   Node(  //
       const uintptr_t split_ptr,
-      const std::atomic_uintptr_t *left_page)
+      const LogicalID *left_lid)
       : node_type_{kInternal}, delta_type_{kNotDelta}, record_count_{2}
   {
     const auto *split_delta = reinterpret_cast<const Node *>(split_ptr);
@@ -66,7 +67,7 @@ class Node
     const auto meta = split_delta->low_meta_;
     const auto &sep_key = split_delta->GetKey(meta);
     const auto key_len = meta.GetKeyLength();
-    auto offset = SetPayload(kPageSize, left_page);
+    auto offset = SetPayload(kPageSize, left_lid);
     offset = SetKey(offset, sep_key, key_len);
     meta_array_[0] = Metadata{offset, key_len, key_len + kWordSize};
 
@@ -174,7 +175,7 @@ class Node
    * @retval false otherwise.
    */
   [[nodiscard]] auto
-  IsLeftmostChildIn(const std::vector<std::atomic_uintptr_t *> &stack) const  //
+  IsLeftmostChildIn(const std::vector<LogicalID *> &stack) const  //
       -> bool
   {
     const auto depth = stack.size();
@@ -183,8 +184,8 @@ class Node
     const auto child_len = low_meta_.GetKeyLength();
     if (child_len == 0) return true;
 
-    const auto *parent_page = stack.at(depth - 2);
-    auto *parent = reinterpret_cast<Node *>(parent_page->load(std::memory_order_acquire));
+    const auto *parent_lid = stack.at(depth - 2);
+    auto *parent = parent_lid->template Load<Node *>();
     while (true) {
       if (parent == nullptr || parent->delta_type_ == kNodeRemoved) {
         // the parent node is removed, so abort
@@ -220,9 +221,9 @@ class Node
 
   [[nodiscard]] constexpr auto
   GetSiblingNode() const  //
-      -> std::atomic_uintptr_t *
+      -> LogicalID *
   {
-    return reinterpret_cast<std::atomic_uintptr_t *>(next_);
+    return reinterpret_cast<LogicalID *>(next_);
   }
 
   /**
@@ -346,7 +347,7 @@ class Node
   SearchChild(  //
       const Key &key,
       const bool range_is_closed) const  //
-      -> size_t
+      -> LogicalID *
   {
     int64_t begin_pos = 0;
     int64_t end_pos = record_count_ - 2;
@@ -366,7 +367,7 @@ class Node
       }
     }
 
-    return begin_pos;
+    return GetPayload<LogicalID *>(meta_array_[begin_pos]);
   }
 
   template <bool kIsInternal>
@@ -474,7 +475,7 @@ class Node
         // copy a payload of a base node in advance to swap that of a new index entry
         auto meta = node->meta_array_[i];
         if (!payload_is_embedded) {  // skip a deleted page
-          offset = CopyPayloadFrom<uintptr_t>(node, meta, offset);
+          offset = CopyPayloadFrom<LogicalID *>(node, meta, offset);
         }
 
         // get a current key in the base node
@@ -714,7 +715,7 @@ class Node
       meta_array_[record_count_++] = meta.UpdateForInternal(offset);
 
       // copy the next (split-right) child page
-      offset = CopyPayloadFrom<uintptr_t>(delta, meta, offset);
+      offset = CopyPayloadFrom<LogicalID *>(delta, meta, offset);
     }
 
     return offset;
