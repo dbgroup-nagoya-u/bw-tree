@@ -754,15 +754,4 @@ class Node
 
 }  // namespace dbgroup::index::bw_tree::component
 
-namespace dbgroup::memory
-{
-template <class Key, class Comp>
-void
-Delete(::dbgroup::index::bw_tree::component::Node<Key, Comp> *obj)
-{
-  ::dbgroup::index::bw_tree::component::Node<Key, Comp>::DeleteNode(obj);
-}
-
-}  // namespace dbgroup::memory
-
 #endif  // BW_TREE_COMPONENT_NODE_HPP
