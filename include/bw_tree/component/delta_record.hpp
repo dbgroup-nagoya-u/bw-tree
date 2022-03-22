@@ -205,6 +205,13 @@ class DeltaRecord
   }
 
   [[nodiscard]] constexpr auto
+  IsMergeDelta() const  //
+      -> bool
+  {
+    return delta_type_ == kMerge;
+  }
+
+  [[nodiscard]] constexpr auto
   GetNext() const  //
       -> uintptr_t
   {
@@ -319,8 +326,9 @@ class DeltaRecord
             // check whether the merging is aborted
             out_ptr = cur_rec->template GetPayload<uintptr_t>();
             const auto *sib_page = reinterpret_cast<std::atomic_uintptr_t *>(out_ptr);
-            const auto *remove_d =
-                reinterpret_cast<DeltaRecord *>(sib_page->load(std::memory_order_acquire));
+            const auto sib_ptr = sib_page->load(std::memory_order_acquire);
+            if (sib_ptr == kNullPtr) return kNodeRemoved;  // the node is consolidated
+            const auto *remove_d = reinterpret_cast<DeltaRecord *>(sib_ptr);
             if (remove_d->delta_type_ == kRemoveNode) {
               // a target record may be in the merged node
               out_ptr = remove_d->next_;
@@ -412,8 +420,9 @@ class DeltaRecord
           if (Comp{}(sep_key, key)) {
             // check whether the merging is aborted
             const auto *sib_page = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
-            const auto *remove_d =
-                reinterpret_cast<DeltaRecord *>(sib_page->load(std::memory_order_acquire));
+            const auto sib_ptr = sib_page->load(std::memory_order_acquire);
+            if (sib_ptr == kNullPtr) return kNodeRemoved;  // the node is consolidated
+            const auto *remove_d = reinterpret_cast<DeltaRecord *>(sib_ptr);
             if (remove_d->delta_type_ == kRemoveNode) {
               // a target record may be in the merged node
               out_ptr = remove_d->next_;
@@ -486,8 +495,9 @@ class DeltaRecord
           // check whether the merging is aborted and the sibling node includes a target key
           const auto &sep_key = cur_rec->GetKey();
           const auto *sib_page = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
-          const auto *remove_d =
-              reinterpret_cast<DeltaRecord *>(sib_page->load(std::memory_order_acquire));
+          const auto sib_ptr = sib_page->load(std::memory_order_acquire);
+          if (sib_ptr == kNullPtr) return kNodeRemoved;  // the node is consolidated
+          const auto *remove_d = reinterpret_cast<DeltaRecord *>(sib_ptr);
           if (remove_d->delta_type_ != kRemoveNode
               && (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key)))) {
             // merging was aborted, so check the sibling node
@@ -529,7 +539,7 @@ class DeltaRecord
       uintptr_t ptr,
       std::vector<std::pair<Key, uintptr_t>> &records,
       std::vector<NodeInfo> &nodes)  //
-      -> int64_t
+      -> std::pair<bool, int64_t>
   {
     std::optional<Key> sep_key{std::nullopt};
     uintptr_t split_d_ptr{kNullPtr};
@@ -583,6 +593,7 @@ class DeltaRecord
           // check whether the merging was aborted
           const auto *sib_page = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
           const auto sib_ptr = sib_page->load(std::memory_order_acquire);
+          if (sib_ptr == kNullPtr) return {true, 0};  // the node is consolidated
           const auto *remove_d = reinterpret_cast<DeltaRecord *>(sib_ptr);
           if (remove_d->delta_type_ != kRemoveNode) break;  // merging was aborted
 
@@ -594,7 +605,7 @@ class DeltaRecord
         case kNotDelta:
         default:
           nodes.emplace_back(ptr, split_d_ptr);
-          return size_diff;
+          return {false, size_diff};
       }
 
       // go to the next delta record or base node

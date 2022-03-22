@@ -304,7 +304,7 @@ class BwTree
     Payload payload{};
     while (true) {
       // check whether the node is active and has a target key
-      auto head = stack.back()->load(std::memory_order_acquire);
+      auto head = LoadValidHead(key, kClosed, stack);
       size_t delta_num = 0;
       switch (uintptr_t out_ptr{}; Delta_t::SearchRecord(key, head, out_ptr, delta_num)) {
         case DeltaRC::kRecordFound:
@@ -372,8 +372,10 @@ class BwTree
       // traverse to a leaf node and sort records for scanning
       consol_page_ = nullptr;
       auto &&stack = SearchLeafNode(b_key, b_closed);
-      auto cur_head = GetHead(b_key, b_closed, stack);
-      node = Consolidate<Payload>(cur_head).first;
+      do {
+        auto cur_head = GetHead(b_key, b_closed, stack);
+        node = Consolidate<Payload>(cur_head).first;
+      } while (node == nullptr);  // concurrent consolidations may block scanning
       auto [rc, pos] = node->SearchRecord(b_key);
       begin_pos = (rc == kKeyNotExist || b_closed) ? pos : pos + 1;
 
@@ -384,8 +386,10 @@ class BwTree
     } else {
       // traverse to the leftmost leaf node directly
       auto &&stack = SearchLeftEdgeLeaf();
-      auto cur_head = stack.back()->load(std::memory_order_acquire);
-      node = Consolidate<Payload>(cur_head).first;
+      do {
+        auto cur_head = stack.back()->load(std::memory_order_acquire);
+        node = Consolidate<Payload>(cur_head).first;
+      } while (node == nullptr);  // concurrent consolidations may block scanning
     }
 
     auto end_pos = node->GetRecordCount();
@@ -664,7 +668,20 @@ class BwTree
     while (!rec->IsBaseNode()) {
       gc_.AddGarbage(rec);
       ptr = rec->GetNext();
-      if (ptr == kNullPtr) return;
+      if (ptr == kNullPtr) return;  // aborted delta records
+
+      // if the delta record is merge-delta, delete the merged sibling node
+      if (rec->IsMergeDelta()) {
+        auto *sib_lid = rec->template GetPayload<std::atomic_uintptr_t *>();
+        const auto remove_ptr = sib_lid->load(std::memory_order_acquire);
+        const auto *remove_d = reinterpret_cast<Delta_t *>(remove_ptr);
+        if (remove_d->IsRemoveNodeDelta()) {  // check merging is not aborted
+          const auto *merged_node = reinterpret_cast<Node_t *>(remove_d->GetNext());
+          gc_.AddGarbage(remove_d);
+          gc_.AddGarbage(merged_node);
+          sib_lid->store(kNullPtr, std::memory_order_relaxed);
+        }
+      }
 
       rec = reinterpret_cast<Delta_t *>(ptr);
     }
@@ -680,9 +697,14 @@ class BwTree
       const bool closed,
       NodeStack &stack)
   {
+    if (stack.empty()) {
+      stack.emplace_back(root_.load(std::memory_order_relaxed));
+      return;
+    }
+
     while (true) {
       size_t delta_num = 0;
-      auto out_ptr = stack.back()->load(std::memory_order_acquire);
+      auto out_ptr = LoadValidHead(key, closed, stack);
       switch (Delta_t::SearchChildNode(key, closed, out_ptr, delta_num)) {
         case DeltaRC::kRecordFound:
           stack.emplace_back(reinterpret_cast<std::atomic_uintptr_t *>(out_ptr));
@@ -706,10 +728,11 @@ class BwTree
           }
 
           // search a child node in a base node
-          const auto *base_node = reinterpret_cast<Node_t *>(out_ptr);
-          const auto pos = base_node->SearchChild(key, closed);
-          const auto meta = base_node->GetMetadata(pos);
-          stack.emplace_back(base_node->template GetPayload<std::atomic_uintptr_t *>(meta));
+          const auto *node = reinterpret_cast<Node_t *>(out_ptr);
+          const auto pos = node->SearchChild(key, closed);
+          const auto meta = node->GetMetadata(pos);
+          auto *child_lid = node->template GetPayload<std::atomic_uintptr_t *>(meta);
+          stack.emplace_back(child_lid);
           return;
         }
       }
@@ -725,18 +748,18 @@ class BwTree
     NodeStack stack{};
     stack.reserve(kExpectedTreeHeight);
 
-    // get a logical page of a root node
-    auto *page_id = root_.load(std::memory_order_relaxed);
-    stack.emplace_back(page_id);
-    auto *head = reinterpret_cast<Node_t *>(page_id->load(std::memory_order_acquire));
-
     // traverse a Bw-tree
-    while (!head->IsLeaf()) {
+    while (true) {
       SearchChildNode(key, closed, stack);
-      head = reinterpret_cast<Node_t *>(stack.back()->load(std::memory_order_acquire));
-    }
+      const auto *node = reinterpret_cast<Node_t *>(stack.back()->load(std::memory_order_acquire));
+      if (node == nullptr) {
+        // the found node is removed, so retry
+        stack.pop_back();
+        continue;
+      }
 
-    return stack;
+      if (node->IsLeaf()) return stack;
+    }
   }
 
   auto
@@ -772,6 +795,27 @@ class BwTree
     return stack;
   }
 
+  auto
+  LoadValidHead(  //
+      const Key &key,
+      const bool closed,
+      NodeStack &stack)  //
+      -> uintptr_t
+  {
+    while (true) {
+      const auto head = stack.back()->load(std::memory_order_acquire);
+      if (head != kNullPtr) return head;
+
+      // the current node is removed, so restore a new one
+      stack.pop_back();
+      if (stack.empty()) {
+        stack.emplace_back(root_.load(std::memory_order_relaxed));
+      } else {
+        SearchChildNode(key, closed, stack);
+      }
+    }
+  }
+
   void
   CompletePartialSMOsIfExist(  //
       const uintptr_t head,
@@ -805,7 +849,7 @@ class BwTree
 
     while (true) {
       // check whether the node has partial SMOs
-      const auto head = stack.back()->load(std::memory_order_acquire);
+      const auto head = LoadValidHead(key, closed, stack);
       CompletePartialSMOsIfExist(head, stack);
 
       // check whether the node is active and can include a target key
@@ -846,7 +890,7 @@ class BwTree
 
     while (true) {
       // check whether the node has partial SMOs
-      const auto head = stack.back()->load(std::memory_order_acquire);
+      const auto head = LoadValidHead(key, kClosed, stack);
       CompletePartialSMOsIfExist(head, stack);
 
       // check whether the node is active and has a target key
@@ -902,20 +946,23 @@ class BwTree
       const std::optional<std::pair<const Key &, bool>> &end_key)  //
       -> RecordIterator
   {
-    auto cur_head = page_id->load(std::memory_order_acquire);
-    auto *node = Consolidate<Payload>(cur_head, page).first;
+    while (true) {
+      auto cur_head = page_id->load(std::memory_order_acquire);
+      auto *node = Consolidate<Payload>(cur_head, page).first;
+      if (node == nullptr) continue;  // blocked by concurrent consolidations
 
-    auto rec_num = node->GetRecordCount();
-    if (end_key) {
-      auto &&[e_key, e_closed] = *end_key;
-      if (!Comp{}(node->GetKey(node->GetMetadata(rec_num - 1)), e_key)) {
-        auto [rc, pos] = node->SearchRecord(e_key);
-        rec_num = (rc == kKeyExist && e_closed) ? pos + 1 : pos;
-        node->RemoveSideLink();
+      auto rec_num = node->GetRecordCount();
+      if (end_key) {
+        auto &&[e_key, e_closed] = *end_key;
+        if (!Comp{}(node->GetKey(node->GetMetadata(rec_num - 1)), e_key)) {
+          auto [rc, pos] = node->SearchRecord(e_key);
+          rec_num = (rc == kKeyExist && e_closed) ? pos + 1 : pos;
+          node->RemoveSideLink();
+        }
       }
-    }
 
-    return RecordIterator{node, 0, rec_num};
+      return RecordIterator{node, 0, rec_num};
+    }
   }
 
   /*####################################################################################
@@ -951,6 +998,7 @@ class BwTree
       } else {
         std::tie(consol_node, size) = Consolidate<std::atomic_uintptr_t *>(cur_head);
       }
+      if (consol_node == nullptr) return;  // other threads perform consolidation
 
       if (size > kPageSize) {
         // switch to splitting
@@ -994,7 +1042,8 @@ class BwTree
     std::vector<NodeInfo> nodes{};
     records.reserve(kMaxDeltaNodeNum * 4);
     nodes.reserve(kMaxDeltaNodeNum);
-    const auto diff = Delta_t::template Sort<T>(head, records, nodes);
+    const auto [consolidated, diff] = Delta_t::template Sort<T>(head, records, nodes);
+    if (consolidated) return {nullptr, 0};
 
     // calculate the size a consolidated node
     const auto cur_block_size = Node_t::template PrepareConsolidation<kIsInternal>(nodes);

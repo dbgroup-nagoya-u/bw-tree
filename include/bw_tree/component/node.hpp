@@ -185,7 +185,12 @@ class Node
 
     const auto *parent_page = stack.at(depth - 2);
     auto *parent = reinterpret_cast<Node *>(parent_page->load(std::memory_order_acquire));
-    while (parent->delta_type_ != kNotDelta) {
+    while (true) {
+      if (parent == nullptr || parent->delta_type_ == kNodeRemoved) {
+        // the parent node is removed, so abort
+        return true;
+      }
+      if (parent->delta_type_ == kNotDelta) break;
       parent = reinterpret_cast<Node *>(parent->next_);
     }
     const auto parent_len = parent->low_meta_.GetKeyLength();
