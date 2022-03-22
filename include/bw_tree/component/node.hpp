@@ -47,7 +47,7 @@ class Node
    * @brief Construct an initial root node.
    *
    */
-  constexpr Node() : node_type_{NodeType::kLeaf}, delta_type_{DeltaType::kNotDelta} {}
+  constexpr Node() : node_type_{kLeaf}, delta_type_{kNotDelta} {}
 
   /**
    * @brief Construct a new root node.
@@ -57,21 +57,21 @@ class Node
    */
   Node(  //
       const uintptr_t split_ptr,
-      std::atomic_uintptr_t *left_page)
-      : node_type_{NodeType::kInternal}, delta_type_{DeltaType::kNotDelta}, record_count_{2}
+      const std::atomic_uintptr_t *left_page)
+      : node_type_{kInternal}, delta_type_{kNotDelta}, record_count_{2}
   {
-    auto *split_delta = reinterpret_cast<const Node *>(split_ptr);
+    const auto *split_delta = reinterpret_cast<const Node *>(split_ptr);
 
     // set a split-left page
-    auto meta = split_delta->low_meta_;
-    auto &&sep_key = split_delta->GetKey(meta);
-    auto key_len = meta.GetKeyLength();
+    const auto meta = split_delta->low_meta_;
+    const auto &sep_key = split_delta->GetKey(meta);
+    const auto key_len = meta.GetKeyLength();
     auto offset = SetPayload(kPageSize, left_page);
     offset = SetKey(offset, sep_key, key_len);
     meta_array_[0] = Metadata{offset, key_len, key_len + kWordSize};
 
     // set a split-right page
-    auto right_page = split_delta->template GetPayload<uintptr_t>(meta);
+    const auto right_page = split_delta->template GetPayload<uintptr_t>(meta);
     offset = SetPayload(offset, right_page);
     meta_array_[1] = Metadata{offset, 0, kWordSize};
   }

@@ -49,32 +49,30 @@ class DeltaRecord
    *##################################################################################*/
 
   /**
-   * @brief Construct a new delta record for leaf-insert/modify.
+   * @brief Construct a new delta record for inserting/modifying a record.
    *
    * @tparam T a target payload class.
    * @param delta_type
    * @param key
    * @param key_length
    * @param payload
-   * @param payload_length
    */
   template <class T>
   DeltaRecord(  //
       const DeltaType delta_type,
       const Key &key,
       const size_t key_len,
-      const T &payload,
-      const size_t pay_len)
-      : node_type_{NodeType::kLeaf},
+      const T &payload)
+      : node_type_{kLeaf},
         delta_type_{delta_type},
-        meta_{kHeaderLength, key_len, key_len + pay_len}
+        meta_{kHeaderLength, key_len, key_len + sizeof(T)}
   {
-    auto offset = SetKey(kHeaderLength, key, key_len);
+    const auto offset = SetKey(kHeaderLength, key, key_len);
     SetPayload(offset, payload);
   }
 
   /**
-   * @brief Construct a new delta record for leaf-delete.
+   * @brief Construct a new delta record for deleting a record.
    *
    * @param key
    * @param key_length
@@ -82,26 +80,27 @@ class DeltaRecord
   DeltaRecord(  //
       const Key &key,
       const size_t key_len)
-      : node_type_{NodeType::kLeaf},
-        delta_type_{DeltaType::kDelete},
-        meta_{kHeaderLength, key_len, key_len}
+      : node_type_{kLeaf}, delta_type_{kDelete}, meta_{kHeaderLength, key_len, key_len}
   {
     SetKey(kHeaderLength, key, key_len);
   }
 
   /**
-   * @brief Construct a new delta record for split/merge.
+   * @brief Construct a new delta record for splitting/merging a node.
    *
    * @param split_delta
    */
   DeltaRecord(  //
       const DeltaType delta_type,
       const void *right_ptr,
-      const std::atomic_uintptr_t *sib_page_id,
+      const std::atomic_uintptr_t *right_page,
       const uintptr_t next = kNullPtr)
       : delta_type_{delta_type}, next_{next}
   {
     const auto *right_node = reinterpret_cast<const DeltaRecord *>(right_ptr);
+
+    assert(right_node->delta_type_ == kNotDelta);
+
     node_type_ = right_node->node_type_;
 
     // copy a lowest key
@@ -110,7 +109,7 @@ class DeltaRecord
     memcpy(&data_block_, right_node->GetKeyAddr(right_node->meta_), key_len);
 
     // set a sibling node
-    const auto offset = SetPayload(kHeaderLength + key_len, sib_page_id);
+    const auto offset = SetPayload(kHeaderLength + key_len, right_page);
 
     // copy a highest key
     key_len = right_node->high_key_meta_.GetKeyLength();
@@ -119,44 +118,56 @@ class DeltaRecord
   }
 
   /**
-   * @brief Construct a new delta record for index-entries.
+   * @brief Construct a new delta record for inserting an index-entry.
    *
-   * @param split_delta
+   * @param split_d
    */
-  explicit DeltaRecord(const DeltaRecord *delta)
-      : node_type_{NodeType::kInternal}, delta_type_{DeltaType::kInsert}
+  explicit DeltaRecord(const DeltaRecord *split_d) : node_type_{kInternal}, delta_type_{kInsert}
   {
+    assert(split_d->delta_type_ == kSplit);
+
     // copy contents of a split delta
-    meta_ = delta->meta_;
-    high_key_meta_ = delta->high_key_meta_;
-    auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetTotalLength();
-    memcpy(&data_block_, &(delta->data_block_), rec_len);
+    meta_ = split_d->meta_;
+    high_key_meta_ = split_d->high_key_meta_;
+    auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetKeyLength();
+    memcpy(&data_block_, &(split_d->data_block_), rec_len);
   }
 
   /**
-   * @brief Construct a new delta record for removing-node.
+   * @brief Construct a new delta record for removing a node.
    *
    * @param next a pointer to the removed node.
    */
-  explicit DeltaRecord(const uintptr_t next) : delta_type_{DeltaType::kRemoveNode}, next_{next}
+  explicit DeltaRecord(const uintptr_t next) : delta_type_{kRemoveNode}, next_{next}
   {
-    auto *removed_node = reinterpret_cast<DeltaRecord *>(next);
+    const auto *removed_node = reinterpret_cast<DeltaRecord *>(next);
+
+    assert(removed_node->delta_type_ == kNotDelta);
+
     node_type_ = removed_node->node_type_;
   }
 
-  explicit DeltaRecord(  //
-      const DeltaRecord *delta,
-      const std::atomic_uintptr_t *sib_page)
-      : node_type_{NodeType::kInternal}, delta_type_{DeltaType::kDelete}
+  /**
+   * @brief Construct a new delta record for deleting an index-entry.
+   *
+   * @param merge_d
+   * @param left_page
+   */
+  DeltaRecord(  //
+      const DeltaRecord *merge_d,
+      const std::atomic_uintptr_t *left_page)
+      : node_type_{kInternal}, delta_type_{kDelete}
   {
+    assert(merge_d->delta_type_ == kMerge);
+
     // copy contents of a merge delta
-    meta_ = delta->meta_;
-    high_key_meta_ = delta->high_key_meta_;
-    auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetTotalLength();
-    memcpy(&data_block_, &(delta->data_block_), rec_len);
+    meta_ = merge_d->meta_;
+    high_key_meta_ = merge_d->high_key_meta_;
+    const auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetKeyLength();
+    memcpy(&data_block_, &(merge_d->data_block_), rec_len);
 
     // update a sibling node ID
-    SetPayload(kHeaderLength + meta_.GetKeyLength(), sib_page);
+    SetPayload(kHeaderLength + meta_.GetKeyLength(), left_page);
   }
 
   constexpr DeltaRecord(const DeltaRecord &) = default;
