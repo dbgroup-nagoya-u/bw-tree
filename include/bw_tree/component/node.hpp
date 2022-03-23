@@ -57,23 +57,19 @@ class Node
    * @param left_lid
    */
   Node(  //
-      const uintptr_t split_ptr,
+      const Node *split_d,
       const LogicalID *left_lid)
       : node_type_{kInternal}, delta_type_{kNotDelta}, record_count_{2}
   {
-    const auto *split_delta = reinterpret_cast<const Node *>(split_ptr);
-
     // set a split-left page
-    const auto meta = split_delta->low_meta_;
-    const auto &sep_key = split_delta->GetKey(meta);
-    const auto key_len = meta.GetKeyLength();
+    const auto meta = split_d->low_meta_;
     auto offset = SetPayload(kPageSize, left_lid);
-    offset = SetKey(offset, sep_key, key_len);
-    meta_array_[0] = Metadata{offset, key_len, key_len + kWordSize};
+    offset = CopyKeyFrom(split_d, meta, offset);
+    meta_array_[0] = meta.UpdateForInternal(offset);
 
     // set a split-right page
-    const auto right_page = split_delta->template GetPayload<uintptr_t>(meta);
-    offset = SetPayload(offset, right_page);
+    const auto *right_lid = split_d->template GetPayload<LogicalID *>(meta);
+    offset = SetPayload(offset, right_lid);
     meta_array_[1] = Metadata{offset, 0, kWordSize};
   }
 
@@ -91,7 +87,7 @@ class Node
       : node_type_{static_cast<NodeType>(node_type)}, delta_type_{kNotDelta}
   {
     // copy the lowest key
-    const auto *low_node = reinterpret_cast<Node *>(nodes.back().node_ptr);
+    const auto *low_node = reinterpret_cast<const Node *>(nodes.back().node_ptr);
     const auto low_meta = low_node->low_meta_;
     const auto low_key_len = low_meta.GetKeyLength();
     if (low_key_len > 0) {
@@ -103,16 +99,16 @@ class Node
     }
 
     // prepare a node that has the highest key, and copy the next logical ID
-    Node *high_node{};
+    const Node *high_node{};
     Metadata high_meta{};
-    if (nodes.front().sep_ptr == kNullPtr) {
+    if (nodes.front().sep_ptr == nullptr) {
       // an original or merged base node
-      high_node = reinterpret_cast<Node *>(nodes.front().node_ptr);
+      high_node = reinterpret_cast<const Node *>(nodes.front().node_ptr);
       high_meta = high_node->high_meta_;
       next_ = high_node->next_;
     } else {
       // a split-delta record
-      high_node = reinterpret_cast<Node *>(nodes.front().sep_ptr);
+      high_node = reinterpret_cast<const Node *>(nodes.front().sep_ptr);
       high_meta = high_node->low_meta_;
       next_ = high_node->template GetPayload<uintptr_t>(high_meta);
     }
@@ -201,7 +197,7 @@ class Node
   }
 
   [[nodiscard]] auto
-  HasSameLowKeyWith(const Key &key)  //
+  HasSameLowKeyWith(const Key &key) const  //
       -> bool
   {
     if (low_meta_.GetKeyLength() == 0) return false;
@@ -380,7 +376,7 @@ class Node
 
     for (size_t i = 0; i <= end_pos; ++i) {
       auto &[node_ptr, sep_ptr, rec_num] = nodes.at(i);
-      const auto *node = reinterpret_cast<Node *>(node_ptr);
+      const auto *node = reinterpret_cast<const Node *>(node_ptr);
 
       // add the length of the lowest key
       if (kIsInternal || i == end_pos) {
@@ -388,14 +384,14 @@ class Node
       }
 
       // check the number of records to be consolidated
-      if (sep_ptr == kNullPtr) {
+      if (sep_ptr == nullptr) {
         rec_num = node->record_count_;
 
         if (i == 0) {  // add the length of the highest key
           size += node->high_meta_.GetKeyLength();
         }
       } else {
-        const auto *sep_node = reinterpret_cast<Node *>(sep_ptr);
+        const auto *sep_node = reinterpret_cast<const Node *>(sep_ptr);
         const auto sep_meta = sep_node->low_meta_;
         const auto &sep_key = sep_node->GetKey(sep_meta);
         auto [rc, pos] = node->SearchRecord(sep_key);
@@ -422,7 +418,7 @@ class Node
   void
   LeafConsolidate(  //
       const std::vector<NodeInfo> &nodes,
-      const std::vector<std::pair<Key, uintptr_t>> &records,
+      const std::vector<std::pair<Key, const void *>> &records,
       size_t offset)
   {
     const auto new_rec_num = records.size();
@@ -430,8 +426,7 @@ class Node
     // perform merge-sort to consolidate a node
     size_t j = 0;
     for (int64_t k = nodes.size() - 1; k >= 0; --k) {
-      const auto node_ptr = nodes.at(k).node_ptr;
-      const auto *node = reinterpret_cast<Node *>(node_ptr);
+      const auto *node = reinterpret_cast<const Node *>(nodes.at(k).node_ptr);
       const auto base_rec_num = nodes.at(k).rec_num;
       for (size_t i = 0; i < base_rec_num; ++i) {
         // copy new records
@@ -460,7 +455,7 @@ class Node
   void
   InternalConsolidate(  //
       const std::vector<NodeInfo> &nodes,
-      const std::vector<std::pair<Key, uintptr_t>> &records,
+      const std::vector<std::pair<Key, const void *>> &records,
       size_t offset)
   {
     const auto new_rec_num = records.size();
@@ -469,7 +464,7 @@ class Node
     bool payload_is_embedded = false;
     size_t j = 0;
     for (int64_t k = nodes.size() - 1; k >= 0; --k) {
-      const auto *node = reinterpret_cast<Node *>(nodes.at(k).node_ptr);
+      const auto *node = reinterpret_cast<const Node *>(nodes.at(k).node_ptr);
       const auto end_pos = nodes.at(k).rec_num - 1;
       for (size_t i = 0; i <= end_pos; ++i) {
         // copy a payload of a base node in advance to swap that of a new index entry
@@ -483,7 +478,7 @@ class Node
           if (k == 0) break;  // the last record does not need a key
 
           // if nodes are merged, a current key is equivalent with the lowest one in the next node
-          node = reinterpret_cast<Node *>(nodes.at(k - 1).node_ptr);
+          node = reinterpret_cast<const Node *>(nodes.at(k - 1).node_ptr);
           meta = node->low_meta_;
         }
         const auto &node_key = node->GetKey(meta);
@@ -680,11 +675,11 @@ class Node
   template <class T>
   auto
   CopyRecordFrom(  //
-      const uintptr_t rec_ptr,
+      const void *rec_ptr,
       size_t offset)  //
       -> size_t
   {
-    const auto *rec = reinterpret_cast<Node *>(rec_ptr);
+    const auto *rec = reinterpret_cast<const Node *>(rec_ptr);
     if (rec->delta_type_ != kDelete) {
       // copy a record from the given node or delta record
       const auto meta = rec->low_meta_;
@@ -701,11 +696,11 @@ class Node
 
   auto
   CopyIndexEntryFrom(  //
-      const uintptr_t delta_ptr,
+      const void *delta_ptr,
       size_t offset)  //
       -> size_t
   {
-    const auto *delta = reinterpret_cast<Node *>(delta_ptr);
+    const auto *delta = reinterpret_cast<const Node *>(delta_ptr);
     if (delta->delta_type_ == kInsert) {
       // copy a key to exchange a child page
       const auto meta = delta->low_meta_;

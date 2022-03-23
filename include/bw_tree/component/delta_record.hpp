@@ -40,7 +40,7 @@ class DeltaRecord
 {
  public:
   /*####################################################################################
-   * Public constructors and assignment operators
+   * Public constructors for inserting/deleting records in leaf nodes
    *##################################################################################*/
 
   /**
@@ -80,6 +80,52 @@ class DeltaRecord
     SetKey(kHeaderLength, key, key_len);
   }
 
+  /*####################################################################################
+   * Public constructors for inserting/deleting records in internal nodes
+   *##################################################################################*/
+
+  /**
+   * @brief Construct a new delta record for inserting an index-entry.
+   *
+   * @param split_d
+   */
+  explicit DeltaRecord(const DeltaRecord *split_d)
+      : node_type_{kInternal},
+        delta_type_{kInsert},
+        meta_{split_d->meta_},
+        high_key_meta_{split_d->high_key_meta_}
+  {
+    // copy contents of a split delta
+    const auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetKeyLength();
+    memcpy(&data_block_, &(split_d->data_block_), rec_len);
+  }
+
+  /**
+   * @brief Construct a new delta record for deleting an index-entry.
+   *
+   * @param merge_d
+   * @param left_lid
+   */
+  DeltaRecord(  //
+      const DeltaRecord *merge_d,
+      const LogicalID *left_lid)
+      : node_type_{kInternal},
+        delta_type_{kDelete},
+        meta_{merge_d->meta_},
+        high_key_meta_{merge_d->high_key_meta_}
+  {
+    // copy contents of a merge delta
+    const auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetKeyLength();
+    memcpy(&data_block_, &(merge_d->data_block_), rec_len);
+
+    // update logical ID of a sibling node
+    SetPayload(kHeaderLength + meta_.GetKeyLength(), left_lid);
+  }
+
+  /*####################################################################################
+   * Public constructors for performing SMOs
+   *##################################################################################*/
+
   /**
    * @brief Construct a new delta record for splitting/merging a node.
    *
@@ -87,17 +133,13 @@ class DeltaRecord
    */
   DeltaRecord(  //
       const DeltaType delta_type,
-      const void *right_ptr,
+      const DeltaRecord *right_node,
       const LogicalID *right_lid,
-      const uintptr_t next = kNullPtr)
-      : delta_type_{delta_type}, next_{next}
+      const DeltaRecord *next = nullptr)
+      : node_type_{right_node->node_type_},
+        delta_type_{delta_type},
+        next_{reinterpret_cast<uintptr_t>(next)}
   {
-    const auto *right_node = reinterpret_cast<const DeltaRecord *>(right_ptr);
-
-    assert(right_node->delta_type_ == kNotDelta);
-
-    node_type_ = right_node->node_type_;
-
     // copy a lowest key
     auto key_len = right_node->meta_.GetKeyLength();
     meta_ = Metadata{kHeaderLength, key_len, key_len + kWordSize};
@@ -113,63 +155,28 @@ class DeltaRecord
   }
 
   /**
-   * @brief Construct a new delta record for inserting an index-entry.
-   *
-   * @param split_d
-   */
-  explicit DeltaRecord(const DeltaRecord *split_d) : node_type_{kInternal}, delta_type_{kInsert}
-  {
-    assert(split_d->delta_type_ == kSplit);
-
-    // copy contents of a split delta
-    meta_ = split_d->meta_;
-    high_key_meta_ = split_d->high_key_meta_;
-    auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetKeyLength();
-    memcpy(&data_block_, &(split_d->data_block_), rec_len);
-  }
-
-  /**
    * @brief Construct a new delta record for removing a node.
    *
    * @param next a pointer to the removed node.
    */
-  explicit DeltaRecord(const uintptr_t next) : delta_type_{kRemoveNode}, next_{next}
-  {
-    const auto *removed_node = reinterpret_cast<DeltaRecord *>(next);
-
-    assert(removed_node->delta_type_ == kNotDelta);
-
-    node_type_ = removed_node->node_type_;
-  }
-
-  /**
-   * @brief Construct a new delta record for deleting an index-entry.
-   *
-   * @param merge_d
-   * @param left_lid
-   */
   DeltaRecord(  //
-      const DeltaRecord *merge_d,
-      const LogicalID *left_lid)
-      : node_type_{kInternal}, delta_type_{kDelete}
+      [[maybe_unused]] const DeltaType dummy,
+      const DeltaRecord *removed_node)
+      : node_type_{removed_node->node_type_},
+        delta_type_{kRemoveNode},
+        next_{reinterpret_cast<uintptr_t>(removed_node)}
   {
-    assert(merge_d->delta_type_ == kMerge);
-
-    // copy contents of a merge delta
-    meta_ = merge_d->meta_;
-    high_key_meta_ = merge_d->high_key_meta_;
-    const auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetKeyLength();
-    memcpy(&data_block_, &(merge_d->data_block_), rec_len);
-
-    // update a sibling node ID
-    SetPayload(kHeaderLength + meta_.GetKeyLength(), left_lid);
   }
 
-  constexpr DeltaRecord(const DeltaRecord &) = default;
-  constexpr DeltaRecord(DeltaRecord &&) noexcept = default;
+  /*####################################################################################
+   * Public assignment operators
+   *##################################################################################*/
 
-  constexpr auto operator=(const DeltaRecord &) -> DeltaRecord & = default;
-  constexpr auto operator=(DeltaRecord &&) noexcept -> DeltaRecord & = default;
+  DeltaRecord(const DeltaRecord &) = delete;
+  DeltaRecord(DeltaRecord &&) noexcept = delete;
+
+  auto operator=(const DeltaRecord &) -> DeltaRecord & = delete;
+  auto operator=(DeltaRecord &&) noexcept -> DeltaRecord & = delete;
 
   /*####################################################################################
    * Public destructors
@@ -217,11 +224,12 @@ class DeltaRecord
     return delta_type_ == kMerge;
   }
 
+  template <class T = DeltaRecord *>
   [[nodiscard]] constexpr auto
   GetNext() const  //
-      -> uintptr_t
+      -> T
   {
-    return next_;
+    return reinterpret_cast<T>(next_);
   }
 
   /**
@@ -256,21 +264,26 @@ class DeltaRecord
   }
 
   void
-  SetNext(uintptr_t next)
+  SetNext(const DeltaRecord *next)
   {
-    next_ = next;
+    next_ = reinterpret_cast<uintptr_t>(next);
+  }
+
+  void
+  Abort()
+  {
+    next_ = kNullPtr;
   }
 
   /*####################################################################################
    * Public utilities
    *##################################################################################*/
 
-  static auto
-  GetSMOStatus(const uintptr_t ptr)  //
+  [[nodiscard]] auto
+  GetSMOStatus() const  //
       -> SMOStatus
   {
-    const auto *delta = reinterpret_cast<const DeltaRecord *>(ptr);
-    switch (delta->delta_type_) {
+    switch (delta_type_) {
       case kSplit:
         return kSplitMayIncomplete;
 
@@ -282,19 +295,18 @@ class DeltaRecord
     }
   }
 
-  static auto
+  auto
   SearchChildNode(  //
       const Key &key,
       const bool closed,
       uintptr_t &out_ptr,
-      size_t &delta_num)  //
+      size_t &delta_num) const  //
       -> DeltaRC
   {
     auto has_smo = false;
 
     // traverse a delta chain
-    auto *cur_rec = reinterpret_cast<DeltaRecord *>(out_ptr);
-    while (true) {
+    for (const auto *cur_rec = this; true; cur_rec = cur_rec->GetNext(), ++delta_num) {
       switch (cur_rec->delta_type_) {
         case kInsert:
         case kDelete: {
@@ -304,7 +316,6 @@ class DeltaRecord
               && (!high_key || Comp{}(key, *high_key) || (closed && !Comp{}(*high_key, key)))) {
             // this index-entry delta directly indicates a child node
             out_ptr = cur_rec->template GetPayload<uintptr_t>();
-            assert(out_ptr != kNullPtr);
             return kRecordFound;
           }
           break;
@@ -359,37 +370,31 @@ class DeltaRecord
           }
 
           // reach a base page
+          out_ptr = reinterpret_cast<uintptr_t>(cur_rec);
           return kReachBaseNode;
         }
       }
-
-      // go to the next delta record or base node
-      out_ptr = cur_rec->next_;
-      cur_rec = reinterpret_cast<DeltaRecord *>(out_ptr);
-      ++delta_num;
     }
   }
 
-  static auto
+  auto
   SearchRecord(  //
       const Key &key,
-      uintptr_t ptr,
       uintptr_t &out_ptr,
-      size_t &delta_num)  //
+      size_t &delta_num) const  //
       -> DeltaRC
   {
     auto has_smo = false;
 
     // traverse a delta chain
-    auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-    while (true) {
+    for (const auto *cur_rec = this; true; cur_rec = cur_rec->GetNext(), ++delta_num) {
       switch (cur_rec->delta_type_) {
         case kInsert:
         case kModify: {
           // check whether a target record is inserted
           const auto &rec_key = cur_rec->GetKey();
           if (!Comp{}(key, rec_key) && !Comp{}(rec_key, key)) {
-            out_ptr = ptr;
+            out_ptr = reinterpret_cast<uintptr_t>(cur_rec);
             return kRecordFound;
           }
           break;
@@ -414,9 +419,8 @@ class DeltaRecord
           break;
         }
 
-        case kRemoveNode: {
+        case kRemoveNode:
           return kNodeRemoved;
-        }
 
         case kMerge: {
           // check whether the merged node contains a target key
@@ -452,32 +456,25 @@ class DeltaRecord
           }
 
           // a target record may be in the base node
-          out_ptr = ptr;
+          out_ptr = reinterpret_cast<uintptr_t>(cur_rec);
           return kReachBaseNode;
         }
       }
-
-      // go to the next delta record or base node
-      ptr = cur_rec->next_;
-      cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-      ++delta_num;
     }
   }
 
-  static auto
+  auto
   Validate(  //
       const Key &key,
       const bool closed,
-      uintptr_t ptr,
       LogicalID *&sib_lid,
-      size_t &delta_num)  //
+      size_t &delta_num) const  //
       -> DeltaRC
   {
     auto has_smo = false;
 
     // traverse a delta chain
-    auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-    while (true) {
+    for (const auto *cur_rec = this; true; cur_rec = cur_rec->GetNext(), ++delta_num) {
       switch (cur_rec->delta_type_) {
         case kSplit: {
           // check whether the right-sibling node contains a target key
@@ -515,7 +512,7 @@ class DeltaRecord
           if (!has_smo) {
             const auto &high_key = cur_rec->GetHighKey();
             if (high_key && (Comp{}(*high_key, key) || (!closed && !Comp{}(key, *high_key)))) {
-              sib_lid = reinterpret_cast<LogicalID *>(cur_rec->next_);
+              sib_lid = cur_rec->template GetNext<LogicalID *>();
               return kKeyIsInSibling;
             }
           }
@@ -526,29 +523,22 @@ class DeltaRecord
         default:
           break;  // do nothing
       }
-
-      // go to the next delta record or base node
-      ptr = cur_rec->next_;
-      cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-      ++delta_num;
     }
   }
 
   template <class T>
-  static auto
+  auto
   Sort(  //
-      uintptr_t ptr,
-      std::vector<std::pair<Key, uintptr_t>> &records,
-      std::vector<NodeInfo> &nodes)  //
+      std::vector<std::pair<Key, const void *>> &records,
+      std::vector<NodeInfo> &nodes) const  //
       -> std::pair<bool, int64_t>
   {
-    std::optional<Key> sep_key{std::nullopt};
-    uintptr_t split_d_ptr{kNullPtr};
+    std::optional<Key> sep_key = std::nullopt;
+    const DeltaRecord *split_d = nullptr;
 
     // traverse and sort a delta chain
-    auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
     int64_t size_diff = 0;
-    while (true) {
+    for (const auto *cur_rec = this; true; cur_rec = cur_rec->GetNext()) {
       switch (const auto delta_type = cur_rec->delta_type_; delta_type) {
         case kInsert:
         case kModify:
@@ -564,9 +554,9 @@ class DeltaRecord
               // skip smaller keys
             }
             if (it == it_end) {
-              records.emplace_back(std::move(rec_key), ptr);
+              records.emplace_back(std::move(rec_key), cur_rec);
             } else if (Comp{}(rec_key, it->first)) {
-              records.insert(it, std::make_pair(std::move(rec_key), ptr));
+              records.insert(it, std::make_pair(std::move(rec_key), cur_rec));
             }
 
             // update the page size
@@ -585,7 +575,7 @@ class DeltaRecord
           if (!sep_key || Comp{}(cur_key, *sep_key)) {
             // keep a separator key to exclude out-of-range records
             sep_key = cur_key;
-            split_d_ptr = ptr;
+            split_d = cur_rec;
           }
           break;
         }
@@ -598,19 +588,15 @@ class DeltaRecord
           if (remove_d->delta_type_ != kRemoveNode) break;  // merging was aborted
 
           // keep the merged node and the corresponding separator key
-          nodes.emplace_back(remove_d->next_, split_d_ptr);
+          nodes.emplace_back(remove_d->GetNext(), split_d);
           break;
         }
 
         case kNotDelta:
         default:
-          nodes.emplace_back(ptr, split_d_ptr);
+          nodes.emplace_back(cur_rec, split_d);
           return {false, size_diff};
       }
-
-      // go to the next delta record or base node
-      ptr = cur_rec->next_;
-      cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
     }
   }
 

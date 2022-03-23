@@ -33,8 +33,8 @@ struct NodeInfo {
    *##################################################################################*/
 
   NodeInfo(  //
-      const uintptr_t node_ptr,
-      const uintptr_t sep_ptr)
+      const void *node_ptr,
+      const void *sep_ptr)
       : node_ptr{node_ptr}, sep_ptr{sep_ptr}
   {
   }
@@ -44,10 +44,10 @@ struct NodeInfo {
    *##################################################################################*/
 
   // an address of a base node to be consolidated.
-  uintptr_t node_ptr{};
+  const void *node_ptr{};
 
   // an address of a corresponding split-delta record if exist.
-  uintptr_t sep_ptr{};
+  const void *sep_ptr{};
 
   // the number of records to be consolidated.
   size_t rec_num{0};
