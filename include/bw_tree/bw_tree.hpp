@@ -364,7 +364,7 @@ class BwTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    Node_t *node{};
+    Node_t *node = nullptr;
     size_t begin_pos = 0;
     if (begin_key) {
       auto &&[b_key, b_closed] = *begin_key;
@@ -372,10 +372,10 @@ class BwTree
       // traverse to a leaf node and sort records for scanning
       consol_page_ = nullptr;
       auto &&stack = SearchLeafNode(b_key, b_closed);
-      do {
-        auto *head = GetHead(b_key, b_closed, stack);
-        node = Consolidate<Payload>(head).first;
-      } while (node == nullptr);  // concurrent consolidations may block scanning
+      while (true) {
+        const auto *head = GetHead(b_key, b_closed, stack);
+        if (Consolidate<Payload>(head, node) > 0) break;
+      }  // concurrent consolidations may block scanning
       auto [rc, pos] = node->SearchRecord(b_key);
       begin_pos = (rc == kKeyNotExist || b_closed) ? pos : pos + 1;
 
@@ -386,10 +386,10 @@ class BwTree
     } else {
       // traverse to the leftmost leaf node directly
       auto &&stack = SearchLeftEdgeLeaf();
-      do {
-        auto *head = stack.back()->template Load<Delta_t *>();
-        node = Consolidate<Payload>(head).first;
-      } while (node == nullptr);  // concurrent consolidations may block scanning
+      while (true) {
+        const auto *head = stack.back()->template Load<Delta_t *>();
+        if (Consolidate<Payload>(head, node) > 0) break;
+      }  // concurrent consolidations may block scanning
     }
 
     auto end_pos = node->GetRecordCount();
@@ -660,9 +660,12 @@ class BwTree
     return (page == nullptr) ? (::operator new(kMaxDeltaSize)) : page;
   }
 
+  template <class T>
   void
-  AddToGC(const void *ptr)
+  AddToGC(const T *ptr)
   {
+    static_assert(std::is_same_v<T, Node_t> || std::is_same_v<T, Delta_t>);
+
     // delete delta records
     const auto *garbage = reinterpret_cast<const Delta_t *>(ptr);
     while (!garbage->IsBaseNode()) {
@@ -932,27 +935,27 @@ class BwTree
   auto
   SiblingScan(  //
       const LogicalID *page_id,
-      Node_t *page,
+      Node_t *node,
       const std::optional<std::pair<const Key &, bool>> &end_key)  //
       -> RecordIterator
   {
     while (true) {
       auto *head = page_id->template Load<Delta_t *>();
-      auto *node = Consolidate<Payload>(head, page).first;
-      if (node == nullptr) continue;  // blocked by concurrent consolidations
-
-      auto rec_num = node->GetRecordCount();
-      if (end_key) {
-        auto &&[e_key, e_closed] = *end_key;
-        if (!Comp{}(node->GetKey(node->GetMetadata(rec_num - 1)), e_key)) {
-          auto [rc, pos] = node->SearchRecord(e_key);
-          rec_num = (rc == kKeyExist && e_closed) ? pos + 1 : pos;
-          node->RemoveSideLink();
-        }
-      }
-
-      return RecordIterator{node, 0, rec_num};
+      if (Consolidate<Payload>(head, node) > 0) break;
+      // blocked by concurrent consolidations
     }
+
+    auto rec_num = node->GetRecordCount();
+    if (end_key) {
+      auto &&[e_key, e_closed] = *end_key;
+      if (!Comp{}(node->GetKey(node->GetMetadata(rec_num - 1)), e_key)) {
+        auto [rc, pos] = node->SearchRecord(e_key);
+        rec_num = (rc == kKeyExist && e_closed) ? pos + 1 : pos;
+        node->RemoveSideLink();
+      }
+    }
+
+    return RecordIterator{node, 0, rec_num};
   }
 
   /*####################################################################################
@@ -978,9 +981,10 @@ class BwTree
       if (stack.back() != target_lid) return;
 
       // prepare a consolidated node
-      auto [consol_node, size] =
-          (head->IsLeaf()) ? Consolidate<Payload>(head) : Consolidate<LogicalID *>(head);
-      if (consol_node == nullptr) return;  // other threads perform consolidation
+      Node_t *consol_node = nullptr;
+      const auto size = (head->IsLeaf()) ? Consolidate<Payload>(head, consol_node)
+                                         : Consolidate<LogicalID *>(head, consol_node);
+      if (size < 0) return;  // other threads have performed consolidation
 
       if (size > kPageSize) {
         // switch to splitting
@@ -1012,8 +1016,8 @@ class BwTree
   auto
   Consolidate(  //
       const Delta_t *head,
-      void *page = nullptr)  //
-      -> std::pair<Node_t *, size_t>
+      Node_t *&consol_node)  //
+      -> int64_t
   {
     constexpr auto kIsInternal = std::is_same_v<T, LogicalID *>;
 
@@ -1023,30 +1027,33 @@ class BwTree
     records.reserve(kMaxDeltaNodeNum * 4);
     nodes.reserve(kMaxDeltaNodeNum);
     const auto [consolidated, diff] = head->template Sort<T>(records, nodes);
-    if (consolidated) return {nullptr, 0};
+    if (consolidated) return -1;
 
     // calculate the size a consolidated node
     const auto cur_block_size = Node_t::template PrepareConsolidation<kIsInternal>(nodes);
     const auto size = kHeaderLength + cur_block_size + diff;
 
     // prepare a page for a new node
-    if (page == nullptr) {
+    void *page{};
+    if (consol_node == nullptr) {
       page = GetNodePage(size);
     } else if (size > kPageSize) {
-      AddToGC(page);
+      AddToGC(consol_node);
       page = GetNodePage(size);
+    } else {
+      page = consol_node;
     }
 
     // consolidate a target node
     auto offset = size;
-    auto *new_node = new (page) Node_t{!kIsInternal, nodes, offset};
+    consol_node = new (page) Node_t{!kIsInternal, nodes, offset};
     if constexpr (kIsInternal) {
-      new_node->InternalConsolidate(nodes, records, offset);
+      consol_node->InternalConsolidate(nodes, records, offset);
     } else {
-      new_node->template LeafConsolidate<T>(nodes, records, offset);
+      consol_node->template LeafConsolidate<T>(nodes, records, offset);
     }
 
-    return {new_node, size};
+    return size;
   }
 
   bool
