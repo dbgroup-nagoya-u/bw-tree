@@ -42,7 +42,8 @@ class MappingTable
    *##################################################################################*/
 
   using Node_t = Node<Key, Comp>;
-  using DeltaRecord_t = DeltaRecord<Key, Comp>;
+  using Delta_t = DeltaRecord<Key, Comp>;
+  using LogicalID_t = LogicalID<Key, Comp>;
 
  public:
   /*####################################################################################
@@ -96,7 +97,7 @@ class MappingTable
    */
   auto
   GetNewLogicalID()  //
-      -> LogicalID *
+      -> LogicalID_t *
   {
     auto *current_table = table_.load(std::memory_order_relaxed);
     auto new_id = current_table->ReserveNewID();
@@ -163,14 +164,14 @@ class MappingTable
       }
 
       for (size_t i = 0; i < size; ++i) {
-        auto *rec = logical_ids_[i].template Load<DeltaRecord_t *>();
+        auto *rec = logical_ids_[i].template Load<Delta_t *>();
         if (rec == nullptr) continue;
 
         // delete delta records
         while (!rec->IsBaseNode()) {
           auto ptr = rec->GetNext();
           delete rec;
-          rec = reinterpret_cast<DeltaRecord_t *>(ptr);
+          rec = reinterpret_cast<Delta_t *>(ptr);
         }
 
         // delete a base node
@@ -192,7 +193,7 @@ class MappingTable
      */
     auto
     ReserveNewID()  //
-        -> LogicalID *
+        -> LogicalID_t *
     {
       auto current_id = head_id_.fetch_add(1, std::memory_order_relaxed);
 
@@ -209,7 +210,7 @@ class MappingTable
     std::atomic_size_t head_id_{0};
 
     /// an actual mapping table.
-    std::array<LogicalID, kMappingTableCapacity> logical_ids_{};
+    std::array<LogicalID_t, kMappingTableCapacity> logical_ids_{};
   };
 
   /*####################################################################################

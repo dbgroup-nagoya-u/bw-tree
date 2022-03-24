@@ -23,12 +23,26 @@
 
 namespace dbgroup::index::bw_tree::component
 {
+// forward declarations for static assertions
+template <class Key, class Comp>
+class Node;
+template <class Key, class Comp>
+class DeltaRecord;
+
 /**
  * @brief A class for wrapping physical pointers by logical ones.
  *
  */
+template <class Key, class Comp>
 class LogicalID
 {
+  /*####################################################################################
+   * Type aliases
+   *##################################################################################*/
+
+  using Node_t = Node<Key, Comp>;
+  using Delta_t = DeltaRecord<Key, Comp>;
+
  public:
   /*####################################################################################
    * Public constructors and assignment operators
@@ -57,7 +71,7 @@ class LogicalID
   Load() const  //
       -> T
   {
-    static_assert(std::is_same_v<T, uintptr_t> || std::is_pointer_v<T>);
+    static_assert(IsValidTarget<T>());
 
     return reinterpret_cast<T>(physical_ptr_.load(std::memory_order_acquire));
   }
@@ -66,7 +80,7 @@ class LogicalID
   void
   Store(const T desired)
   {
-    static_assert(std::is_pointer_v<T>);
+    static_assert(IsValidTarget<T>());
 
     physical_ptr_.store(reinterpret_cast<uintptr_t>(desired), std::memory_order_release);
   }
@@ -84,8 +98,8 @@ class LogicalID
       const T2 desired)  //
       -> bool
   {
-    static_assert(std::is_same_v<T1, uintptr_t> || std::is_pointer_v<T1>);
-    static_assert(std::is_same_v<T2, uintptr_t> || std::is_pointer_v<T2>);
+    static_assert(IsValidTarget<T1>());
+    static_assert(IsValidTarget<T2>());
 
     auto old_ptr = reinterpret_cast<uintptr_t>(expected);
     return physical_ptr_.compare_exchange_weak(  //
@@ -101,8 +115,8 @@ class LogicalID
       const T2 desired)  //
       -> bool
   {
-    static_assert(std::is_same_v<T1, uintptr_t> || std::is_pointer_v<T1>);
-    static_assert(std::is_same_v<T2, uintptr_t> || std::is_pointer_v<T2>);
+    static_assert(IsValidTarget<T1>());
+    static_assert(IsValidTarget<T2>());
 
     auto old_ptr = reinterpret_cast<uintptr_t>(expected);
     return physical_ptr_.compare_exchange_strong(  //
@@ -112,6 +126,25 @@ class LogicalID
   }
 
  private:
+  /*####################################################################################
+   * Internal utility functions
+   *##################################################################################*/
+
+  template <class T>
+  static constexpr auto
+  IsValidTarget()
+  {
+    if constexpr (std::is_same_v<T, uintptr_t>) {
+      return true;
+    } else if constexpr (std::is_same_v<T, Node_t *> || std::is_same_v<T, const Node_t *>) {
+      return true;
+    } else if constexpr (std::is_same_v<T, Delta_t *> || std::is_same_v<T, const Delta_t *>) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+
   /*####################################################################################
    * Internal member variables
    *##################################################################################*/

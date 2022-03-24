@@ -39,6 +39,12 @@ namespace dbgroup::index::bw_tree::component
 template <class Key, class Comp>
 class Node
 {
+  /*####################################################################################
+   * Type aliases
+   *##################################################################################*/
+
+  using LogicalID_t = LogicalID<Key, Comp>;
+
  public:
   /*####################################################################################
    * Public constructors and assignment operators
@@ -58,7 +64,7 @@ class Node
    */
   Node(  //
       const Node *split_d,
-      const LogicalID *left_lid)
+      const LogicalID_t *left_lid)
       : node_type_{kInternal}, delta_type_{kNotDelta}, record_count_{2}
   {
     // set a split-left page
@@ -68,7 +74,7 @@ class Node
     meta_array_[0] = meta.UpdateForInternal(offset);
 
     // set a split-right page
-    const auto *right_lid = split_d->template GetPayload<LogicalID *>(meta);
+    const auto *right_lid = split_d->template GetPayload<LogicalID_t *>(meta);
     offset = SetPayload(offset, right_lid);
     meta_array_[1] = Metadata{offset, 0, kWordSize};
   }
@@ -171,7 +177,7 @@ class Node
    * @retval false otherwise.
    */
   [[nodiscard]] auto
-  IsLeftmostChildIn(const std::vector<LogicalID *> &stack) const  //
+  IsLeftmostChildIn(const std::vector<LogicalID_t *> &stack) const  //
       -> bool
   {
     const auto depth = stack.size();
@@ -217,9 +223,9 @@ class Node
 
   [[nodiscard]] constexpr auto
   GetSiblingNode() const  //
-      -> LogicalID *
+      -> LogicalID_t *
   {
-    return reinterpret_cast<LogicalID *>(next_);
+    return reinterpret_cast<LogicalID_t *>(next_);
   }
 
   /**
@@ -343,7 +349,7 @@ class Node
   SearchChild(  //
       const Key &key,
       const bool range_is_closed) const  //
-      -> LogicalID *
+      -> LogicalID_t *
   {
     int64_t begin_pos = 0;
     int64_t end_pos = record_count_ - 2;
@@ -363,7 +369,7 @@ class Node
       }
     }
 
-    return GetPayload<LogicalID *>(meta_array_[begin_pos]);
+    return GetPayload<LogicalID_t *>(meta_array_[begin_pos]);
   }
 
   template <bool kIsInternal>
@@ -470,7 +476,7 @@ class Node
         // copy a payload of a base node in advance to swap that of a new index entry
         auto meta = node->meta_array_[i];
         if (!payload_is_embedded) {  // skip a deleted page
-          offset = CopyPayloadFrom<LogicalID *>(node, meta, offset);
+          offset = CopyPayloadFrom<LogicalID_t *>(node, meta, offset);
         }
 
         // get a current key in the base node
@@ -710,7 +716,7 @@ class Node
       meta_array_[record_count_++] = meta.UpdateForInternal(offset);
 
       // copy the next (split-right) child page
-      offset = CopyPayloadFrom<LogicalID *>(delta, meta, offset);
+      offset = CopyPayloadFrom<LogicalID_t *>(delta, meta, offset);
     }
 
     return offset;
