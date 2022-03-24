@@ -374,8 +374,9 @@ class BwTree
       auto &&stack = SearchLeafNode(b_key, b_closed);
       while (true) {
         const auto *head = GetHead(b_key, b_closed, stack);
-        if (Consolidate<Payload>(head, node) > 0) break;
-      }  // concurrent consolidations may block scanning
+        if (Consolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
+        // concurrent consolidations may block scanning
+      }
       auto [rc, pos] = node->SearchRecord(b_key);
       begin_pos = (rc == kKeyNotExist || b_closed) ? pos : pos + 1;
 
@@ -388,8 +389,9 @@ class BwTree
       auto &&stack = SearchLeftEdgeLeaf();
       while (true) {
         const auto *head = stack.back()->template Load<Delta_t *>();
-        if (Consolidate<Payload>(head, node) > 0) break;
-      }  // concurrent consolidations may block scanning
+        if (Consolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
+        // concurrent consolidations may block scanning
+      }
     }
 
     auto end_pos = node->GetRecordCount();
@@ -629,7 +631,15 @@ class BwTree
 
   static constexpr auto kClosed = component::kClosed;
 
-  static constexpr auto kNullPtr = component::kNullPtr;
+  static constexpr auto kIsScan = true;
+
+  enum SMOsRC
+  {
+    kConsolidate,
+    kTrySplit,
+    kTryMerge,
+    kAlreadyConsolidated
+  };
 
   /*####################################################################################
    * Internal utility functions
@@ -938,8 +948,8 @@ class BwTree
       -> RecordIterator
   {
     while (true) {
-      auto *head = page_id->template Load<Delta_t *>();
-      if (Consolidate<Payload>(head, node) > 0) break;
+      const auto *head = page_id->template Load<Delta_t *>();
+      if (Consolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
       // blocked by concurrent consolidations
     }
 
@@ -980,21 +990,29 @@ class BwTree
 
       // prepare a consolidated node
       Node_t *consol_node = nullptr;
-      const auto size = (head->IsLeaf()) ? Consolidate<Payload>(head, consol_node)
-                                         : Consolidate<LogicalID_t *>(head, consol_node);
-      if (size < 0) return;  // other threads have performed consolidation
+      const auto rc = (head->IsLeaf()) ? Consolidate<Payload>(head, consol_node)
+                                       : Consolidate<LogicalID_t *>(head, consol_node);
+      switch (rc) {
+        case kAlreadyConsolidated:
+          // other threads have performed consolidation
+          return;
 
-      if (size > kPageSize) {
-        // switch to splitting
-        consol_node->Split();
-        if (TrySplit(head, reinterpret_cast<Delta_t *>(consol_node), stack)) return;
-        continue;  // retry from consolidation
-      }
+        case kTrySplit:
+          // switch to splitting
+          if (TrySplit(head, reinterpret_cast<Delta_t *>(consol_node), stack)) return;
+          continue;  // retry from consolidation
 
-      if (size <= kMinNodeSize && CanMerge(consol_node, stack)) {
-        // switch to merging
-        if (TryMerge(head, reinterpret_cast<Delta_t *>(consol_node), stack)) return;
-        continue;  // retry from consolidation
+        case kTryMerge:
+          if (CanMerge(consol_node, stack)) {
+            // switch to merging
+            if (TryMerge(head, reinterpret_cast<Delta_t *>(consol_node), stack)) return;
+            continue;  // retry from consolidation
+          }
+          break;  // perform consolidation
+
+        case kConsolidate:
+        default:
+          break;  // perform consolidation
       }
 
       // install a consolidated node
@@ -1003,7 +1021,6 @@ class BwTree
         AddToGC(head);
         return;
       }
-
       // if consolidation fails, no retry
       AddToGC(consol_node);
       return;
@@ -1014,10 +1031,11 @@ class BwTree
   auto
   Consolidate(  //
       const Delta_t *head,
-      Node_t *&consol_node)  //
-      -> int64_t
+      Node_t *&consol_node,
+      const bool is_scan = false)  //
+      -> SMOsRC
   {
-    constexpr auto kIsInternal = std::is_same_v<T, LogicalID_t *>;
+    constexpr auto kIsLeaf = !std::is_same_v<T, LogicalID_t *>;
 
     // sort delta records
     std::vector<std::pair<Key, const void *>> records{};
@@ -1025,11 +1043,15 @@ class BwTree
     records.reserve(kMaxDeltaNodeNum * 4);
     consol_info.reserve(kMaxDeltaNodeNum);
     const auto [consolidated, diff] = head->template Sort<T>(records, consol_info);
-    if (consolidated) return -1;
+    if (consolidated) return kAlreadyConsolidated;
 
     // calculate the size a consolidated node
-    const auto cur_block_size = Node_t::template PrepareConsolidation<kIsInternal>(consol_info);
-    const auto size = kHeaderLength + cur_block_size + diff;
+    auto size = kHeaderLength + Node_t::template PreConsolidate<kIsLeaf>(consol_info) + diff;
+    bool do_split = false;
+    if (!is_scan && size > kPageSize) {
+      do_split = true;
+      size = size / 2 + (kHeaderLength / 2);
+    }
 
     // prepare a page for a new node
     void *page{};
@@ -1043,15 +1065,16 @@ class BwTree
     }
 
     // consolidate a target node
-    auto offset = size;
-    consol_node = new (page) Node_t{!kIsInternal, consol_info, offset};
-    if constexpr (kIsInternal) {
-      consol_node->InternalConsolidate(consol_info, records, offset);
+    consol_node = new (page) Node_t{kIsLeaf, size};
+    if constexpr (kIsLeaf) {
+      consol_node->template LeafConsolidate<T>(consol_info, records, do_split);
     } else {
-      consol_node->template LeafConsolidate<T>(consol_info, records, offset);
+      consol_node->InternalConsolidate(consol_info, records, do_split);
     }
 
-    return size;
+    if (do_split) return kTrySplit;
+    if (size <= kMinNodeSize) return kTryMerge;
+    return kConsolidate;
   }
 
   bool
