@@ -20,11 +20,11 @@
 #include <utility>
 
 #include "common.hpp"
+#include "consolidate_info.hpp"
 #include "delta_record.hpp"
 #include "logical_id.hpp"
 #include "memory/utility.hpp"
 #include "metadata.hpp"
-#include "node_info.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {
@@ -44,6 +44,7 @@ class Node
    *##################################################################################*/
 
   using LogicalID_t = LogicalID<Key, Comp>;
+  using ConsolidateInfo_t = ConsolidateInfo<Key, Comp>;
 
  public:
   /*####################################################################################
@@ -88,12 +89,12 @@ class Node
    */
   Node(  //
       const bool node_type,
-      const std::vector<NodeInfo> &nodes,
+      const std::vector<ConsolidateInfo_t> &consol_info,
       size_t &offset)
       : node_type_{static_cast<NodeType>(node_type)}, delta_type_{kNotDelta}
   {
     // copy the lowest key
-    const auto *low_node = reinterpret_cast<const Node *>(nodes.back().node_ptr);
+    const auto *low_node = consol_info.back().node;
     const auto low_meta = low_node->low_meta_;
     const auto low_key_len = low_meta.GetKeyLength();
     if (low_key_len > 0) {
@@ -107,14 +108,14 @@ class Node
     // prepare a node that has the highest key, and copy the next logical ID
     const Node *high_node{};
     Metadata high_meta{};
-    if (nodes.front().sep_ptr == nullptr) {
+    if (consol_info.front().split_d == nullptr) {
       // an original or merged base node
-      high_node = reinterpret_cast<const Node *>(nodes.front().node_ptr);
+      high_node = consol_info.front().node;
       high_meta = high_node->high_meta_;
       next_ = high_node->next_;
     } else {
       // a split-delta record
-      high_node = reinterpret_cast<const Node *>(nodes.front().sep_ptr);
+      high_node = consol_info.front().split_d;
       high_meta = high_node->low_meta_;
       next_ = high_node->template GetPayload<uintptr_t>(high_meta);
     }
@@ -337,15 +338,14 @@ class Node
 
   template <bool kIsInternal>
   [[nodiscard]] static auto
-  PrepareConsolidation(std::vector<NodeInfo> &nodes)  //
+  PrepareConsolidation(std::vector<ConsolidateInfo_t> &consol_info)  //
       -> size_t
   {
-    const auto end_pos = nodes.size() - 1;
+    const auto end_pos = consol_info.size() - 1;
     size_t size = 0;
 
     for (size_t i = 0; i <= end_pos; ++i) {
-      auto &[node_ptr, sep_ptr, rec_num] = nodes.at(i);
-      const auto *node = reinterpret_cast<const Node *>(node_ptr);
+      auto &[node, split_d, rec_num] = consol_info.at(i);
 
       // add the length of the lowest key
       if (kIsInternal || i == end_pos) {
@@ -353,16 +353,15 @@ class Node
       }
 
       // check the number of records to be consolidated
-      if (sep_ptr == nullptr) {
+      if (split_d == nullptr) {
         rec_num = node->record_count_;
 
         if (i == 0) {  // add the length of the highest key
           size += node->high_meta_.GetKeyLength();
         }
       } else {
-        const auto *sep_node = reinterpret_cast<const Node *>(sep_ptr);
-        const auto sep_meta = sep_node->low_meta_;
-        const auto &sep_key = sep_node->GetKey(sep_meta);
+        const auto sep_meta = split_d->low_meta_;
+        const auto &sep_key = split_d->GetKey(sep_meta);
         auto [rc, pos] = node->SearchRecord(sep_key);
         rec_num = (kIsInternal || rc == kKeyExist) ? pos + 1 : pos;
 
@@ -386,7 +385,7 @@ class Node
   template <class T>
   void
   LeafConsolidate(  //
-      const std::vector<NodeInfo> &nodes,
+      const std::vector<ConsolidateInfo_t> &consol_info,
       const std::vector<std::pair<Key, const void *>> &records,
       size_t offset)
   {
@@ -394,9 +393,8 @@ class Node
 
     // perform merge-sort to consolidate a node
     size_t j = 0;
-    for (int64_t k = nodes.size() - 1; k >= 0; --k) {
-      const auto *node = reinterpret_cast<const Node *>(nodes.at(k).node_ptr);
-      const auto base_rec_num = nodes.at(k).rec_num;
+    for (int64_t k = consol_info.size() - 1; k >= 0; --k) {
+      const auto [node, dummy, base_rec_num] = consol_info.at(k);
       for (size_t i = 0; i < base_rec_num; ++i) {
         // copy new records
         const auto meta = node->meta_array_[i];
@@ -423,7 +421,7 @@ class Node
 
   void
   InternalConsolidate(  //
-      const std::vector<NodeInfo> &nodes,
+      const std::vector<ConsolidateInfo_t> &consol_info,
       const std::vector<std::pair<Key, const void *>> &records,
       size_t offset)
   {
@@ -432,9 +430,9 @@ class Node
     // perform merge-sort to consolidate a node
     bool payload_is_embedded = false;
     size_t j = 0;
-    for (int64_t k = nodes.size() - 1; k >= 0; --k) {
-      const auto *node = reinterpret_cast<const Node *>(nodes.at(k).node_ptr);
-      const auto end_pos = nodes.at(k).rec_num - 1;
+    for (int64_t k = consol_info.size() - 1; k >= 0; --k) {
+      const auto *node = consol_info.at(k).node;
+      const auto end_pos = consol_info.at(k).rec_num - 1;
       for (size_t i = 0; i <= end_pos; ++i) {
         // copy a payload of a base node in advance to swap that of a new index entry
         auto meta = node->meta_array_[i];
@@ -447,7 +445,7 @@ class Node
           if (k == 0) break;  // the last record does not need a key
 
           // if nodes are merged, a current key is equivalent with the lowest one in the next node
-          node = reinterpret_cast<const Node *>(nodes.at(k - 1).node_ptr);
+          node = consol_info.at(k - 1).node;
           meta = node->low_meta_;
         }
         const auto &node_key = node->GetKey(meta);

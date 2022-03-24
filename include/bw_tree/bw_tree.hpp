@@ -50,7 +50,7 @@ class BwTree
   using DeltaRC = component::DeltaRC;
   using SMOStatus = component::SMOStatus;
   using Metadata = component::Metadata;
-  using NodeInfo = component::NodeInfo;
+  using ConsolidateInfo_t = component::ConsolidateInfo<Key, Comp>;
   using LogicalID_t = component::LogicalID<Key, Comp>;
   using Node_t = component::Node<Key, Comp>;
   using Delta_t = component::DeltaRecord<Key, Comp>;
@@ -1021,14 +1021,14 @@ class BwTree
 
     // sort delta records
     std::vector<std::pair<Key, const void *>> records{};
-    std::vector<NodeInfo> nodes{};
+    std::vector<ConsolidateInfo_t> consol_info{};
     records.reserve(kMaxDeltaNodeNum * 4);
-    nodes.reserve(kMaxDeltaNodeNum);
-    const auto [consolidated, diff] = head->template Sort<T>(records, nodes);
+    consol_info.reserve(kMaxDeltaNodeNum);
+    const auto [consolidated, diff] = head->template Sort<T>(records, consol_info);
     if (consolidated) return -1;
 
     // calculate the size a consolidated node
-    const auto cur_block_size = Node_t::template PrepareConsolidation<kIsInternal>(nodes);
+    const auto cur_block_size = Node_t::template PrepareConsolidation<kIsInternal>(consol_info);
     const auto size = kHeaderLength + cur_block_size + diff;
 
     // prepare a page for a new node
@@ -1044,11 +1044,11 @@ class BwTree
 
     // consolidate a target node
     auto offset = size;
-    consol_node = new (page) Node_t{!kIsInternal, nodes, offset};
+    consol_node = new (page) Node_t{!kIsInternal, consol_info, offset};
     if constexpr (kIsInternal) {
-      consol_node->InternalConsolidate(nodes, records, offset);
+      consol_node->InternalConsolidate(consol_info, records, offset);
     } else {
-      consol_node->template LeafConsolidate<T>(nodes, records, offset);
+      consol_node->template LeafConsolidate<T>(consol_info, records, offset);
     }
 
     return size;

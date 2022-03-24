@@ -23,9 +23,9 @@
 #include <vector>
 
 #include "common.hpp"
+#include "consolidate_info.hpp"
 #include "logical_id.hpp"
 #include "metadata.hpp"
-#include "node_info.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {
@@ -43,6 +43,7 @@ class DeltaRecord
    *##################################################################################*/
 
   using LogicalID_t = LogicalID<Key, Comp>;
+  using ConsolidateInfo_t = ConsolidateInfo<Key, Comp>;
 
  public:
   /*####################################################################################
@@ -550,7 +551,7 @@ class DeltaRecord
   auto
   Sort(  //
       std::vector<std::pair<Key, const void *>> &records,
-      std::vector<NodeInfo> &nodes) const  //
+      std::vector<ConsolidateInfo_t> &consol_info) const  //
       -> std::pair<bool, int64_t>
   {
     std::optional<Key> sep_key = std::nullopt;
@@ -608,13 +609,13 @@ class DeltaRecord
           if (remove_d->delta_type_ != kRemoveNode) break;  // merging was aborted
 
           // keep the merged node and the corresponding separator key
-          nodes.emplace_back(remove_d->GetNext(), split_d);
+          consol_info.emplace_back(remove_d->GetNext(), split_d);
           break;
         }
 
         case kNotDelta:
         default:
-          nodes.emplace_back(cur_rec, split_d);
+          consol_info.emplace_back(cur_rec, split_d);
           return {false, size_diff};
       }
     }

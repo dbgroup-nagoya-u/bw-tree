@@ -14,28 +14,40 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_COMPONENT_NODE_INFO_HPP
-#define BW_TREE_COMPONENT_NODE_INFO_HPP
+#ifndef BW_TREE_COMPONENT_CONSOLIDATE_INFO_HPP
+#define BW_TREE_COMPONENT_CONSOLIDATE_INFO_HPP
 
 #include "common.hpp"
 #include "metadata.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {
+// forward declarations for cast
+template <class Key, class Comp>
+class Node;
+
 /**
  * @brief A class for rataining a node and its separator key to be consolidated.
  *
  */
-struct NodeInfo {
+template <class Key, class Comp>
+struct ConsolidateInfo {
+  /*####################################################################################
+   * Type aliases
+   *##################################################################################*/
+
+  using Node_t = Node<Key, Comp>;
+
  public:
   /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/
 
-  NodeInfo(  //
+  ConsolidateInfo(  //
       const void *node_ptr,
       const void *sep_ptr)
-      : node_ptr{node_ptr}, sep_ptr{sep_ptr}
+      : node{reinterpret_cast<const Node_t *>(node_ptr)},
+        split_d{reinterpret_cast<const Node_t *>(sep_ptr)}
   {
   }
 
@@ -44,10 +56,10 @@ struct NodeInfo {
    *##################################################################################*/
 
   // an address of a base node to be consolidated.
-  const void *node_ptr{};
+  const Node_t *node{};
 
   // an address of a corresponding split-delta record if exist.
-  const void *sep_ptr{};
+  const Node_t *split_d{};
 
   // the number of records to be consolidated.
   size_t rec_num{0};
@@ -55,4 +67,4 @@ struct NodeInfo {
 
 }  // namespace dbgroup::index::bw_tree::component
 
-#endif  // BW_TREE_COMPONENT_NODE_INFO_HPP
+#endif  // BW_TREE_COMPONENT_CONSOLIDATE_INFO_HPP
