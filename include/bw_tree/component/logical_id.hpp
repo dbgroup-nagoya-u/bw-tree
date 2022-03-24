@@ -66,9 +66,15 @@ class LogicalID
   void
   Store(const T desired)
   {
-    static_assert(std::is_same_v<T, uintptr_t> || std::is_pointer_v<T>);
+    static_assert(std::is_pointer_v<T>);
 
     physical_ptr_.store(reinterpret_cast<uintptr_t>(desired), std::memory_order_release);
+  }
+
+  void
+  Clear()
+  {
+    physical_ptr_.store(kNullPtr, std::memory_order_relaxed);
   }
 
   template <class T1, class T2>

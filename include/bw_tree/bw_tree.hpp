@@ -677,10 +677,8 @@ class BwTree
         auto *sib_lid = garbage->template GetPayload<LogicalID *>();
         const auto *remove_d = sib_lid->template Load<Delta_t *>();
         if (remove_d->IsRemoveNodeDelta()) {  // check merging is not aborted
-          const auto *merged_node = remove_d->template GetNext<Node_t *>();
-          gc_.AddGarbage(remove_d);
-          gc_.AddGarbage(merged_node);
-          sib_lid->Store(kNullPtr);
+          sib_lid->Clear();
+          AddToGC(remove_d);
         }
       }
 
@@ -1038,8 +1036,8 @@ class BwTree
     if (consol_node == nullptr) {
       page = GetNodePage(size);
     } else if (size > kPageSize) {
-      AddToGC(consol_node);
       page = GetNodePage(size);
+      AddToGC(consol_node);
     } else {
       page = consol_node;
     }
@@ -1071,9 +1069,9 @@ class BwTree
     if (!stack.back()->CASStrong(head, split_d)) {
       // retry from consolidation
       split_d->Abort();
+      sib_lid->Clear();
       AddToGC(split_d);
       AddToGC(split_node);
-      sib_lid->Store(kNullPtr);
       return false;
     }
 
@@ -1142,7 +1140,7 @@ class BwTree
     const auto success = root_.compare_exchange_strong(cur_lid, new_lid, std::memory_order_relaxed);
     if (!success) {
       // another thread has already inserted a new root
-      new_lid->Store(kNullPtr);
+      new_lid->Clear();
       AddToGC(new_root);
     } else {
       cur_lid = new_lid;
