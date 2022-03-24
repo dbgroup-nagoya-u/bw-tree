@@ -173,36 +173,6 @@ class Node
   }
 
   /**
-   * @retval true if this node has a left sibling node.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] auto
-  IsLeftmostChildIn(const std::vector<LogicalID_t *> &stack) const  //
-      -> bool
-  {
-    const auto depth = stack.size();
-    if (depth <= 1) return true;
-
-    const auto child_len = low_meta_.GetKeyLength();
-    if (child_len == 0) return true;
-
-    const auto *parent_lid = stack.at(depth - 2);
-    auto *parent = parent_lid->template Load<Node *>();
-    while (true) {
-      if (parent == nullptr || parent->delta_type_ == kNodeRemoved) {
-        // the parent node is removed, so abort
-        return true;
-      }
-      if (parent->delta_type_ == kNotDelta) break;
-      parent = reinterpret_cast<Node *>(parent->next_);
-    }
-    const auto parent_len = parent->low_meta_.GetKeyLength();
-    if (parent_len == 0) return false;
-
-    return IsEqual<Comp>(GetLowKey(), parent->GetLowKey());
-  }
-
-  /**
    * @return the number of records in this node.
    */
   [[nodiscard]] constexpr auto
@@ -212,11 +182,12 @@ class Node
     return record_count_;
   }
 
+  template <class T = const Node *>
   [[nodiscard]] constexpr auto
-  GetSiblingNode() const  //
-      -> LogicalID_t *
+  GetNext() const  //
+      -> T
   {
-    return reinterpret_cast<LogicalID_t *>(next_);
+    return reinterpret_cast<T>(next_);
   }
 
   /**
@@ -257,8 +228,9 @@ class Node
    */
   [[nodiscard]] auto
   GetLowKey() const  //
-      -> Key
+      -> std::optional<Key>
   {
+    if (low_meta_.GetKeyLength() == 0) return std::nullopt;
     return GetKey(low_meta_);
   }
 

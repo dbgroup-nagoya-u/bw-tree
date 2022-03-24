@@ -177,7 +177,7 @@ class BwTree
       if (current_pos_ < record_count_) return true;
 
       // check whether this node has a sibling node
-      auto *sib_page = node_->GetSiblingNode();
+      auto *sib_page = node_->template GetNext<LogicalID_t *>();
       if (sib_page == nullptr) return false;
 
       // go to the sibling node and continue scaning
@@ -991,7 +991,7 @@ class BwTree
         continue;  // retry from consolidation
       }
 
-      if (size <= kMinNodeSize && !consol_node->IsLeftmostChildIn(stack)) {
+      if (size <= kMinNodeSize && CanMerge(consol_node, stack)) {
         // switch to merging
         if (TryMerge(head, reinterpret_cast<Delta_t *>(consol_node), stack)) return;
         continue;  // retry from consolidation
@@ -1151,6 +1151,22 @@ class BwTree
     stack.emplace_back(child_lid);
 
     return success;
+  }
+
+  [[nodiscard]] auto
+  CanMerge(  //
+      const Node_t *child,
+      const std::vector<LogicalID_t *> &stack)  //
+      -> bool
+  {
+    const auto &low_key = child->GetLowKey();
+    if (!low_key) return false;  // the leftmost node cannot be merged
+
+    // if a parent node has the same lowest-key, the child is the leftmost node in it
+    std::vector<LogicalID_t *> copied_stack{stack};
+    copied_stack.pop_back();
+    const auto *parent = GetHead(*low_key, kClosed, copied_stack);
+    return !parent->HasSameLowKeyWith(*low_key);
   }
 
   auto
