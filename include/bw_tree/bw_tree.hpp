@@ -1222,10 +1222,7 @@ class BwTree
       const auto *sib_head = GetHead(del_key, !kClosed, stack);
       if (cur_lid != stack.back()) {
         // the target node was split, so check whether the merged nodes span two parent nodes
-        while (!sib_head->IsBaseNode()) {
-          sib_head = sib_head->GetNext();
-        }
-        if (reinterpret_cast<const Node_t *>(sib_head)->HasSameLowKeyWith(del_key)) {
+        if (sib_head->HasSameLowKeyWith(del_key)) {
           // the merged nodes have different parent nodes, so abort
           AbortMerge(merge_d);
           break;

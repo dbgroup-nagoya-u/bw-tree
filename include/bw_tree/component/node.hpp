@@ -202,15 +202,6 @@ class Node
     return IsEqual<Comp>(GetLowKey(), parent->GetLowKey());
   }
 
-  [[nodiscard]] auto
-  HasSameLowKeyWith(const Key &key) const  //
-      -> bool
-  {
-    if (low_meta_.GetKeyLength() == 0) return false;
-
-    return IsEqual<Comp>(GetLowKey(), key);
-  }
-
   /**
    * @return the number of records in this node.
    */

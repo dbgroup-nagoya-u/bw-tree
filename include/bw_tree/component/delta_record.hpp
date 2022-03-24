@@ -286,6 +286,20 @@ class DeltaRecord
    *##################################################################################*/
 
   [[nodiscard]] auto
+  HasSameLowKeyWith(const Key &key) const  //
+      -> bool
+  {
+    // traverse to a base node
+    const auto *head = this;
+    while (!head->IsBaseNode()) {
+      head = head->GetNext();
+    }
+
+    if (head->meta_.GetKeyLength() == 0) return false;
+    return IsEqual<Comp>(head->GetKey(), key);
+  }
+
+  [[nodiscard]] auto
   GetSMOStatus() const  //
       -> SMOStatus
   {
