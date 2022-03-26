@@ -698,7 +698,7 @@ class BwTree
       std::vector<LogicalID_t *> &stack) const
   {
     if (stack.empty()) {
-      stack.emplace_back(root_.load(std::memory_order_relaxed));
+      stack.emplace_back(LoadValidRoot());
       return;
     }
 
@@ -763,29 +763,28 @@ class BwTree
   SearchLeftmostLeaf() const  //
       -> std::vector<LogicalID_t *>
   {
-    std::vector<LogicalID_t *> stack{};
+    std::vector<LogicalID_t *> stack{LoadValidRoot()};
     stack.reserve(kExpectedTreeHeight);
 
-    // get a logical page of a root node
-    auto *cur_lid = root_.load(std::memory_order_relaxed);
-    stack.emplace_back(cur_lid);
-
     // traverse a Bw-tree
-    for (const auto *delta = cur_lid->template Load<Delta_t *>();  //
-         !delta->IsLeaf();                                         //
-         delta = cur_lid->template Load<Delta_t *>())              //
-    {
-      for (; !delta->IsBaseNode(); delta = delta->template GetNext<Delta_t *>()) {
-        // go to the next delta record or base node
-      }
-
-      // get a leftmost node
-      const auto *node = reinterpret_cast<const Node_t *>(delta);
-      cur_lid = node->template GetPayload<LogicalID_t *>(node->GetMetadata(0));
-      stack.emplace_back(cur_lid);
+    while (true) {
+      const auto *node = stack.back()->template Load<Node_t *>();
+      if (node->IsLeaf()) break;
+      stack.emplace_back(node->GetLeftmostChild());
     }
 
     return stack;
+  }
+
+  [[nodiscard]] auto
+  LoadValidRoot() const  //
+      -> LogicalID_t *
+  {
+    while (true) {
+      auto *root_lid = root_.load(std::memory_order_relaxed);
+      const auto *root_d = root_lid->template Load<const Delta_t *>();
+      if (root_d != nullptr && !root_d->IsRemoveNodeDelta()) return root_lid;
+    }
   }
 
   auto
@@ -802,7 +801,7 @@ class BwTree
       // the current node is removed, so restore a new one
       stack.pop_back();
       if (stack.empty()) {
-        stack.emplace_back(root_.load(std::memory_order_relaxed));
+        stack.emplace_back(LoadValidRoot());
       } else {
         SearchChildNode(key, closed, stack);
       }
@@ -993,9 +992,9 @@ class BwTree
       if (stack.back() != target_lid) return;
 
       // prepare a consolidated node
-      Node_t *consol_node = nullptr;
-      const auto rc = (head->IsLeaf()) ? Consolidate<Payload>(head, consol_node)
-                                       : Consolidate<LogicalID_t *>(head, consol_node);
+      Node_t *new_node = nullptr;
+      const auto rc = (head->IsLeaf()) ? Consolidate<Payload>(head, new_node)
+                                       : Consolidate<LogicalID_t *>(head, new_node);
       switch (rc) {
         case kAlreadyConsolidated:
           // other threads have performed consolidation
@@ -1003,13 +1002,17 @@ class BwTree
 
         case kTrySplit:
           // switch to splitting
-          if (TrySplit(head, reinterpret_cast<Delta_t *>(consol_node), stack)) return;
+          if (TrySplit(head, reinterpret_cast<Delta_t *>(new_node), stack)) return;
           continue;  // retry from consolidation
 
         case kTryMerge:
-          if (CanMerge(consol_node, stack)) {
+          if (CanMerge(new_node, stack)) {
             // switch to merging
-            if (TryMerge(head, reinterpret_cast<Delta_t *>(consol_node), stack)) return;
+            if (TryMerge(head, reinterpret_cast<Delta_t *>(new_node), stack)) return;
+            continue;  // retry from consolidation
+          } else if (stack.size() == 1 && new_node->GetRecordCount() == 1 && !new_node->IsLeaf()) {
+            // switch to removing a root node
+            if (TryRemoveRoot(head, new_node, target_lid)) return;
             continue;  // retry from consolidation
           }
           break;  // perform consolidation
@@ -1020,13 +1023,13 @@ class BwTree
       }
 
       // install a consolidated node
-      if (target_lid->CASStrong(head, consol_node)) {
+      if (target_lid->CASStrong(head, new_node)) {
         // delete consolidated delta records and a base node
         AddToGC(head);
         return;
       }
       // if consolidation fails, no retry
-      AddToGC(consol_node);
+      AddToGC(new_node);
       return;
     }
   }
@@ -1120,7 +1123,7 @@ class BwTree
       std::vector<LogicalID_t *> &stack)
   {
     // check whether this splitting modifies a root node
-    if (stack.size() <= 1 && RootSplit(reinterpret_cast<const Node_t *>(split_d), stack)) return;
+    if (stack.size() < 2 && RootSplit(reinterpret_cast<const Node_t *>(split_d), stack)) return;
 
     // create an index-entry delta record to complete split
     auto *entry_d = new (GetRecPage()) Delta_t{split_d};
@@ -1242,6 +1245,8 @@ class BwTree
       const Delta_t *merge_d,
       std::vector<LogicalID_t *> &stack)
   {
+    if (stack.size() < 2) return;
+
     auto *child_lid = stack.back();  // keep a current logical ID
 
     // create an index-delete delta record to complete merging
@@ -1290,6 +1295,38 @@ class BwTree
 
     // delete the remove-node delta to allow other threads to modify the node
     sib_lid->CASStrong(remove_d, remove_d->GetNext());
+  }
+
+  auto
+  TryRemoveRoot(  //
+      const Delta_t *head,
+      const Node_t *new_root,
+      LogicalID_t *root_lid)  //
+      -> bool
+  {
+    // insert a remove-node delta to prevent other threads from modifying the root node
+    const auto *root_d = reinterpret_cast<const Delta_t *>(new_root);
+    auto *remove_d = new (GetRecPage()) Delta_t{DeltaType::kRemoveNode, root_d};
+    if (!root_lid->CASStrong(head, remove_d)) {
+      // retry from consolidation
+      AddToGC(remove_d);
+      return false;
+    }
+
+    // shrink a tree by removing a useless root node
+    auto *new_lid = new_root->GetLeftmostChild();
+    auto *cur_lid = root_lid;
+    if (root_.compare_exchange_strong(cur_lid, new_lid, std::memory_order_relaxed)) {
+      // the old root node is removed
+      root_lid->Clear();
+    } else {
+      // removing a root is failed, but consolidation is succeeded
+      root_lid->Store(new_root);
+      remove_d->Abort();
+    }
+    AddToGC(remove_d);
+
+    return true;
   }
 
   /*####################################################################################

@@ -216,6 +216,19 @@ class Node
   }
 
   [[nodiscard]] auto
+  GetLeftmostChild() const  //
+      -> LogicalID_t *
+  {
+    const auto *cur = this;
+    for (; !cur->IsBaseNode(); cur = cur->template GetNext<const Node *>()) {
+      // go to the next delta record or base node
+    }
+
+    // get a leftmost node
+    return cur->template GetPayload<LogicalID_t *>(cur->meta_array_[0]);
+  }
+
+  [[nodiscard]] auto
   CopyHighKey() const  //
       -> Key
   {
