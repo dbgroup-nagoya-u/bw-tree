@@ -41,7 +41,9 @@ struct KeyPayload {
  * Global constants
  *####################################################################################*/
 
-constexpr size_t kGCTime = 1000;
+constexpr size_t kN = 1e5;
+constexpr size_t kKeyNumForTest = kN * kThreadNum / 2;
+constexpr size_t kGCTime = 100000;
 constexpr bool kExpectSuccess = true;
 constexpr bool kExpectFailed = false;
 
@@ -81,9 +83,17 @@ class BwTreeFixture : public testing::Test
   };
 
   struct Operation {
-    WriteType w_type;
-    size_t key_id;
-    size_t payload_id;
+    constexpr Operation(  //
+        const WriteType type,
+        const size_t k_id,
+        const size_t p_id)
+        : w_type{type}, key_id{k_id}, payload_id{p_id}
+    {
+    }
+
+    WriteType w_type{};
+    size_t key_id{};
+    size_t payload_id{};
   };
 
   /*####################################################################################
@@ -92,7 +102,6 @@ class BwTreeFixture : public testing::Test
 
   static constexpr size_t kKeyLen = GetDataLength<Key>();
   static constexpr size_t kPayLen = GetDataLength<Payload>();
-  static constexpr size_t kKeyNumForTest = 8 * 8192 * kThreadNum;
 
   /*####################################################################################
    * Setup/Teardown
@@ -124,69 +133,59 @@ class BwTreeFixture : public testing::Test
   PerformWriteOperation(const Operation &ops)  //
       -> ReturnCode
   {
-    const auto key = keys_[ops.key_id];
-    const auto payload = payloads_[ops.payload_id];
+    const auto &key = keys_[ops.key_id];
+    const auto &payload = payloads_[ops.payload_id];
 
     switch (ops.w_type) {
-      case WriteType::kInsert:
-        return index_->Insert(key, payload, kKeyLen, kPayLen);
-      case WriteType::kUpdate:
-        return index_->Update(key, payload, kKeyLen, kPayLen);
-      case WriteType::kDelete:
-        return index_->Delete(key, kKeyLen);
-      case WriteType::kWrite:
-      default:
-        return index_->Write(key, payload, kKeyLen, kPayLen);
-    }
-  }
-
-  auto
-  PrepareOperation(  //
-      const WriteType w_type,
-      std::mt19937_64 &rand_engine)  //
-      -> Operation
-  {
-    const auto id = id_dist_(rand_engine);
-
-    switch (w_type) {
-      case kWrite:
       case kInsert:
-      case kDelete:
-        break;
+        return index_->Insert(key, payload, kKeyLen);
       case kUpdate:
-        return Operation{w_type, id, id + 1};
+        return index_->Update(key, payload, kKeyLen);
+      case kDelete:
+        return index_->Delete(key, kKeyLen);
+      case kWrite:
+      default:
+        return index_->Write(key, payload, kKeyLen);
     }
-    return Operation{w_type, id, id};
   }
 
   void
-  WriteRandomKeys(  //
-      const size_t write_num,
+  RunWorker(  //
       const WriteType w_type,
       const size_t rand_seed,
       std::promise<std::vector<size_t>> p)
   {
-    std::vector<Operation> operations;
-    std::vector<size_t> written_ids;
-    operations.reserve(write_num);
-    written_ids.reserve(write_num);
+    std::vector<Operation> operations{};
+    std::vector<size_t> written_ids{};
+    operations.reserve(kN);
+    written_ids.reserve(kN);
 
     {  // create a lock to prevent a main thread
-      const std::shared_lock<std::shared_mutex> guard{main_lock_};
+      const std::shared_lock guard{main_lock_};
 
       // prepare operations to be executed
       std::mt19937_64 rand_engine{rand_seed};
-      for (size_t i = 0; i < write_num; ++i) {
-        operations.emplace_back(PrepareOperation(w_type, rand_engine));
+      for (size_t i = 0; i < kN; ++i) {
+        const auto id = id_dist_(rand_engine);
+        switch (w_type) {
+          case kUpdate:
+            operations.emplace_back(w_type, id, id + 1);
+            break;
+          case kWrite:
+          case kInsert:
+          case kDelete:
+          default:
+            operations.emplace_back(w_type, id, id);
+        }
       }
     }
 
     {  // wait for a main thread to release a lock
-      const std::shared_lock<std::shared_mutex> lock{worker_lock_};
+      const std::shared_lock lock{worker_lock_};
 
       // perform and gather results
-      for (auto &&ops : operations) {
-        if (PerformWriteOperation(ops) == ReturnCode::kSuccess) {
+      for (const auto &ops : operations) {
+        if (PerformWriteOperation(ops) == kSuccess) {
           written_ids.emplace_back(ops.key_id);
         }
       }
@@ -197,37 +196,32 @@ class BwTreeFixture : public testing::Test
   }
 
   auto
-  RunOverMultiThread(  //
-      const size_t write_num,
-      const size_t thread_num,
-      const WriteType w_type)  //
+  RunOverMultiThread(const WriteType w_type)  //
       -> std::vector<size_t>
   {
-    std::vector<std::future<std::vector<size_t>>> futures;
+    std::vector<std::future<std::vector<size_t>>> futures{};
 
     {  // create a lock to prevent workers from executing
-      const std::unique_lock<std::shared_mutex> guard{worker_lock_};
+      const std::unique_lock guard{worker_lock_};
 
       // run a function over multi-threads with promise
-      std::mt19937_64 rand_engine(kRandomSeed);
-      for (size_t i = 0; i < thread_num; ++i) {
-        std::promise<std::vector<size_t>> p;
+      std::mt19937_64 rand_engine{kRandomSeed};
+      for (size_t i = 0; i < kThreadNum; ++i) {
+        std::promise<std::vector<size_t>> p{};
         futures.emplace_back(p.get_future());
-        const auto rand_seed = rand_engine();
-        std::thread{
-            &BwTreeFixture::WriteRandomKeys, this, write_num, w_type, rand_seed, std::move(p)}
-            .detach();
+        const auto seed = rand_engine();
+        std::thread{&BwTreeFixture::RunWorker, this, w_type, seed, std::move(p)}.detach();
       }
 
       // wait for all workers to finish initialization
-      const std::unique_lock<std::shared_mutex> lock{main_lock_};
+      const std::unique_lock lock{main_lock_};
     }
 
     // gather results via promise-future
-    std::vector<size_t> written_ids;
-    written_ids.reserve(write_num * thread_num);
+    std::vector<size_t> written_ids{};
+    written_ids.reserve(kN * kThreadNum);
     for (auto &&future : futures) {
-      auto tmp_written = future.get();
+      const auto &tmp_written = future.get();
       written_ids.insert(written_ids.end(), tmp_written.begin(), tmp_written.end());
     }
 
@@ -244,84 +238,115 @@ class BwTreeFixture : public testing::Test
       const size_t expected_id,
       const bool expect_success)
   {
-    const auto read_val = index_->Read(keys_[key_id]);
+    const auto &read_val = index_->Read(keys_[key_id]);
     if (expect_success) {
       EXPECT_TRUE(read_val);
 
-      const auto expected_val = payloads_[expected_id];
-      const auto actual_val = read_val.value();
+      const auto &expected_val = payloads_[expected_id];
+      const auto &actual_val = read_val.value();
       EXPECT_TRUE(component::IsEqual<PayloadComp>(expected_val, actual_val));
-      if constexpr (IsVariableLengthData<Payload>()) {
-        delete actual_val;
-      }
     } else {
       EXPECT_FALSE(read_val);
     }
   }
 
   void
+  VerifyWrittenValuesWithMultiThreads(  //
+      const std::vector<size_t> &written_ids,
+      const WriteType w_type)
+  {
+    auto f = [&](const size_t begin_pos, const size_t n) {
+      const auto end_pos = begin_pos + n;
+      for (size_t i = begin_pos; i < end_pos; ++i) {
+        const auto id = written_ids.at(i);
+        switch (w_type) {
+          case kDelete:
+            VerifyRead(id, id, kExpectFailed);
+            break;
+          case kUpdate:
+            VerifyRead(id, id + 1, kExpectSuccess);
+            break;
+          case kWrite:
+          case kInsert:
+          default:
+            VerifyRead(id, id, kExpectSuccess);
+            break;
+        }
+      }
+    };
+
+    const auto vec_size = written_ids.size();
+    std::vector<std::thread> threads{};
+    threads.reserve(kThreadNum);
+
+    size_t begin_pos = 0;
+    for (size_t i = 0; i < kThreadNum; ++i) {
+      const size_t n = (vec_size + i) / kThreadNum;
+      threads.emplace_back(f, begin_pos, n);
+    }
+    for (auto &&t : threads) {
+      t.join();
+    }
+  }
+
+  void
   VerifyWrite()
   {
-    const size_t write_num = (kKeyNumForTest - 1) / kThreadNum;
-
-    auto &&written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kWrite);
-    for (auto &&id : written_ids) {
-      VerifyRead(id, id, kExpectSuccess);
-    }
+    // reading written records succeeds
+    auto &&written_ids = RunOverMultiThread(kWrite);
+    VerifyWrittenValuesWithMultiThreads(written_ids, kWrite);
   }
 
   void
   VerifyInsert()
   {
-    const size_t write_num = (kKeyNumForTest - 1) / kThreadNum;
+    // insert operations do not insert duplicated records
+    auto &&written_ids = RunOverMultiThread(kInsert);
+    std::sort(written_ids.begin(), written_ids.end());
+    const auto &end_it = std::unique(written_ids.begin(), written_ids.end());
+    EXPECT_EQ(std::distance(end_it, written_ids.end()), 0);
 
-    auto &&written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kInsert);
-    for (auto &&id : written_ids) {
-      VerifyRead(id, id, kExpectSuccess);
-    }
+    // reading inserted records succeeds
+    VerifyWrittenValuesWithMultiThreads(written_ids, kInsert);
 
-    written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kInsert);
+    // inserting duplicate records fails
+    written_ids = RunOverMultiThread(kInsert);
     EXPECT_EQ(0, written_ids.size());
   }
 
   void
   VerifyUpdate()
   {
-    const size_t write_num = (kKeyNumForTest - 1) / kThreadNum;
-
-    auto &&written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kUpdate);
+    // updating not inserted records fails
+    auto &&written_ids = RunOverMultiThread(kUpdate);
     EXPECT_EQ(0, written_ids.size());
 
-    written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kInsert);
-    auto &&updated_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kUpdate);
-
+    // updating inserted records succeeds
+    written_ids = RunOverMultiThread(kInsert);
+    auto &&updated_ids = RunOverMultiThread(kUpdate);
+    // update operations may succeed multiple times, so remove duplications
     std::sort(updated_ids.begin(), updated_ids.end());
     updated_ids.erase(std::unique(updated_ids.begin(), updated_ids.end()), updated_ids.end());
-
     EXPECT_EQ(written_ids.size(), updated_ids.size());
-    for (auto &&id : updated_ids) {
-      VerifyRead(id, id + 1, kExpectSuccess);
-    }
+
+    // updated values must be read
+    VerifyWrittenValuesWithMultiThreads(written_ids, kUpdate);
   }
 
   void
   VerifyDelete()
   {
-    const size_t write_num = (kKeyNumForTest - 1) / kThreadNum;
-
-    auto &&written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kDelete);
+    // deleting not inserted records fails
+    auto &&written_ids = RunOverMultiThread(kDelete);
     EXPECT_EQ(0, written_ids.size());
 
-    written_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kInsert);
-    auto &&deleted_ids = RunOverMultiThread(write_num, kThreadNum, WriteType::kDelete);
-
-    std::sort(deleted_ids.begin(), deleted_ids.end());
-    deleted_ids.erase(std::unique(deleted_ids.begin(), deleted_ids.end()), deleted_ids.end());
-
+    // deleting inserted records succeeds
+    written_ids = RunOverMultiThread(kInsert);
+    auto &&deleted_ids = RunOverMultiThread(kDelete);
     EXPECT_EQ(written_ids.size(), deleted_ids.size());
-    for (auto &&id : deleted_ids) {
-      VerifyRead(id, id, kExpectFailed);
-    }
+
+    // reading deleted records fails
+    VerifyWrittenValuesWithMultiThreads(written_ids, kDelete);
   }
 
   /*####################################################################################
@@ -347,12 +372,13 @@ class BwTreeFixture : public testing::Test
  *####################################################################################*/
 
 using KeyPayloadPairs = ::testing::Types<  //
-    KeyPayload<UInt8, UInt8>,              // both fixed
-    KeyPayload<Var, UInt8>,                // variable-fixed
-    KeyPayload<UInt8, Var>,                // fixed-variable
-    KeyPayload<Var, Var>,                  // both variable
+    KeyPayload<UInt8, UInt8>,              // fixed-length keys
+    KeyPayload<UInt4, UInt8>,              // small keys
+    KeyPayload<UInt8, UInt4>,              // small payloads
+    KeyPayload<UInt4, UInt4>,              // small keys/payloads
+    KeyPayload<Var, UInt8>,                // variable-length keys
     KeyPayload<Ptr, Ptr>,                  // pointer key/payload
-    KeyPayload<Original, Original>         // original key/payload
+    KeyPayload<Original, Original>         // original type key/payload
     >;
 TYPED_TEST_SUITE(BwTreeFixture, KeyPayloadPairs);
 

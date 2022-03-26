@@ -74,16 +74,4 @@ TEST_F(MetadataFixture, ConstructWithArgumentsCreateExpectedMetadata)
  * Getter/setter tests
  *------------------------------------------------------------------------------------*/
 
-TEST_F(MetadataFixture, SetOffsetUpdateOffsetWOSideEffects)
-{
-  const size_t updated_offset = kExpectedOffset / 2;
-
-  meta_.SetOffset(updated_offset);
-
-  EXPECT_EQ(updated_offset, meta_.GetOffset());
-  EXPECT_EQ(kExpectedKeyLength, meta_.GetKeyLength());
-  EXPECT_EQ(kExpectedPayloadLength, meta_.GetPayloadLength());
-  EXPECT_EQ(kExpectedTotalLength, meta_.GetTotalLength());
-}
-
 }  // namespace dbgroup::index::bw_tree::component::test

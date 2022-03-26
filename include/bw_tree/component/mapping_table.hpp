@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "delta_record.hpp"
+#include "logical_id.hpp"
 #include "node.hpp"
 
 namespace dbgroup::index::bw_tree::component
@@ -41,7 +42,8 @@ class MappingTable
    *##################################################################################*/
 
   using Node_t = Node<Key, Comp>;
-  using DeltaRecord_t = DeltaRecord<Key, Comp>;
+  using Delta_t = DeltaRecord<Key, Comp>;
+  using LogicalID_t = LogicalID<Key, Comp>;
 
  public:
   /*####################################################################################
@@ -91,11 +93,11 @@ class MappingTable
   /**
    * @brief Get a new logical ID (i.e., an address to mapping information).
    *
-   * @return std::atomic_uintptr_t*: a reserved logical ID.
+   * @return a reserved logical ID.
    */
   auto
   GetNewLogicalID()  //
-      -> std::atomic_uintptr_t *
+      -> LogicalID_t *
   {
     auto *current_table = table_.load(std::memory_order_relaxed);
     auto new_id = current_table->ReserveNewID();
@@ -137,13 +139,7 @@ class MappingTable
      * @brief Construct a new mapping buffer instance.
      *
      */
-    BufferedMap()
-    {
-      for (size_t i = 0; i < kMappingTableCapacity; ++i) {
-        auto *elem_ptr = reinterpret_cast<uintptr_t *>(&logical_ids_[i]);
-        *elem_ptr = kNullPtr;
-      }
-    }
+    constexpr BufferedMap() = default;
 
     BufferedMap(const BufferedMap &) = delete;
     BufferedMap(BufferedMap &&) = delete;
@@ -168,19 +164,18 @@ class MappingTable
       }
 
       for (size_t i = 0; i < size; ++i) {
-        auto ptr = logical_ids_[i].load(std::memory_order_acquire);
-        if (ptr == kNullPtr) continue;
+        auto *rec = logical_ids_[i].template Load<Delta_t *>();
+        if (rec == nullptr) continue;
 
         // delete delta records
-        auto *rec = reinterpret_cast<DeltaRecord_t *>(ptr);
         while (!rec->IsBaseNode()) {
-          ptr = rec->GetNext();
+          auto ptr = rec->GetNext();
           delete rec;
-          rec = reinterpret_cast<DeltaRecord_t *>(ptr);
+          rec = reinterpret_cast<Delta_t *>(ptr);
         }
 
         // delete a base node
-        auto *node = reinterpret_cast<Node_t *>(ptr);
+        auto *node = reinterpret_cast<Node_t *>(rec);
         delete node;
       }
     }
@@ -194,11 +189,11 @@ class MappingTable
      *
      * If this function returns nullptr, it means that this table is full.
      *
-     * @return std::atomic_uintptr_t*: a reserved logical ID.
+     * @return a reserved logical ID.
      */
     auto
     ReserveNewID()  //
-        -> std::atomic_uintptr_t *
+        -> LogicalID_t *
     {
       auto current_id = head_id_.fetch_add(1, std::memory_order_relaxed);
 
@@ -215,7 +210,7 @@ class MappingTable
     std::atomic_size_t head_id_{0};
 
     /// an actual mapping table.
-    std::array<std::atomic_uintptr_t, kMappingTableCapacity> logical_ids_{};
+    std::array<LogicalID_t, kMappingTableCapacity> logical_ids_{};
   };
 
   /*####################################################################################

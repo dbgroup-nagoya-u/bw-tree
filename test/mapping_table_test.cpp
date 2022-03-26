@@ -40,8 +40,9 @@ class MappingTableFixture : public testing::Test
 
   using Key = uint64_t;
   using Payload = uint64_t;
+  using LogicalID_t = LogicalID<Key, std::less<>>;
   using MappingTable_t = MappingTable<Key, std::less<>>;
-  using IDContainer = std::vector<std::atomic_uintptr_t *>;
+  using IDContainer = std::vector<LogicalID_t *>;
 
  protected:
   /*####################################################################################
@@ -153,7 +154,7 @@ TEST_F(MappingTableFixture, GetNewLogicalIDWithAFewIDsByMultiThreadsGetUniqueIDs
   VerifyLogicalIDs(ids);
 }
 
-TEST_F(MappingTableFixture, GetNewLogicalIDWighManyIDsByMultiThreadsGetUniqueIDs)
+TEST_F(MappingTableFixture, GetNewLogicalIDWithManyIDsByMultiThreadsGetUniqueIDs)
 {
   auto &&ids = GetLogicalIDsWithMultiThreads(kMultipleTableCapacity);
   VerifyLogicalIDs(ids);

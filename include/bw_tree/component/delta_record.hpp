@@ -23,6 +23,8 @@
 #include <vector>
 
 #include "common.hpp"
+#include "consolidate_info.hpp"
+#include "logical_id.hpp"
 #include "metadata.hpp"
 
 namespace dbgroup::index::bw_tree::component
@@ -40,40 +42,39 @@ class DeltaRecord
    * Type aliases
    *##################################################################################*/
 
-  using NodeStack = std::vector<std::atomic_uintptr_t *>;
+  using LogicalID_t = LogicalID<Key, Comp>;
+  using ConsolidateInfo_t = ConsolidateInfo<Key, Comp>;
 
  public:
   /*####################################################################################
-   * Public constructors and assignment operators
+   * Public constructors for inserting/deleting records in leaf nodes
    *##################################################################################*/
 
   /**
-   * @brief Construct a new delta record for leaf-insert/modify.
+   * @brief Construct a new delta record for inserting/modifying a record.
    *
    * @tparam T a target payload class.
    * @param delta_type
    * @param key
    * @param key_length
    * @param payload
-   * @param payload_length
    */
   template <class T>
   DeltaRecord(  //
       const DeltaType delta_type,
       const Key &key,
       const size_t key_len,
-      const T &payload,
-      const size_t pay_len)
-      : node_type_{NodeType::kLeaf},
+      const T &payload)
+      : node_type_{kLeaf},
         delta_type_{delta_type},
-        meta_{kHeaderLength, key_len, key_len + pay_len}
+        meta_{kHeaderLength, key_len, key_len + sizeof(T)}
   {
-    auto offset = SetData(kHeaderLength, key, key_len);
-    SetData(offset, payload, pay_len);
+    const auto offset = SetKey(kHeaderLength, key, key_len);
+    SetPayload(offset, payload);
   }
 
   /**
-   * @brief Construct a new delta record for leaf-delete.
+   * @brief Construct a new delta record for deleting a record.
    *
    * @param key
    * @param key_length
@@ -81,61 +82,108 @@ class DeltaRecord
   DeltaRecord(  //
       const Key &key,
       const size_t key_len)
-      : node_type_{NodeType::kLeaf},
-        delta_type_{DeltaType::kDelete},
-        meta_{kHeaderLength, key_len, key_len}
+      : node_type_{kLeaf}, delta_type_{kDelete}, meta_{kHeaderLength, key_len, key_len}
   {
-    SetData(kHeaderLength, key, key_len);
+    SetKey(kHeaderLength, key, key_len);
+  }
+
+  /*####################################################################################
+   * Public constructors for inserting/deleting records in internal nodes
+   *##################################################################################*/
+
+  /**
+   * @brief Construct a new delta record for inserting an index-entry.
+   *
+   * @param split_d
+   */
+  explicit DeltaRecord(const DeltaRecord *split_d)
+      : node_type_{kInternal},
+        delta_type_{kInsert},
+        meta_{split_d->meta_},
+        high_key_meta_{split_d->high_key_meta_}
+  {
+    // copy contents of a split delta
+    const auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetKeyLength();
+    memcpy(&data_block_, &(split_d->data_block_), rec_len);
   }
 
   /**
-   * @brief Construct a new delta record for split deltas.
+   * @brief Construct a new delta record for deleting an index-entry.
+   *
+   * @param merge_d
+   * @param left_lid
+   */
+  DeltaRecord(  //
+      const DeltaRecord *merge_d,
+      const LogicalID_t *left_lid)
+      : node_type_{kInternal},
+        delta_type_{kDelete},
+        meta_{merge_d->meta_},
+        high_key_meta_{merge_d->high_key_meta_}
+  {
+    // copy contents of a merge delta
+    const auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetKeyLength();
+    memcpy(&data_block_, &(merge_d->data_block_), rec_len);
+
+    // update logical ID of a sibling node
+    SetPayload(kHeaderLength + meta_.GetKeyLength(), left_lid);
+  }
+
+  /*####################################################################################
+   * Public constructors for performing SMOs
+   *##################################################################################*/
+
+  /**
+   * @brief Construct a new delta record for splitting/merging a node.
    *
    * @param split_delta
    */
   DeltaRecord(  //
-      const uintptr_t right_ptr,
-      const uintptr_t sib_page,
-      const uintptr_t next)
-      : delta_type_{DeltaType::kSplit}, next_{next}
+      const DeltaType delta_type,
+      const DeltaRecord *right_node,
+      const LogicalID_t *right_lid,
+      const DeltaRecord *next = nullptr)
+      : node_type_{right_node->node_type_},
+        delta_type_{delta_type},
+        next_{reinterpret_cast<uintptr_t>(next)}
   {
-    auto *right_node = reinterpret_cast<DeltaRecord *>(right_ptr);
-    node_type_ = right_node->node_type_;
-
     // copy a lowest key
     auto key_len = right_node->meta_.GetKeyLength();
     meta_ = Metadata{kHeaderLength, key_len, key_len + kWordSize};
     memcpy(&data_block_, right_node->GetKeyAddr(right_node->meta_), key_len);
 
     // set a sibling node
-    const auto offset = SetData(kHeaderLength + key_len, sib_page, kWordSize);
+    const auto offset = SetPayload(kHeaderLength + key_len, right_lid);
 
     // copy a highest key
     key_len = right_node->high_key_meta_.GetKeyLength();
     high_key_meta_ = Metadata{offset, key_len, key_len};
-    memcpy(ShiftAddr(this, offset), right_node->GetKeyAddr(right_node->meta_), key_len);
+    memcpy(ShiftAddr(this, offset), right_node->GetKeyAddr(right_node->high_key_meta_), key_len);
   }
 
   /**
-   * @brief Construct a new delta record for index-entries.
+   * @brief Construct a new delta record for removing a node.
    *
-   * @param split_delta
+   * @param next a pointer to the removed node.
    */
-  explicit DeltaRecord(const DeltaRecord *delta)
-      : node_type_{NodeType::kInternal}, delta_type_{DeltaType::kInsert}
+  DeltaRecord(  //
+      [[maybe_unused]] const DeltaType dummy,
+      const DeltaRecord *removed_node)
+      : node_type_{removed_node->node_type_},
+        delta_type_{kRemoveNode},
+        next_{reinterpret_cast<uintptr_t>(removed_node)}
   {
-    // copy contents of a split delta
-    meta_ = delta->meta_;
-    high_key_meta_ = delta->high_key_meta_;
-    auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetTotalLength();
-    memcpy(&data_block_, &(delta->data_block_), rec_len);
   }
 
-  constexpr DeltaRecord(const DeltaRecord &) = default;
-  constexpr DeltaRecord(DeltaRecord &&) noexcept = default;
+  /*####################################################################################
+   * Public assignment operators
+   *##################################################################################*/
 
-  constexpr auto operator=(const DeltaRecord &) -> DeltaRecord & = default;
-  constexpr auto operator=(DeltaRecord &&) noexcept -> DeltaRecord & = default;
+  DeltaRecord(const DeltaRecord &) = delete;
+  DeltaRecord(DeltaRecord &&) noexcept = delete;
+
+  auto operator=(const DeltaRecord &) -> DeltaRecord & = delete;
+  auto operator=(DeltaRecord &&) noexcept -> DeltaRecord & = delete;
 
   /*####################################################################################
    * Public destructors
@@ -155,7 +203,7 @@ class DeltaRecord
   IsLeaf() const  //
       -> bool
   {
-    return node_type_;
+    return node_type_ == kLeaf;
   }
 
   /**
@@ -166,14 +214,29 @@ class DeltaRecord
   IsBaseNode() const  //
       -> bool
   {
-    return delta_type_ == DeltaType::kNotDelta;
+    return delta_type_ == kNotDelta;
   }
 
   [[nodiscard]] constexpr auto
-  GetNext() const  //
-      -> uintptr_t
+  IsRemoveNodeDelta() const  //
+      -> bool
   {
-    return next_;
+    return delta_type_ == kRemoveNode;
+  }
+
+  [[nodiscard]] constexpr auto
+  IsMergeDelta() const  //
+      -> bool
+  {
+    return delta_type_ == kMerge;
+  }
+
+  template <class T = DeltaRecord *>
+  [[nodiscard]] constexpr auto
+  GetNext() const  //
+      -> T
+  {
+    return reinterpret_cast<T>(next_);
   }
 
   /**
@@ -202,339 +265,359 @@ class DeltaRecord
   GetPayload() const  //
       -> T
   {
-    if constexpr (IsVariableLengthData<T>()) {
-      return reinterpret_cast<T>(GetPayloadAddr());
-    } else {
-      T payload{};
-      memcpy(&payload, GetPayloadAddr(), sizeof(T));
-      return payload;
-    }
-  }
-
-  /**
-   * @brief Copy a target payload to a specified reference.
-   *
-   * @param out_payload a reference to be copied a target payload.
-   */
-  template <class T>
-  [[nodiscard]] auto
-  CopyPayload() const  //
-      -> T
-  {
-    if constexpr (IsVariableLengthData<T>()) {
-      const auto pay_len = meta_.GetPayloadLength();
-      auto payload = reinterpret_cast<T>(::operator new(pay_len));
-      memcpy(payload, GetPayloadAddr(), pay_len);
-      return payload;
-    } else {
-      T payload{};
-      memcpy(&payload, GetPayloadAddr(), sizeof(T));
-      return payload;
-    }
+    T payload{};
+    memcpy(&payload, GetPayloadAddr(), sizeof(T));
+    return payload;
   }
 
   void
-  SetNext(uintptr_t next)
+  SetNext(const DeltaRecord *next)
   {
-    next_ = next;
+    next_ = reinterpret_cast<uintptr_t>(next);
+  }
+
+  void
+  Abort()
+  {
+    next_ = kNullPtr;
   }
 
   /*####################################################################################
    * Public utilities
    *##################################################################################*/
 
-  static auto
+  [[nodiscard]] auto
+  HasSameLowKeyWith(const Key &key) const  //
+      -> bool
+  {
+    // traverse to a base node
+    const auto *head = this;
+    while (!head->IsBaseNode()) {
+      head = head->GetNext();
+    }
+
+    if (head->meta_.GetKeyLength() == 0) return false;
+    return IsEqual<Comp>(head->GetKey(), key);
+  }
+
+  [[nodiscard]] auto
+  GetSMOStatus() const  //
+      -> SMOStatus
+  {
+    switch (delta_type_) {
+      case kSplit:
+        return kSplitMayIncomplete;
+
+      case kMerge:
+        return kMergeMayIncomplete;
+
+      default:
+        return kNoPartialSMOs;
+    }
+  }
+
+  auto
   SearchChildNode(  //
       const Key &key,
       const bool closed,
-      std::atomic_uintptr_t *&page_id)  //
-      -> std::pair<uintptr_t, DeltaRC>
+      uintptr_t &out_ptr,
+      size_t &delta_num) const  //
+      -> DeltaRC
   {
-    int64_t delta_chain_length = 0;
-    uintptr_t child_page{};
-    auto ptr = page_id->load(std::memory_order_acquire);
-    auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
+    auto has_smo = false;
 
     // traverse a delta chain
-    while (true) {
+    for (const auto *cur_rec = this; true; cur_rec = cur_rec->GetNext(), ++delta_num) {
       switch (cur_rec->delta_type_) {
-        case DeltaType::kInsert: {
+        case kInsert:
+        case kDelete: {
           const auto &sep_key = cur_rec->GetKey();
           const auto &high_key = cur_rec->GetHighKey();
           if ((Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key)))
               && (!high_key || Comp{}(key, *high_key) || (closed && !Comp{}(*high_key, key)))) {
-            // this index term delta directly indicates a child node
-            child_page = cur_rec->template GetPayload<uintptr_t>();
-            return {child_page, kRecordFound};
+            // this index-entry delta directly indicates a child node
+            out_ptr = cur_rec->template GetPayload<uintptr_t>();
+            return kRecordFound;
           }
           break;
         }
-        case DeltaType::kSplit: {
+
+        case kSplit: {
           const auto &sep_key = cur_rec->GetKey();
           if (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key))) {
             // a sibling node includes a target key
-            page_id = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
-            ptr = page_id->load(std::memory_order_acquire);
-            cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-            delta_chain_length = 0;
-            continue;
+            out_ptr = cur_rec->template GetPayload<uintptr_t>();
+            return kKeyIsInSibling;
           }
+
+          has_smo = true;
           break;
         }
-        case DeltaType::kNotDelta: {
-          const auto &high_key = cur_rec->GetHighKey();
-          if (high_key && (Comp{}(*high_key, key) || (!closed && !Comp{}(key, *high_key)))) {
-            // a sibling node includes a target key
-            page_id = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
-            ptr = page_id->load(std::memory_order_acquire);
-            cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-            delta_chain_length = 0;
-            continue;
+
+        case kRemoveNode:
+          return kNodeRemoved;
+
+        case kMerge: {
+          // check whether the merged node contains a target key
+          const auto &sep_key = cur_rec->GetKey();
+          if (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key))) {
+            // check whether the merging is aborted
+            const auto *sib_lid = cur_rec->template GetPayload<LogicalID_t *>();
+            const auto *remove_d = sib_lid->template Load<DeltaRecord *>();
+            if (remove_d == nullptr) return kNodeRemoved;  // the node is consolidated
+            if (remove_d->delta_type_ == kRemoveNode) {
+              // a target record may be in the merged node
+              out_ptr = remove_d->next_;
+              return kReachBaseNode;
+            }
+            // merging was aborted, so check the sibling node
+            out_ptr = reinterpret_cast<uintptr_t>(sib_lid);
+            return kKeyIsInSibling;
           }
+
+          has_smo = true;
+          break;
+        }
+
+        case kNotDelta:
+        default: {
+          if (!has_smo) {
+            const auto &high_key = cur_rec->GetHighKey();
+            if (high_key && (Comp{}(*high_key, key) || (!closed && !Comp{}(key, *high_key)))) {
+              // a sibling node includes a target key
+              out_ptr = cur_rec->next_;
+              return kKeyIsInSibling;
+            }
+          }
+
           // reach a base page
-          return {ptr, static_cast<DeltaRC>(delta_chain_length)};
+          out_ptr = reinterpret_cast<uintptr_t>(cur_rec);
+          return kReachBaseNode;
         }
-        case DeltaType::kDelete:
-          // ...not implemented yet
-          break;
-
-        case DeltaType::kMerge:
-          // ...not implemented yet
-          break;
-
-        case DeltaType::kRemoveNode:
-          // ...not implemented yet
-          break;
-
-        default:
-          break;
       }
-
-      // go to the next delta record or base node
-      ptr = cur_rec->next_;
-      cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-      ++delta_chain_length;
     }
   }
 
-  static auto
+  auto
   SearchRecord(  //
       const Key &key,
-      NodeStack &stack)  //
-      -> std::pair<uintptr_t, DeltaRC>
+      uintptr_t &out_ptr,
+      size_t &delta_num) const  //
+      -> DeltaRC
   {
-    auto *page_id = stack.back();
-    auto ptr = page_id->load(std::memory_order_acquire);
-    auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-    int64_t delta_chain_length = 0;
+    auto has_smo = false;
 
     // traverse a delta chain
-    while (true) {
+    for (const auto *cur_rec = this; true; cur_rec = cur_rec->GetNext(), ++delta_num) {
       switch (cur_rec->delta_type_) {
-        case DeltaType::kInsert:
-        case DeltaType::kModify: {
+        case kInsert:
+        case kModify: {
+          // check whether a target record is inserted
           const auto &rec_key = cur_rec->GetKey();
           if (!Comp{}(key, rec_key) && !Comp{}(rec_key, key)) {
-            // this delta record contains a target key
-            return {ptr, kRecordFound};
+            out_ptr = reinterpret_cast<uintptr_t>(cur_rec);
+            return kRecordFound;
           }
           break;
         }
-        case DeltaType::kDelete: {
+
+        case kDelete: {
+          // check whether a target record is deleted
           const auto &rec_key = cur_rec->GetKey();
-          if (!Comp{}(key, rec_key) && !Comp{}(rec_key, key)) {
-            // a target key is deleted
-            return {ptr, kRecordDeleted};
-          }
+          if (!Comp{}(key, rec_key) && !Comp{}(rec_key, key)) return kRecordDeleted;
           break;
         }
-        case DeltaType::kSplit: {
-          const auto &rec_key = cur_rec->GetKey();
-          if (Comp{}(rec_key, key)) {
-            // a sibling node may include a target key
-            page_id = cur_rec->template GetPayload<std::atomic_uintptr_t *>();
-            ptr = page_id->load(std::memory_order_acquire);
-            cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-            delta_chain_length = 0;
 
-            // swap a current node in a stack
-            *stack.rbegin() = page_id;
-            continue;
+        case kSplit: {
+          // check whether the right-sibling node contains a target key
+          const auto &sep_key = cur_rec->GetKey();
+          if (Comp{}(sep_key, key)) {
+            out_ptr = cur_rec->template GetPayload<uintptr_t>();
+            return kKeyIsInSibling;
           }
+
+          has_smo = true;
           break;
         }
-        case DeltaType::kNotDelta: {
-          const auto &high_key = cur_rec->GetHighKey();
-          if (high_key && Comp{}(*high_key, key)) {
-            // a sibling node includes a target key
-            page_id = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
-            ptr = page_id->load(std::memory_order_acquire);
-            cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-            delta_chain_length = 0;
 
-            // swap a current node in a stack
-            *stack.rbegin() = page_id;
-            continue;
+        case kRemoveNode:
+          return kNodeRemoved;
+
+        case kMerge: {
+          // check whether the merged node contains a target key
+          const auto &sep_key = cur_rec->GetKey();
+          if (Comp{}(sep_key, key)) {
+            // check whether the merging is aborted
+            const auto *sib_lid = cur_rec->template GetPayload<LogicalID_t *>();
+            const auto *remove_d = sib_lid->template Load<DeltaRecord *>();
+            if (remove_d == nullptr) return kNodeRemoved;  // the node is consolidated
+            if (remove_d->delta_type_ == kRemoveNode) {
+              // a target record may be in the merged node
+              out_ptr = remove_d->next_;
+              return kReachBaseNode;
+            }
+            // merging was aborted, so check the sibling node
+            out_ptr = reinterpret_cast<uintptr_t>(sib_lid);
+            return kKeyIsInSibling;
           }
-          // reach a base page
-          return {ptr, static_cast<DeltaRC>(delta_chain_length)};
+
+          has_smo = true;
+          break;
         }
-        case DeltaType::kMerge:
-          // ...not implemented yet
-          break;
 
-        case DeltaType::kRemoveNode:
-          // ...not implemented yet
-          break;
+        case kNotDelta:
+        default: {
+          // check whether the node contains a target key
+          if (!has_smo) {
+            const auto &high_key = cur_rec->GetHighKey();
+            if (high_key && Comp{}(*high_key, key)) {
+              out_ptr = cur_rec->next_;
+              return kKeyIsInSibling;
+            }
+          }
 
-        default:
-          break;
+          // a target record may be in the base node
+          out_ptr = reinterpret_cast<uintptr_t>(cur_rec);
+          return kReachBaseNode;
+        }
       }
-
-      // go to the next delta record or base node
-      ptr = cur_rec->next_;
-      cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-      ++delta_chain_length;
     }
   }
 
-  static auto
+  auto
   Validate(  //
       const Key &key,
       const bool closed,
-      const uintptr_t prev_head,
-      NodeStack &stack)  //
-      -> std::pair<uintptr_t, DeltaRC>
+      LogicalID_t *&sib_lid,
+      size_t &delta_num) const  //
+      -> DeltaRC
   {
-    auto *page_id = stack.back();
-    auto head = page_id->load(std::memory_order_acquire);
-    auto ptr = head;
-    auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-    int64_t delta_chain_length = 0;
+    auto has_smo = false;
 
     // traverse a delta chain
-    while (ptr != prev_head) {
+    for (const auto *cur_rec = this; true; cur_rec = cur_rec->GetNext(), ++delta_num) {
       switch (cur_rec->delta_type_) {
-        case DeltaType::kSplit: {
+        case kSplit: {
+          // check whether the right-sibling node contains a target key
           const auto &sep_key = cur_rec->GetKey();
           if (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key))) {
-            // there may be incomplete split
-            return {ptr, kSplitMayIncomplete};
+            sib_lid = cur_rec->template GetPayload<LogicalID_t *>();
+            return kKeyIsInSibling;
           }
+
+          has_smo = true;
           break;
         }
-        case DeltaType::kNotDelta: {
-          const auto &high_key = cur_rec->GetHighKey();
-          if (high_key && (Comp{}(*high_key, key) || (!closed && !Comp{}(key, *high_key)))) {
-            // a sibling node includes a target key
-            page_id = reinterpret_cast<std::atomic_uintptr_t *>(cur_rec->next_);
-            head = page_id->load(std::memory_order_acquire);
-            ptr = head;
-            cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-            delta_chain_length = 0;
 
-            // swap a current node in a stack
-            *stack.rbegin() = page_id;
-            continue;
+        case kRemoveNode:
+          return kNodeRemoved;
+
+        case kMerge: {
+          // check whether the merging is aborted and the sibling node includes a target key
+          const auto &sep_key = cur_rec->GetKey();
+          sib_lid = cur_rec->template GetPayload<LogicalID_t *>();
+          const auto *remove_d = sib_lid->template Load<DeltaRecord *>();
+          if (remove_d == nullptr) return kNodeRemoved;  // the node is consolidated
+          if (remove_d->delta_type_ != kRemoveNode
+              && (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key)))) {
+            // merging was aborted, so check the sibling node
+            return kKeyIsInSibling;
           }
-          // reach a base page
-          return {head, static_cast<DeltaRC>(delta_chain_length)};
-        }
-        case DeltaType::kMerge:
-          // ...not implemented yet
-          break;
 
-        case DeltaType::kRemoveNode:
-          // ...not implemented yet
+          has_smo = true;
           break;
+        }
+
+        case kNotDelta: {
+          // check whether the node contains a target key
+          if (!has_smo) {
+            const auto &high_key = cur_rec->GetHighKey();
+            if (high_key && (Comp{}(*high_key, key) || (!closed && !Comp{}(key, *high_key)))) {
+              sib_lid = cur_rec->template GetNext<LogicalID_t *>();
+              return kKeyIsInSibling;
+            }
+          }
+
+          return kReachBaseNode;
+        }
 
         default:
-          break;
+          break;  // do nothing
       }
-
-      // go to the next delta record or base node
-      ptr = cur_rec->next_;
-      cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-      ++delta_chain_length;
     }
-
-    return {head, DeltaRC::kReachBase};
   }
 
-  template <class Payload>
-  static auto
+  template <class T>
+  auto
   Sort(  //
-      uintptr_t ptr,
-      std::vector<std::pair<Key, uintptr_t>> &records)  //
-      -> std::tuple<uintptr_t, std::optional<Key>, Metadata, uintptr_t, int64_t>
+      std::vector<std::pair<Key, const void *>> &records,
+      std::vector<ConsolidateInfo_t> &consol_info) const  //
+      -> std::pair<bool, int64_t>
   {
-    auto *cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
-    std::optional<Key> high_key = std::nullopt;
-    Metadata high_meta{};
-    uintptr_t sib_node{};
-    int64_t size_diff = 0;
+    std::optional<Key> sep_key = std::nullopt;
+    const DeltaRecord *split_d = nullptr;
 
     // traverse and sort a delta chain
-    while (true) {
-      switch (cur_rec->delta_type_) {
-        case DeltaType::kInsert:
-        case DeltaType::kModify:
-        case DeltaType::kDelete: {
+    int64_t size_diff = 0;
+    for (const auto *cur_rec = this; true; cur_rec = cur_rec->GetNext()) {
+      switch (const auto delta_type = cur_rec->delta_type_; delta_type) {
+        case kInsert:
+        case kModify:
+        case kDelete: {
           // check whether this record is in a target node
-          auto &&key = cur_rec->GetKey();
-          if (!high_key || !Comp{}(*high_key, key)) {
+          const auto &rec_key = cur_rec->GetKey();
+          if (!sep_key || Comp{}(rec_key, *sep_key)
+              || (!Comp{}(*sep_key, rec_key) && (cur_rec->IsLeaf() || delta_type != kInsert))) {
             // check uniqueness
             auto it = records.cbegin();
             const auto it_end = records.cend();
-            for (; it != it_end; ++it) {
-              if (!Comp{}(it->first, key)) break;
+            for (; it != it_end && Comp{}(it->first, rec_key); ++it) {
+              // skip smaller keys
             }
             if (it == it_end) {
-              records.emplace_back(std::make_pair(std::move(key), ptr));
-            } else if (Comp{}(key, it->first)) {
-              records.insert(it, std::make_pair(std::move(key), ptr));
+              records.emplace_back(std::move(rec_key), cur_rec);
+            } else if (Comp{}(rec_key, it->first)) {
+              records.insert(it, std::make_pair(std::move(rec_key), cur_rec));
             }
 
             // update the page size
-            if (cur_rec->delta_type_ == DeltaType::kInsert) {
-              size_diff += cur_rec->meta_.GetTotalLength() + sizeof(Metadata);
-            } else if (cur_rec->delta_type_ == DeltaType::kDelete) {
-              size_diff -= cur_rec->meta_.GetTotalLength() + sizeof(Metadata);
-            } else if constexpr (IsVariableLengthData<Payload>()) {
-              size_diff += cur_rec->meta_.GetPayloadLength();
+            const auto rec_size = cur_rec->meta_.GetKeyLength() + sizeof(T) + kWordSize;
+            if (delta_type == kInsert) {
+              size_diff += rec_size;
+            } else if (delta_type == kDelete) {
+              size_diff -= rec_size;
             }
           }
           break;
         }
-        case DeltaType::kSplit: {
-          if (!high_key) {
-            // the first split delta has a highest key and a sibling node
-            high_meta = cur_rec->meta_;
-            high_key = cur_rec->GetKey();
-            sib_node = cur_rec->template GetPayload<uintptr_t>();
-          }
-          break;
-        }
-        case DeltaType::kNotDelta: {
-          if (!high_key) {
-            // if there are no SMOs, a base node has a highest key and a sibling node
-            high_meta = cur_rec->high_key_meta_;
-            high_key = cur_rec->GetHighKey();
-            sib_node = cur_rec->next_;
-          }
-          return {ptr, high_key, high_meta, sib_node, size_diff};
-        }
-        case DeltaType::kMerge:
-          // ...not implemented yet
-          break;
 
+        case kSplit: {
+          const auto &cur_key = cur_rec->GetKey();
+          if (!sep_key || Comp{}(cur_key, *sep_key)) {
+            // keep a separator key to exclude out-of-range records
+            sep_key = cur_key;
+            split_d = cur_rec;
+          }
+          break;
+        }
+
+        case kMerge: {
+          // check whether the merging was aborted
+          const auto *sib_lid = cur_rec->template GetPayload<LogicalID_t *>();
+          const auto *remove_d = sib_lid->template Load<DeltaRecord *>();
+          if (remove_d == nullptr) return {true, 0};        // the node is consolidated
+          if (remove_d->delta_type_ != kRemoveNode) break;  // merging was aborted
+
+          // keep the merged node and the corresponding separator key
+          consol_info.emplace_back(remove_d->GetNext(), split_d);
+          break;
+        }
+
+        case kNotDelta:
         default:
-          break;
+          consol_info.emplace_back(cur_rec, split_d);
+          return {false, size_diff};
       }
-
-      // go to the next delta record or base node
-      ptr = cur_rec->next_;
-      cur_rec = reinterpret_cast<DeltaRecord *>(ptr);
     }
   }
 
@@ -593,20 +676,32 @@ class DeltaRecord
    */
   template <class T>
   auto
-  SetData(  //
+  SetKey(  //
       size_t offset,
-      const T &data,
-      [[maybe_unused]] const size_t data_len)  //
+      const T &key,
+      [[maybe_unused]] const size_t key_len)  //
       -> size_t
   {
     if constexpr (IsVariableLengthData<T>()) {
-      memcpy(ShiftAddr(this, offset), data, data_len);
-      offset += data_len;
+      memcpy(ShiftAddr(this, offset), key, key_len);
+      offset += key_len;
     } else {
-      memcpy(ShiftAddr(this, offset), &data, sizeof(T));
+      memcpy(ShiftAddr(this, offset), &key, sizeof(T));
       offset += sizeof(T);
     }
 
+    return offset;
+  }
+
+  template <class T>
+  auto
+  SetPayload(  //
+      size_t offset,
+      const T &payload)  //
+      -> size_t
+  {
+    memcpy(ShiftAddr(this, offset), &payload, sizeof(T));
+    offset += sizeof(T);
     return offset;
   }
 

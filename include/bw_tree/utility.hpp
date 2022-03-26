@@ -34,9 +34,9 @@ namespace dbgroup::index::bw_tree
  */
 enum ReturnCode
 {
-  kSuccess = 0,
-  kKeyNotExist,
-  kKeyExist
+  kKeyNotExist = -2,
+  kKeyExist,
+  kSuccess = 0
 };
 
 /**
@@ -99,6 +99,15 @@ constexpr size_t kMaxVariableSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
 /// the maximun size of variable-length data
 constexpr size_t kMaxVariableSize = 128;
 #endif
+
+#ifdef BW_TREE_MIN_NODE_SIZE
+/// the maximun size of variable-length data
+constexpr size_t kMinNodeSize = BW_TREE_MIN_NODE_SIZE;
+#else
+/// the maximun size of variable-length data
+constexpr size_t kMinNodeSize = 1024;
+#endif
+
 /// check whether the specified page size is valid
 static_assert(kPageSize % kWordSize == 0);
 
