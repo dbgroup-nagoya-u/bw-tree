@@ -106,7 +106,7 @@ class NodeFixture : public testing::Test
 
     EXPECT_TRUE(node->IsLeaf());
     EXPECT_TRUE(node->IsBaseNode());
-    EXPECT_EQ(nullptr, node->GetSiblingNode());
+    EXPECT_EQ(nullptr, node->GetNext());
   }
 
   /*####################################################################################
