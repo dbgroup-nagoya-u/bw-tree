@@ -84,22 +84,25 @@ class BwTree
         Node_t *node,
         size_t begin_pos,
         size_t end_pos,
-        const std::optional<std::pair<const Key &, bool>> end_key)
+        const std::optional<std::pair<const Key &, bool>> end_key,
+        const bool is_end)
         : bw_tree_{bw_tree},
           gc_{gc},
           node_{node},
           record_count_{end_pos},
           current_pos_{begin_pos},
           current_meta_{node_->GetMetadata(current_pos_)},
-          end_key_{std::move(end_key)}
+          end_key_{std::move(end_key)},
+          is_end_{is_end}
     {
     }
 
     RecordIterator(  //
         Node_t *node,
         size_t begin_pos,
-        size_t end_pos)
-        : node_{node}, record_count_{end_pos}, current_pos_{begin_pos}
+        size_t end_pos,
+        const bool is_end)
+        : node_{node}, record_count_{end_pos}, current_pos_{begin_pos}, is_end_{is_end}
     {
     }
 
@@ -117,6 +120,7 @@ class BwTree
       record_count_ = obj.record_count_;
       current_pos_ = obj.current_pos_;
       current_meta_ = node_->GetMetadata(current_pos_);
+      is_end_ = obj.is_end_;
 
       return *this;
     }
@@ -164,24 +168,26 @@ class BwTree
     /**
      * @brief Check if there are any records left.
      *
-     * function may call a scan function internally to get a next leaf node.
+     * Note that this may call a scan function internally to get a sibling node.
      *
      * @retval true if there are any records or next node left.
-     * @retval false if there are no records and node left.
+     * @retval false otherwise.
      */
     [[nodiscard]] auto
     HasNext()  //
         -> bool
     {
-      // check whether records remain in this node
-      if (current_pos_ < record_count_) return true;
+      if (current_pos_ < record_count_) return true;  // records remain in this node
+      if (is_end_) return false;                      // this node is the end of range-scan
 
-      // check whether this node has a sibling node
+      // go to the next sibling node and continue scanning
+      const auto &next_key = node_->CopyHighKey();
       auto *sib_page = node_->template GetNext<LogicalID_t *>();
-      if (sib_page == nullptr) return false;
+      *this = bw_tree_->SiblingScan(sib_page, node_, next_key, end_key_);
+      if constexpr (IsVariableLengthData<Key>()) {
+        delete next_key;
+      }
 
-      // go to the sibling node and continue scaning
-      *this = bw_tree_->SiblingScan(sib_page, node_, end_key_);
       return HasNext();
     }
 
@@ -230,6 +236,8 @@ class BwTree
 
     /// the end key given from a user
     std::optional<std::pair<const Key &, bool>> end_key_{};
+
+    bool is_end_{true};
   };
 
   /*####################################################################################
@@ -365,45 +373,27 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     Node_t *node = nullptr;
-    size_t begin_pos = 0;
+    size_t begin_pos{};
     if (begin_key) {
-      auto &&[b_key, b_closed] = *begin_key;
-
       // traverse to a leaf node and sort records for scanning
-      consol_page_ = nullptr;
+      const auto &[b_key, b_closed] = *begin_key;
       auto &&stack = SearchLeafNode(b_key, b_closed);
-      while (true) {
-        const auto *head = GetHead(b_key, b_closed, stack);
-        if (Consolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
-        // concurrent consolidations may block scanning
-      }
-      auto [rc, pos] = node->SearchRecord(b_key);
-      begin_pos = (rc == kKeyNotExist || b_closed) ? pos : pos + 1;
-
-      // if a long delta-chain is found, consolidate it
-      if (consol_page_ != nullptr) {
-        TryConsolidation(consol_page_, b_key, b_closed, stack);
-      }
+      begin_pos = ConsolidateForScan(node, b_key, b_closed, stack);
     } else {
       // traverse to the leftmost leaf node directly
-      auto &&stack = SearchLeftEdgeLeaf();
+      auto &&stack = SearchLeftmostLeaf();
       while (true) {
         const auto *head = stack.back()->template Load<Delta_t *>();
         if (Consolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
         // concurrent consolidations may block scanning
       }
+      begin_pos = 0;
     }
 
-    auto end_pos = node->GetRecordCount();
-    if (end_key) {
-      auto &&[e_key, e_closed] = *end_key;
-      if (!Comp{}(node->GetKey(node->GetMetadata(end_pos - 1)), e_key)) {
-        auto [rc, pos] = node->SearchRecord(e_key);
-        end_pos = (rc == kKeyExist && e_closed) ? pos + 1 : pos;
-      }
-    }
+    // check the end position of scanning
+    const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
 
-    return RecordIterator{this, &gc_, node, begin_pos, end_pos, end_key};
+    return RecordIterator{this, &gc_, node, begin_pos, end_pos, end_key, is_end};
   }
 
   /*####################################################################################
@@ -770,31 +760,29 @@ class BwTree
   }
 
   [[nodiscard]] auto
-  SearchLeftEdgeLeaf() const  //
+  SearchLeftmostLeaf() const  //
       -> std::vector<LogicalID_t *>
   {
     std::vector<LogicalID_t *> stack{};
     stack.reserve(kExpectedTreeHeight);
 
     // get a logical page of a root node
-    auto *page_id = root_.load(std::memory_order_relaxed);
-    stack.emplace_back(page_id);
+    auto *cur_lid = root_.load(std::memory_order_relaxed);
+    stack.emplace_back(cur_lid);
 
     // traverse a Bw-tree
-    const auto *delta = page_id->template Load<Delta_t *>();
-    while (!delta->IsLeaf()) {
-      while (!delta->IsBaseNode()) {
+    for (const auto *delta = cur_lid->template Load<Delta_t *>();  //
+         !delta->IsLeaf();                                         //
+         delta = cur_lid->template Load<Delta_t *>())              //
+    {
+      for (; !delta->IsBaseNode(); delta = delta->template GetNext<Delta_t *>()) {
         // go to the next delta record or base node
-        delta = reinterpret_cast<Delta_t *>(delta->GetNext());
       }
 
       // get a leftmost node
       const auto *node = reinterpret_cast<const Node_t *>(delta);
-      page_id = node->template GetPayload<LogicalID_t *>(node->GetMetadata(0));
-      stack.emplace_back(page_id);
-
-      // go down to the next level
-      delta = page_id->template Load<Delta_t *>();
+      cur_lid = node->template GetPayload<LogicalID_t *>(node->GetMetadata(0));
+      stack.emplace_back(cur_lid);
     }
 
     return stack;
@@ -847,13 +835,16 @@ class BwTree
   GetHead(  //
       const Key &key,
       const bool closed,
-      std::vector<LogicalID_t *> &stack)  //
+      std::vector<LogicalID_t *> &stack,
+      const bool read_only = false)  //
       -> const Delta_t *
   {
     for (LogicalID_t *sib_lid{}; true;) {
       // check whether the node has partial SMOs
       const auto *head = LoadValidHead(key, closed, stack);
-      CompletePartialSMOsIfExist(head, stack);
+      if (!read_only) {
+        CompletePartialSMOsIfExist(head, stack);
+      }
 
       // check whether the node is active and can include a target key
       size_t delta_num = 0;
@@ -934,6 +925,26 @@ class BwTree
    * Internal scan utilities
    *##################################################################################*/
 
+  auto
+  ConsolidateForScan(  //
+      Node_t *&node,
+      const Key &begin_key,
+      const bool closed,
+      std::vector<LogicalID_t *> &stack)  //
+      -> size_t
+  {
+    while (true) {
+      const auto *head = GetHead(begin_key, closed, stack, kIsScan);
+      if (Consolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
+      // concurrent consolidations may block scanning
+    }
+
+    // check the begin position for scanning
+    const auto [rc, pos] = node->SearchRecord(begin_key);
+
+    return (rc == kKeyNotExist || closed) ? pos : pos + 1;
+  }
+
   /**
    * @brief Consolidate a leaf node for range scanning.
    *
@@ -942,28 +953,21 @@ class BwTree
    */
   auto
   SiblingScan(  //
-      const LogicalID_t *page_id,
+      LogicalID_t *sib_lid,
       Node_t *node,
+      const Key &begin_key,
       const std::optional<std::pair<const Key &, bool>> &end_key)  //
       -> RecordIterator
   {
-    while (true) {
-      const auto *head = page_id->template Load<Delta_t *>();
-      if (Consolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
-      // blocked by concurrent consolidations
-    }
+    // consolidate a sibling node
+    std::vector<LogicalID_t *> stack{sib_lid};
+    stack.reserve(kExpectedTreeHeight);
+    const auto begin_pos = ConsolidateForScan(node, begin_key, !kClosed, stack);
 
-    auto rec_num = node->GetRecordCount();
-    if (end_key) {
-      auto &&[e_key, e_closed] = *end_key;
-      if (!Comp{}(node->GetKey(node->GetMetadata(rec_num - 1)), e_key)) {
-        auto [rc, pos] = node->SearchRecord(e_key);
-        rec_num = (rc == kKeyExist && e_closed) ? pos + 1 : pos;
-        node->RemoveSideLink();
-      }
-    }
+    // check the end position of scanning
+    const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
 
-    return RecordIterator{node, 0, rec_num};
+    return RecordIterator{node, begin_pos, end_pos, is_end};
   }
 
   /*####################################################################################

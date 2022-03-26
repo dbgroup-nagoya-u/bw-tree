@@ -215,6 +215,23 @@ class Node
     return payload;
   }
 
+  [[nodiscard]] auto
+  CopyHighKey() const  //
+      -> Key
+  {
+    const auto key_len = high_meta_.GetKeyLength();
+
+    Key high_key{};
+    if constexpr (IsVariableLengthData<Key>()) {
+      high_key = reinterpret_cast<Key>(::operator new(key_len));
+      memcpy(high_key, GetKeyAddr(high_meta_), key_len);
+    } else {
+      memcpy(&high_key, GetKeyAddr(high_meta_), key_len);
+    }
+
+    return high_key;
+  }
+
   /*####################################################################################
    * Public utilities
    *##################################################################################*/
@@ -299,6 +316,23 @@ class Node
     }
 
     return GetPayload<LogicalID_t *>(meta_array_[begin_pos]);
+  }
+
+  [[nodiscard]] auto
+  SearchEndPositionFor(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
+      -> std::pair<bool, size_t>
+  {
+    const auto is_end = IsRightmostOf(end_key);
+    size_t end_pos{};
+    if (is_end && end_key) {
+      const auto &[e_key, e_closed] = *end_key;
+      const auto [rc, pos] = SearchRecord(e_key);
+      end_pos = (rc == kKeyExist && e_closed) ? pos + 1 : pos;
+    } else {
+      end_pos = record_count_;
+    }
+
+    return {is_end, end_pos};
   }
 
   template <bool kIsLeaf>
@@ -467,6 +501,15 @@ class Node
   /*####################################################################################
    * Internal getters setters
    *##################################################################################*/
+
+  [[nodiscard]] auto
+  IsRightmostOf(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
+      -> bool
+  {
+    if (high_meta_.GetKeyLength() == 0) return true;  // the rightmost node
+    if (!end_key) return false;                       // perform full scan
+    return !Comp{}(GetKey(high_meta_), end_key->first);
+  }
 
   /**
    * @param meta metadata of a corresponding record.
