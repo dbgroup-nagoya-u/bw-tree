@@ -38,9 +38,9 @@ if(${BW_TREE_TEST_USE_JEMALLOC})
 endif()
 
 # define function to add unit tests in the same format
-function(ADD_BW_TREE_TEST BW_TREE_TEST_TARGET)
+function(ADD_BW_TREE_TEST BW_TREE_DESTDIR BW_TREE_TEST_TARGET)
   add_executable(${BW_TREE_TEST_TARGET}
-    "${CMAKE_CURRENT_SOURCE_DIR}/${BW_TREE_TEST_TARGET}.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/${BW_TREE_DESTDIR}${BW_TREE_TEST_TARGET}.cpp"
   )
   target_compile_features(${BW_TREE_TEST_TARGET} PRIVATE
     "cxx_std_17"
@@ -51,6 +51,9 @@ function(ADD_BW_TREE_TEST BW_TREE_TEST_TARGET)
     $<$<STREQUAL:${CMAKE_BUILD_TYPE},"Release">:"-O2 -march=native">
     $<$<STREQUAL:${CMAKE_BUILD_TYPE},"RelWithDebInfo">:"-g3 -Og -pg">
     $<$<STREQUAL:${CMAKE_BUILD_TYPE},"Debug">:"-g3 -O0 -pg">
+  )
+  target_include_directories(${BW_TREE_TEST_TARGET} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
   )
   target_link_libraries(${BW_TREE_TEST_TARGET} PRIVATE
     bw_tree
@@ -85,9 +88,9 @@ function(ADD_BW_TREE_TEST BW_TREE_TEST_TARGET)
 endfunction()
 
 # add unit tests to build targets
-ADD_BW_TREE_TEST(metadata_test)
-ADD_BW_TREE_TEST(mapping_table_test)
-ADD_BW_TREE_TEST(delta_record_test)
-ADD_BW_TREE_TEST(node_test)
-ADD_BW_TREE_TEST(bw_tree_test)
-ADD_BW_TREE_TEST(bw_tree_multi_thread_test)
+ADD_BW_TREE_TEST("common/" "mapping_table_test")
+ADD_BW_TREE_TEST("varlen/" "metadata_test")
+ADD_BW_TREE_TEST("varlen/" "delta_record_test")
+ADD_BW_TREE_TEST("varlen/" "node_test")
+ADD_BW_TREE_TEST("" "bw_tree_varlen_test")
+ADD_BW_TREE_TEST("" "bw_tree_varlen_multi_thread_test")

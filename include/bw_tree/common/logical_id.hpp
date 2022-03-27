@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_COMPONENT_LOGICAL_ID_HPP
-#define BW_TREE_COMPONENT_LOGICAL_ID_HPP
+#ifndef BW_TREE_COMMON_LOGICAL_ID_HPP
+#define BW_TREE_COMMON_LOGICAL_ID_HPP
 
 #include <atomic>
 
@@ -23,26 +23,12 @@
 
 namespace dbgroup::index::bw_tree::component
 {
-// forward declarations for static assertions
-template <class Key, class Comp>
-class Node;
-template <class Key, class Comp>
-class DeltaRecord;
-
 /**
  * @brief A class for wrapping physical pointers by logical ones.
  *
  */
-template <class Key, class Comp>
 class LogicalID
 {
-  /*####################################################################################
-   * Type aliases
-   *##################################################################################*/
-
-  using Node_t = Node<Key, Comp>;
-  using Delta_t = DeltaRecord<Key, Comp>;
-
  public:
   /*####################################################################################
    * Public constructors and assignment operators
@@ -136,9 +122,7 @@ class LogicalID
   {
     if constexpr (std::is_same_v<T, uintptr_t>) {
       return true;
-    } else if constexpr (std::is_same_v<T, Node_t *> || std::is_same_v<T, const Node_t *>) {
-      return true;
-    } else if constexpr (std::is_same_v<T, Delta_t *> || std::is_same_v<T, const Delta_t *>) {
+    } else if constexpr (std::is_pointer_v<T>) {
       return true;
     } else {
       return false;
@@ -155,4 +139,4 @@ class LogicalID
 
 }  // namespace dbgroup::index::bw_tree::component
 
-#endif  // BW_TREE_COMPONENT_LOGICAL_ID_HPP
+#endif  // BW_TREE_COMMON_LOGICAL_ID_HPP

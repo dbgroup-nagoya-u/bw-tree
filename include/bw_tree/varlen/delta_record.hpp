@@ -14,20 +14,19 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_COMPONENT_DELTA_RECORD_HPP
-#define BW_TREE_COMPONENT_DELTA_RECORD_HPP
+#ifndef BW_TREE_VARLEN_DELTA_RECORD_HPP
+#define BW_TREE_VARLEN_DELTA_RECORD_HPP
 
-#include <atomic>
 #include <optional>
 #include <utility>
 #include <vector>
 
-#include "common.hpp"
-#include "consolidate_info.hpp"
-#include "logical_id.hpp"
+#include "bw_tree/common/common.hpp"
+#include "bw_tree/common/consolidate_info.hpp"
+#include "bw_tree/common/logical_id.hpp"
 #include "metadata.hpp"
 
-namespace dbgroup::index::bw_tree::component
+namespace dbgroup::index::bw_tree::component::varlen
 {
 /**
  * @brief A class to represent delta records in Bw-tree.
@@ -38,13 +37,6 @@ namespace dbgroup::index::bw_tree::component
 template <class Key, class Comp>
 class DeltaRecord
 {
-  /*####################################################################################
-   * Type aliases
-   *##################################################################################*/
-
-  using LogicalID_t = LogicalID<Key, Comp>;
-  using ConsolidateInfo_t = ConsolidateInfo<Key, Comp>;
-
  public:
   /*####################################################################################
    * Public constructors for inserting/deleting records in leaf nodes
@@ -115,7 +107,7 @@ class DeltaRecord
    */
   DeltaRecord(  //
       const DeltaRecord *merge_d,
-      const LogicalID_t *left_lid)
+      const LogicalID *left_lid)
       : node_type_{kInternal},
         delta_type_{kDelete},
         meta_{merge_d->meta_},
@@ -141,7 +133,7 @@ class DeltaRecord
   DeltaRecord(  //
       const DeltaType delta_type,
       const DeltaRecord *right_node,
-      const LogicalID_t *right_lid,
+      const LogicalID *right_lid,
       const DeltaRecord *next = nullptr)
       : node_type_{right_node->node_type_},
         delta_type_{delta_type},
@@ -362,7 +354,7 @@ class DeltaRecord
           const auto &sep_key = cur_rec->GetKey();
           if (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key))) {
             // check whether the merging is aborted
-            const auto *sib_lid = cur_rec->template GetPayload<LogicalID_t *>();
+            const auto *sib_lid = cur_rec->template GetPayload<LogicalID *>();
             const auto *remove_d = sib_lid->template Load<DeltaRecord *>();
             if (remove_d == nullptr) return kNodeRemoved;  // the node is consolidated
             if (remove_d->delta_type_ == kRemoveNode) {
@@ -448,7 +440,7 @@ class DeltaRecord
           const auto &sep_key = cur_rec->GetKey();
           if (Comp{}(sep_key, key)) {
             // check whether the merging is aborted
-            const auto *sib_lid = cur_rec->template GetPayload<LogicalID_t *>();
+            const auto *sib_lid = cur_rec->template GetPayload<LogicalID *>();
             const auto *remove_d = sib_lid->template Load<DeltaRecord *>();
             if (remove_d == nullptr) return kNodeRemoved;  // the node is consolidated
             if (remove_d->delta_type_ == kRemoveNode) {
@@ -488,7 +480,7 @@ class DeltaRecord
   Validate(  //
       const Key &key,
       const bool closed,
-      LogicalID_t *&sib_lid,
+      LogicalID *&sib_lid,
       size_t &delta_num) const  //
       -> DeltaRC
   {
@@ -501,7 +493,7 @@ class DeltaRecord
           // check whether the right-sibling node contains a target key
           const auto &sep_key = cur_rec->GetKey();
           if (Comp{}(sep_key, key) || (!closed && !Comp{}(key, sep_key))) {
-            sib_lid = cur_rec->template GetPayload<LogicalID_t *>();
+            sib_lid = cur_rec->template GetPayload<LogicalID *>();
             return kKeyIsInSibling;
           }
 
@@ -515,7 +507,7 @@ class DeltaRecord
         case kMerge: {
           // check whether the merging is aborted and the sibling node includes a target key
           const auto &sep_key = cur_rec->GetKey();
-          sib_lid = cur_rec->template GetPayload<LogicalID_t *>();
+          sib_lid = cur_rec->template GetPayload<LogicalID *>();
           const auto *remove_d = sib_lid->template Load<DeltaRecord *>();
           if (remove_d == nullptr) return kNodeRemoved;  // the node is consolidated
           if (remove_d->delta_type_ != kRemoveNode
@@ -533,7 +525,7 @@ class DeltaRecord
           if (!has_smo) {
             const auto &high_key = cur_rec->GetHighKey();
             if (high_key && (Comp{}(*high_key, key) || (!closed && !Comp{}(key, *high_key)))) {
-              sib_lid = cur_rec->template GetNext<LogicalID_t *>();
+              sib_lid = cur_rec->template GetNext<LogicalID *>();
               return kKeyIsInSibling;
             }
           }
@@ -551,7 +543,7 @@ class DeltaRecord
   auto
   Sort(  //
       std::vector<std::pair<Key, const void *>> &records,
-      std::vector<ConsolidateInfo_t> &consol_info) const  //
+      std::vector<ConsolidateInfo> &consol_info) const  //
       -> std::pair<bool, int64_t>
   {
     std::optional<Key> sep_key = std::nullopt;
@@ -603,7 +595,7 @@ class DeltaRecord
 
         case kMerge: {
           // check whether the merging was aborted
-          const auto *sib_lid = cur_rec->template GetPayload<LogicalID_t *>();
+          const auto *sib_lid = cur_rec->template GetPayload<LogicalID *>();
           const auto *remove_d = sib_lid->template Load<DeltaRecord *>();
           if (remove_d == nullptr) return {true, 0};        // the node is consolidated
           if (remove_d->delta_type_ != kRemoveNode) break;  // merging was aborted
@@ -731,6 +723,6 @@ class DeltaRecord
   std::byte data_block_[0]{};
 };
 
-}  // namespace dbgroup::index::bw_tree::component
+}  // namespace dbgroup::index::bw_tree::component::varlen
 
-#endif  // BW_TREE_COMPONENT_DELTA_RECORD_HPP
+#endif  // BW_TREE_VARLEN_DELTA_RECORD_HPP

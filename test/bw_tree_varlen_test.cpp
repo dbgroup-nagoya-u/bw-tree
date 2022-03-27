@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "bw_tree/bw_tree.hpp"
+#include "bw_tree/bw_tree_varlen.hpp"
 
 #include <algorithm>
 #include <memory>
@@ -69,9 +69,8 @@ class BwTreeFixture : public testing::Test
   using PayloadComp = typename KeyPayload::Payload::Comp;
 
   // define type aliases for simplicity
-  using Node_t = component::Node<Key, std::less<>>;
-  using Metadata = component::Metadata;
-  using BwTree_t = BwTree<Key, Payload, KeyComp>;
+  using Metadata = component::varlen::Metadata;
+  using BwTree_t = BwTreeVarLen<Key, Payload, KeyComp>;
 
  protected:
   /*####################################################################################

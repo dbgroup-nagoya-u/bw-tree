@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_COMPONENT_COMMON_HPP
-#define BW_TREE_COMPONENT_COMMON_HPP
+#ifndef BW_TREE_COMMON_COMMON_HPP
+#define BW_TREE_COMMON_COMMON_HPP
 
 #include <cstring>
 #include <memory>
@@ -82,8 +82,6 @@ constexpr size_t kHeaderLength = 4 * kWordSize;
 
 constexpr bool kClosed = true;
 
-constexpr bool kOpen = false;
-
 constexpr uintptr_t kNullPtr = 0;
 
 /// the capacity of each mapping table.
@@ -137,4 +135,4 @@ ShiftAddr(  //
 
 }  // namespace dbgroup::index::bw_tree::component
 
-#endif  // BW_TREE_COMPONENT_COMMON_HPP
+#endif  // BW_TREE_COMMON_COMMON_HPP
