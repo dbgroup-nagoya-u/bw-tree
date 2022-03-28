@@ -77,9 +77,6 @@ enum DeltaType : uint16_t
  * Internal constants
  *################################################################################################*/
 
-/// Header length in bytes.
-constexpr size_t kHeaderLength = 4 * kWordSize;
-
 constexpr bool kClosed = true;
 
 constexpr uintptr_t kNullPtr = 0;
@@ -90,16 +87,6 @@ constexpr size_t kMappingTableCapacity = (kPageSize - kWordSize) / kWordSize;
 /*##################################################################################################
  * Internal utility functions
  *################################################################################################*/
-
-template <class Key, class Payload>
-constexpr auto
-GetMaxDeltaSize()  //
-    -> size_t
-{
-  const auto key_length = (IsVariableLengthData<Key>()) ? kMaxVariableSize : sizeof(Key);
-  const auto pay_length = (sizeof(Payload) > kWordSize) ? sizeof(Payload) : kWordSize;
-  return kHeaderLength + 2 * key_length + pay_length;
-}
 
 /**
  * @tparam Compare a comparator class.

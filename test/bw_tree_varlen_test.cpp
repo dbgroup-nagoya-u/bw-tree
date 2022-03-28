@@ -40,7 +40,7 @@ struct KeyPayload {
  * Global constants
  *####################################################################################*/
 
-constexpr auto kHeaderLen = component::kHeaderLength;
+constexpr auto kHeaderLen = component::varlen::kHeaderLength;
 constexpr size_t kGCTime = 1000;
 constexpr bool kExpectSuccess = true;
 constexpr bool kExpectFailed = false;

@@ -21,9 +21,9 @@
 #include <utility>
 #include <vector>
 
-#include "bw_tree/common/common.hpp"
 #include "bw_tree/common/consolidate_info.hpp"
 #include "bw_tree/common/logical_id.hpp"
+#include "common.hpp"
 #include "metadata.hpp"
 
 namespace dbgroup::index::bw_tree::component::varlen

@@ -615,9 +615,9 @@ class BwTreeVarLen
 
   static constexpr size_t kExpectedTreeHeight = 8;
 
-  static constexpr size_t kMaxDeltaSize = component::GetMaxDeltaSize<Key, Payload>();
+  static constexpr size_t kMaxDeltaSize = component::varlen::GetMaxDeltaSize<Key, Payload>();
 
-  static constexpr auto kHeaderLength = component::kHeaderLength;
+  static constexpr auto kHeaderLength = component::varlen::kHeaderLength;
 
   static constexpr auto kClosed = component::kClosed;
 
