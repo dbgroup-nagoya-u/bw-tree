@@ -177,18 +177,18 @@ class BwTreeVarLen
     HasNext()  //
         -> bool
     {
-      if (current_pos_ < record_count_) return true;  // records remain in this node
-      if (is_end_) return false;                      // this node is the end of range-scan
+      while (true) {
+        if (current_pos_ < record_count_) return true;  // records remain in this node
+        if (is_end_) return false;                      // this node is the end of range-scan
 
-      // go to the next sibling node and continue scanning
-      const auto &next_key = node_->CopyHighKey();
-      auto *sib_page = node_->template GetNext<LogicalID *>();
-      *this = bw_tree_->SiblingScan(sib_page, node_, next_key, end_key_);
-      if constexpr (IsVariableLengthData<Key>()) {
-        delete next_key;
+        // go to the next sibling node and continue scanning
+        const auto &next_key = node_->CopyHighKey();
+        auto *sib_page = node_->template GetNext<LogicalID *>();
+        *this = bw_tree_->SiblingScan(sib_page, node_, next_key, end_key_);
+        if constexpr (IsVariableLengthData<Key>()) {
+          delete next_key;
+        }
       }
-
-      return HasNext();
     }
 
     /**
