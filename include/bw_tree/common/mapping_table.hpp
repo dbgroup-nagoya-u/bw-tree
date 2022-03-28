@@ -14,17 +14,15 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_COMPONENT_MAPPING_TABLE_HPP
-#define BW_TREE_COMPONENT_MAPPING_TABLE_HPP
+#ifndef BW_TREE_COMMON_MAPPING_TABLE_HPP
+#define BW_TREE_COMMON_MAPPING_TABLE_HPP
 
 #include <array>
 #include <atomic>
 #include <mutex>
 #include <vector>
 
-#include "delta_record.hpp"
 #include "logical_id.hpp"
-#include "node.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {
@@ -34,17 +32,9 @@ namespace dbgroup::index::bw_tree::component
  * @tparam Key a target key class.
  * @tparam Comp a comparetor class for keys.
  */
-template <class Key, class Comp>
+template <class Node, class Delta>
 class MappingTable
 {
-  /*####################################################################################
-   * Type aliases
-   *##################################################################################*/
-
-  using Node_t = Node<Key, Comp>;
-  using Delta_t = DeltaRecord<Key, Comp>;
-  using LogicalID_t = LogicalID<Key, Comp>;
-
  public:
   /*####################################################################################
    * Public constructors and assignment operators
@@ -97,7 +87,7 @@ class MappingTable
    */
   auto
   GetNewLogicalID()  //
-      -> LogicalID_t *
+      -> LogicalID *
   {
     auto *current_table = table_.load(std::memory_order_relaxed);
     auto new_id = current_table->ReserveNewID();
@@ -164,18 +154,18 @@ class MappingTable
       }
 
       for (size_t i = 0; i < size; ++i) {
-        auto *rec = logical_ids_[i].template Load<Delta_t *>();
+        auto *rec = logical_ids_[i].template Load<Delta *>();
         if (rec == nullptr) continue;
 
         // delete delta records
         while (!rec->IsBaseNode()) {
-          auto ptr = rec->GetNext();
+          auto *ptr = rec->GetNext();
           delete rec;
-          rec = reinterpret_cast<Delta_t *>(ptr);
+          rec = reinterpret_cast<Delta *>(ptr);
         }
 
         // delete a base node
-        auto *node = reinterpret_cast<Node_t *>(rec);
+        auto *node = reinterpret_cast<Node *>(rec);
         delete node;
       }
     }
@@ -193,7 +183,7 @@ class MappingTable
      */
     auto
     ReserveNewID()  //
-        -> LogicalID_t *
+        -> LogicalID *
     {
       auto current_id = head_id_.fetch_add(1, std::memory_order_relaxed);
 
@@ -210,7 +200,7 @@ class MappingTable
     std::atomic_size_t head_id_{0};
 
     /// an actual mapping table.
-    std::array<LogicalID_t, kMappingTableCapacity> logical_ids_{};
+    std::array<LogicalID, kMappingTableCapacity> logical_ids_{};
   };
 
   /*####################################################################################
@@ -235,4 +225,4 @@ class MappingTable
 
 }  // namespace dbgroup::index::bw_tree::component
 
-#endif  // BW_TREE_COMPONENT_MAPPING_TABLE_HPP
+#endif  // BW_TREE_COMMON_MAPPING_TABLE_HPP

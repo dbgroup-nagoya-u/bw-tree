@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "bw_tree/component/node.hpp"
+#include "bw_tree/varlen/node.hpp"
 
 #include <memory>
 #include <vector>
@@ -22,7 +22,7 @@
 #include "common.hpp"
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::bw_tree::component::test
+namespace dbgroup::index::bw_tree::component::varlen::test
 {
 /*######################################################################################
  * Classes for templated testing
@@ -145,4 +145,4 @@ TYPED_TEST(NodeFixture, ConstructInitialRoot)
   TestFixture::VerifyInitialRootConstructor();
 }
 
-}  // namespace dbgroup::index::bw_tree::component::test
+}  // namespace dbgroup::index::bw_tree::component::varlen::test

@@ -14,19 +14,19 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_COMPONENT_NODE_HPP
-#define BW_TREE_COMPONENT_NODE_HPP
+#ifndef BW_TREE_VARLEN_NODE_HPP
+#define BW_TREE_VARLEN_NODE_HPP
 
+#include <optional>
 #include <utility>
+#include <vector>
 
+#include "bw_tree/common/consolidate_info.hpp"
+#include "bw_tree/common/logical_id.hpp"
 #include "common.hpp"
-#include "consolidate_info.hpp"
-#include "delta_record.hpp"
-#include "logical_id.hpp"
-#include "memory/utility.hpp"
 #include "metadata.hpp"
 
-namespace dbgroup::index::bw_tree::component
+namespace dbgroup::index::bw_tree::component::varlen
 {
 /**
  * @brief A class to represent nodes in Bw-tree.
@@ -39,13 +39,6 @@ namespace dbgroup::index::bw_tree::component
 template <class Key, class Comp>
 class Node
 {
-  /*####################################################################################
-   * Type aliases
-   *##################################################################################*/
-
-  using LogicalID_t = LogicalID<Key, Comp>;
-  using ConsolidateInfo_t = ConsolidateInfo<Key, Comp>;
-
  public:
   /*####################################################################################
    * Public constructors and assignment operators
@@ -65,7 +58,7 @@ class Node
    */
   Node(  //
       const Node *split_d,
-      const LogicalID_t *left_lid)
+      const LogicalID *left_lid)
       : node_type_{kInternal}, delta_type_{kNotDelta}, record_count_{2}
   {
     // set a split-left page
@@ -77,7 +70,7 @@ class Node
     meta_array_[0] = meta.UpdateForInternal(offset);
 
     // set a split-right page
-    const auto *right_lid = split_d->template GetPayload<LogicalID_t *>(meta);
+    const auto *right_lid = split_d->template GetPayload<LogicalID *>(meta);
     offset = SetPayload(offset, right_lid);
     meta_array_[1] = Metadata{offset, 0, kWordSize};
   }
@@ -217,7 +210,7 @@ class Node
 
   [[nodiscard]] auto
   GetLeftmostChild() const  //
-      -> LogicalID_t *
+      -> LogicalID *
   {
     const auto *cur = this;
     for (; !cur->IsBaseNode(); cur = cur->template GetNext<const Node *>()) {
@@ -225,7 +218,7 @@ class Node
     }
 
     // get a leftmost node
-    return cur->template GetPayload<LogicalID_t *>(cur->meta_array_[0]);
+    return cur->template GetPayload<LogicalID *>(cur->meta_array_[0]);
   }
 
   [[nodiscard]] auto
@@ -248,12 +241,6 @@ class Node
   /*####################################################################################
    * Public utilities
    *##################################################################################*/
-
-  void
-  RemoveSideLink()
-  {
-    next_ = kNullPtr;
-  }
 
   /**
    * @brief Get the position of a specified key by using binary search. If there is no
@@ -308,7 +295,7 @@ class Node
   SearchChild(  //
       const Key &key,
       const bool range_is_closed) const  //
-      -> LogicalID_t *
+      -> LogicalID *
   {
     int64_t begin_pos = 0;
     int64_t end_pos = record_count_ - 2;
@@ -328,7 +315,7 @@ class Node
       }
     }
 
-    return GetPayload<LogicalID_t *>(meta_array_[begin_pos]);
+    return GetPayload<LogicalID *>(meta_array_[begin_pos]);
   }
 
   [[nodiscard]] auto
@@ -350,14 +337,16 @@ class Node
 
   template <bool kIsLeaf>
   [[nodiscard]] static auto
-  PreConsolidate(std::vector<ConsolidateInfo_t> &consol_info)  //
+  PreConsolidate(std::vector<ConsolidateInfo> &consol_info)  //
       -> size_t
   {
     const auto end_pos = consol_info.size() - 1;
     size_t size = 0;
 
     for (size_t i = 0; i <= end_pos; ++i) {
-      auto &[node, split_d, rec_num] = consol_info.at(i);
+      auto &[n_ptr, d_ptr, rec_num] = consol_info.at(i);
+      const auto *node = reinterpret_cast<const Node *>(n_ptr);
+      const auto *split_d = reinterpret_cast<const Node *>(d_ptr);
 
       // add the length of the lowest key
       if (!kIsLeaf || i == end_pos) {
@@ -397,7 +386,7 @@ class Node
   template <class T>
   void
   LeafConsolidate(  //
-      const std::vector<ConsolidateInfo_t> &consol_info,
+      const std::vector<ConsolidateInfo> &consol_info,
       const std::vector<std::pair<Key, const void *>> &records,
       bool do_split)
   {
@@ -406,14 +395,15 @@ class Node
     // copy a lowest key when consolidation
     size_t offset = kHeaderLength / 2;
     if (!do_split) {
-      const auto *low_node = consol_info.back().node;
+      const auto *low_node = reinterpret_cast<const Node *>(consol_info.back().node);
       offset = CopyLowKeyFrom(low_node, low_node->low_meta_);
     }
 
     // perform merge-sort to consolidate a node
     size_t j = 0;
     for (int64_t k = consol_info.size() - 1; k >= 0; --k) {
-      const auto [node, dummy, base_rec_num] = consol_info.at(k);
+      const auto [n_ptr, dummy, base_rec_num] = consol_info.at(k);
+      const auto *node = reinterpret_cast<const Node *>(n_ptr);
       for (size_t i = 0; i < base_rec_num; ++i) {
         // copy new records
         const auto meta = node->meta_array_[i];
@@ -443,7 +433,7 @@ class Node
 
   void
   InternalConsolidate(  //
-      const std::vector<ConsolidateInfo_t> &consol_info,
+      const std::vector<ConsolidateInfo> &consol_info,
       const std::vector<std::pair<Key, const void *>> &records,
       bool do_split)
   {
@@ -452,7 +442,7 @@ class Node
     // copy a lowest key when consolidation
     size_t offset = kHeaderLength / 2;
     if (!do_split) {
-      const auto *low_node = consol_info.back().node;
+      const auto *low_node = reinterpret_cast<const Node *>(consol_info.back().node);
       offset = CopyLowKeyFrom(low_node, low_node->low_meta_);
     }
 
@@ -460,13 +450,13 @@ class Node
     bool payload_is_embedded = false;
     size_t j = 0;
     for (int64_t k = consol_info.size() - 1; k >= 0; --k) {
-      const auto *node = consol_info.at(k).node;
+      const auto *node = reinterpret_cast<const Node *>(consol_info.at(k).node);
       const auto end_pos = consol_info.at(k).rec_num - 1;
       for (size_t i = 0; i <= end_pos; ++i) {
         // copy a payload of a base node in advance to swap that of a new index entry
         auto meta = node->meta_array_[i];
         if (!payload_is_embedded) {  // skip a deleted page
-          offset = CopyPayloadFrom<LogicalID_t *>(node, meta, offset, do_split);
+          offset = CopyPayloadFrom<LogicalID *>(node, meta, offset, do_split);
         }
 
         // get a current key in the base node
@@ -474,7 +464,7 @@ class Node
           if (k == 0) break;  // the last record does not need a key
 
           // if nodes are merged, a current key is equivalent with the lowest one in the next node
-          node = consol_info.at(k - 1).node;
+          node = reinterpret_cast<const Node *>(consol_info.at(k - 1).node);
           meta = node->low_meta_;
         }
         const auto &node_key = node->GetKey(meta);
@@ -609,7 +599,7 @@ class Node
 
   void
   CopyHighKeyFrom(  //
-      const ConsolidateInfo_t &consol_info,
+      const ConsolidateInfo &consol_info,
       size_t offset)
   {
     // prepare a node that has the highest key, and copy the next logical ID
@@ -617,12 +607,12 @@ class Node
     Metadata meta{};
     if (consol_info.split_d == nullptr) {
       // an original or merged base node
-      node = consol_info.node;
+      node = reinterpret_cast<const Node *>(consol_info.node);
       meta = node->high_meta_;
       next_ = node->next_;
     } else {
       // a split-delta record
-      node = consol_info.split_d;
+      node = reinterpret_cast<const Node *>(consol_info.split_d);
       meta = node->low_meta_;
       next_ = node->template GetPayload<uintptr_t>(meta);
     }
@@ -793,7 +783,7 @@ class Node
       offset = CopyKeyFrom(delta, meta, offset, do_split);
 
       // copy the next (split-right) child page
-      offset = CopyPayloadFrom<LogicalID_t *>(delta, meta, offset, do_split);
+      offset = CopyPayloadFrom<LogicalID *>(delta, meta, offset, do_split);
     }
 
     return offset;
@@ -831,6 +821,6 @@ class Node
   Metadata meta_array_[0];
 };
 
-}  // namespace dbgroup::index::bw_tree::component
+}  // namespace dbgroup::index::bw_tree::component::varlen
 
-#endif  // BW_TREE_COMPONENT_NODE_HPP
+#endif  // BW_TREE_VARLEN_NODE_HPP

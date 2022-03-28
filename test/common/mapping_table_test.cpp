@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 
-#include "bw_tree/component/mapping_table.hpp"
+#include "bw_tree/common/mapping_table.hpp"
 
 #include <algorithm>
 #include <future>
 #include <memory>
 #include <thread>
 
+#include "bw_tree/varlen/delta_record.hpp"
+#include "bw_tree/varlen/node.hpp"
 #include "common.hpp"
 #include "gtest/gtest.h"
 
@@ -40,9 +42,10 @@ class MappingTableFixture : public testing::Test
 
   using Key = uint64_t;
   using Payload = uint64_t;
-  using LogicalID_t = LogicalID<Key, std::less<>>;
-  using MappingTable_t = MappingTable<Key, std::less<>>;
-  using IDContainer = std::vector<LogicalID_t *>;
+  using Node_t = varlen::Node<Key, std::less<>>;
+  using Delta_t = varlen::DeltaRecord<Key, std::less<>>;
+  using MappingTable_t = MappingTable<Node_t, Delta_t>;
+  using IDContainer = std::vector<LogicalID *>;
 
  protected:
   /*####################################################################################

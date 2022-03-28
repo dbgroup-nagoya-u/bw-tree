@@ -14,30 +14,18 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_COMPONENT_CONSOLIDATE_INFO_HPP
-#define BW_TREE_COMPONENT_CONSOLIDATE_INFO_HPP
+#ifndef BW_TREE_COMMON_CONSOLIDATE_INFO_HPP
+#define BW_TREE_COMMON_CONSOLIDATE_INFO_HPP
 
 #include "common.hpp"
-#include "metadata.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {
-// forward declarations for cast
-template <class Key, class Comp>
-class Node;
-
 /**
  * @brief A class for rataining a node and its separator key to be consolidated.
  *
  */
-template <class Key, class Comp>
 struct ConsolidateInfo {
-  /*####################################################################################
-   * Type aliases
-   *##################################################################################*/
-
-  using Node_t = Node<Key, Comp>;
-
  public:
   /*####################################################################################
    * Public constructors and assignment operators
@@ -46,8 +34,7 @@ struct ConsolidateInfo {
   ConsolidateInfo(  //
       const void *node_ptr,
       const void *sep_ptr)
-      : node{reinterpret_cast<const Node_t *>(node_ptr)},
-        split_d{reinterpret_cast<const Node_t *>(sep_ptr)}
+      : node{node_ptr}, split_d{sep_ptr}
   {
   }
 
@@ -56,10 +43,10 @@ struct ConsolidateInfo {
    *##################################################################################*/
 
   // an address of a base node to be consolidated.
-  const Node_t *node{};
+  const void *node{};
 
   // an address of a corresponding split-delta record if exist.
-  const Node_t *split_d{};
+  const void *split_d{};
 
   // the number of records to be consolidated.
   size_t rec_num{0};
@@ -67,4 +54,4 @@ struct ConsolidateInfo {
 
 }  // namespace dbgroup::index::bw_tree::component
 
-#endif  // BW_TREE_COMPONENT_CONSOLIDATE_INFO_HPP
+#endif  // BW_TREE_COMMON_CONSOLIDATE_INFO_HPP

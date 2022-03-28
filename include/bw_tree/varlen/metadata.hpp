@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_COMPONENT_METADATA_HPP
-#define BW_TREE_COMPONENT_METADATA_HPP
+#ifndef BW_TREE_VARLEN_METADATA_HPP
+#define BW_TREE_VARLEN_METADATA_HPP
 
-#include "common.hpp"
+#include "bw_tree/common/common.hpp"
 
-namespace dbgroup::index::bw_tree::component
+namespace dbgroup::index::bw_tree::component::varlen
 {
 /**
  * @brief A class to represent record metadata.
@@ -147,6 +147,6 @@ class Metadata
   uint16_t total_length_{};
 };
 
-}  // namespace dbgroup::index::bw_tree::component
+}  // namespace dbgroup::index::bw_tree::component::varlen
 
-#endif  // BW_TREE_COMPONENT_METADATA_HPP
+#endif  // BW_TREE_VARLEN_METADATA_HPP

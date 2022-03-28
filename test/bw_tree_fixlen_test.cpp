@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "bw_tree/bw_tree.hpp"
+#include "bw_tree/bw_tree_fixlen.hpp"
 
 #include <algorithm>
 #include <memory>
@@ -40,7 +40,6 @@ struct KeyPayload {
  * Global constants
  *####################################################################################*/
 
-constexpr auto kHeaderLen = component::kHeaderLength;
 constexpr size_t kGCTime = 1000;
 constexpr bool kExpectSuccess = true;
 constexpr bool kExpectFailed = false;
@@ -69,19 +68,19 @@ class BwTreeFixture : public testing::Test
   using PayloadComp = typename KeyPayload::Payload::Comp;
 
   // define type aliases for simplicity
-  using Node_t = component::Node<Key, std::less<>>;
-  using Metadata = component::Metadata;
-  using BwTree_t = BwTree<Key, Payload, KeyComp>;
+  using Node_t = component::fixlen::Node<Key, KeyComp>;
+  using BwTree_t = BwTreeFixLen<Key, Payload, KeyComp>;
 
  protected:
   /*####################################################################################
    * Internal constants
    *##################################################################################*/
 
+  static constexpr size_t kHeaderLen = sizeof(Node_t);
   static constexpr size_t kKeyLen = GetDataLength<Key>();
   static constexpr size_t kPayLen = GetDataLength<Payload>();
   static constexpr size_t kRecLen = kKeyLen + kPayLen;
-  static constexpr size_t kRecNumInNode = (kPageSize - kHeaderLen) / (kRecLen + sizeof(Metadata));
+  static constexpr size_t kRecNumInNode = (kPageSize - kHeaderLen) / kRecLen;
   static constexpr size_t kMaxRecNumForTest = 2 * kRecNumInNode * kRecNumInNode;
   static constexpr size_t kKeyNumForTest = 2 * kRecNumInNode * kRecNumInNode + 2;
 
@@ -195,7 +194,7 @@ class BwTreeFixture : public testing::Test
       const size_t key_id,
       const size_t pay_id)
   {
-    auto rc = bw_tree_->Write(keys_[key_id], payloads_[pay_id], kKeyLen);
+    auto rc = bw_tree_->Write(keys_[key_id], payloads_[pay_id]);
 
     EXPECT_EQ(ReturnCode::kSuccess, rc);
   }
@@ -208,7 +207,7 @@ class BwTreeFixture : public testing::Test
   {
     ReturnCode expected_rc = (expect_success) ? kSuccess : kKeyExist;
 
-    auto rc = bw_tree_->Insert(keys_[key_id], payloads_[payload_id], kKeyLen);
+    auto rc = bw_tree_->Insert(keys_[key_id], payloads_[payload_id]);
     EXPECT_EQ(expected_rc, rc);
   }
 
@@ -220,7 +219,7 @@ class BwTreeFixture : public testing::Test
   {
     ReturnCode expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
 
-    auto rc = bw_tree_->Update(keys_[key_id], payloads_[payload_id], kKeyLen);
+    auto rc = bw_tree_->Update(keys_[key_id], payloads_[payload_id]);
     EXPECT_EQ(expected_rc, rc);
   }
 
@@ -231,7 +230,7 @@ class BwTreeFixture : public testing::Test
   {
     ReturnCode expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
 
-    auto rc = bw_tree_->Delete(keys_[key_id], kKeyLen);
+    auto rc = bw_tree_->Delete(keys_[key_id]);
     EXPECT_EQ(expected_rc, rc);
   }
 
@@ -375,7 +374,6 @@ using KeyPayloadPairs = ::testing::Types<  //
     KeyPayload<UInt4, UInt8>,              // small keys
     KeyPayload<UInt8, UInt4>,              // small payloads
     KeyPayload<UInt4, UInt4>,              // small keys/payloads
-    KeyPayload<Var, UInt8>,                // variable-length keys
     KeyPayload<Ptr, Ptr>,                  // pointer key/payload
     KeyPayload<Original, Original>         // original type key/payload
     >;

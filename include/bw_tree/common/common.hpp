@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_COMPONENT_COMMON_HPP
-#define BW_TREE_COMPONENT_COMMON_HPP
+#ifndef BW_TREE_COMMON_COMMON_HPP
+#define BW_TREE_COMMON_COMMON_HPP
 
 #include <cstring>
 #include <memory>
@@ -77,12 +77,7 @@ enum DeltaType : uint16_t
  * Internal constants
  *################################################################################################*/
 
-/// Header length in bytes.
-constexpr size_t kHeaderLength = 4 * kWordSize;
-
 constexpr bool kClosed = true;
-
-constexpr bool kOpen = false;
 
 constexpr uintptr_t kNullPtr = 0;
 
@@ -92,16 +87,6 @@ constexpr size_t kMappingTableCapacity = (kPageSize - kWordSize) / kWordSize;
 /*##################################################################################################
  * Internal utility functions
  *################################################################################################*/
-
-template <class Key, class Payload>
-constexpr auto
-GetMaxDeltaSize()  //
-    -> size_t
-{
-  const auto key_length = (IsVariableLengthData<Key>()) ? kMaxVariableSize : sizeof(Key);
-  const auto pay_length = (sizeof(Payload) > kWordSize) ? sizeof(Payload) : kWordSize;
-  return kHeaderLength + 2 * key_length + pay_length;
-}
 
 /**
  * @tparam Compare a comparator class.
@@ -137,4 +122,4 @@ ShiftAddr(  //
 
 }  // namespace dbgroup::index::bw_tree::component
 
-#endif  // BW_TREE_COMPONENT_COMMON_HPP
+#endif  // BW_TREE_COMMON_COMMON_HPP

@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "bw_tree/component/metadata.hpp"
+#include "bw_tree/varlen/metadata.hpp"
 
 #include "common.hpp"
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::bw_tree::component::test
+namespace dbgroup::index::bw_tree::component::varlen::test
 {
 /*######################################################################################
  * Global constants
@@ -74,4 +74,4 @@ TEST_F(MetadataFixture, ConstructWithArgumentsCreateExpectedMetadata)
  * Getter/setter tests
  *------------------------------------------------------------------------------------*/
 
-}  // namespace dbgroup::index::bw_tree::component::test
+}  // namespace dbgroup::index::bw_tree::component::varlen::test

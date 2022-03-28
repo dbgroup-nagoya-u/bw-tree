@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "bw_tree/component/delta_record.hpp"
+#include "bw_tree/varlen/delta_record.hpp"
 
 #include <memory>
 #include <vector>
@@ -22,7 +22,7 @@
 #include "common.hpp"
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::bw_tree::component::test
+namespace dbgroup::index::bw_tree::component::varlen::test
 {
 /*######################################################################################
  * Classes for templated testing
@@ -172,4 +172,4 @@ TYPED_TEST(DeltaRecordFixture, ConstructLeafDeltas)
   TestFixture::VerifyLeafConstructor(DeltaType::kDelete);
 }
 
-}  // namespace dbgroup::index::bw_tree::component::test
+}  // namespace dbgroup::index::bw_tree::component::varlen::test
