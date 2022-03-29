@@ -66,11 +66,7 @@ class MyClass
  * Constants for testing
  *####################################################################################*/
 
-#ifdef BW_TREE_TEST_THREAD_NUM
-static constexpr size_t kThreadNum = BW_TREE_TEST_THREAD_NUM;
-#else
-static constexpr size_t kThreadNum = 8;
-#endif
+constexpr size_t kThreadNum = BW_TREE_TEST_THREAD_NUM;
 
 constexpr size_t kVariableDataLength = 12;
 

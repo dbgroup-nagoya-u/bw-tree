@@ -20,20 +20,15 @@ sudo apt update && sudo apt install -y build-essential cmake
 
 #### Tuning Parameters
 
-- `BW_TREE_PAGE_SIZE`: invoking a split if the size of a base page exceeds this threshold  (default `8192`).
-- `BW_TREE_MAX_DELTA_NODE_NUM`: invoking consolidation if the number of delta records exceeds this threshold (default `32`).
+- `BW_TREE_PAGE_SIZE`: invoking a split-operation if the size of a base page exceeds this threshold  (default `8192`).
+- `BW_TREE_MAX_DELTA_RECORD_NUM`: invoking consolidation if the number of delta records exceeds this threshold (default `8`).
+- `BW_TREE_MIN_NODE_SIZE`: invoking a merge-operation if the size of a node becomes lower than this threshold (default `${BW_TREE_PAGE_SIZE} / 8`).
+- `BW_TREE_MAX_VARIABLE_DATA_SIZE`: the expected maximum size of a variable-length data in this library (default `128`).
 
 #### Build Options for Unit Testing
 
 - `BW_TREE_BUILD_TESTS`: building unit tests for this library if `ON` (default `OFF`).
 - `BW_TREE_TEST_THREAD_NUM`: the maximum number of threads to perform unit tests (default `8`).
-- `BW_TREE_TEST_TOTAL_EXEC_NUM`: the number of write operations to perform multi-thread tests (a default value is variable accroding to tested key/value types).
-- `BW_TREE_TEST_USE_JEMALLOC`: use [jemalloc](https://github.com/jemalloc/jemalloc) as a memory allocator/deleter if `ON` (default `OFF`).
-    - We assume that jemalloc is configured with the following command.
-
-    ```bash
-    ./configure --prefix=/usr/local --with-version=VERSION
-    ```
 
 ### Build and Run Unit Tests
 

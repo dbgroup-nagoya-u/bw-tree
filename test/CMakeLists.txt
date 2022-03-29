@@ -27,15 +27,14 @@ add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/googletest-src
                  EXCLUDE_FROM_ALL)
 
 #--------------------------------------------------------------------------------------#
-# Build Unit Tests
+# Configurations for testing
 #--------------------------------------------------------------------------------------#
 
-# prepare je-malloc if needed
-option(BW_TREE_TEST_USE_JEMALLOC "Override entire memory allocation with jemalloc" OFF)
-if(${BW_TREE_TEST_USE_JEMALLOC})
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(JEMALLOC REQUIRED IMPORTED_TARGET jemalloc)
-endif()
+set(BW_TREE_TEST_THREAD_NUM "8" CACHE STRING "The number of worker threads for testing.")
+
+#--------------------------------------------------------------------------------------#
+# Build Unit Tests
+#--------------------------------------------------------------------------------------#
 
 # define function to add unit tests in the same format
 function(ADD_BW_TREE_TEST BW_TREE_DESTDIR BW_TREE_TEST_TARGET)
@@ -52,34 +51,16 @@ function(ADD_BW_TREE_TEST BW_TREE_DESTDIR BW_TREE_TEST_TARGET)
     $<$<STREQUAL:${CMAKE_BUILD_TYPE},"RelWithDebInfo">:"-g3 -Og -pg">
     $<$<STREQUAL:${CMAKE_BUILD_TYPE},"Debug">:"-g3 -O0 -pg">
   )
+  target_compile_definitions(${BW_TREE_TEST_TARGET} PRIVATE
+    BW_TREE_TEST_THREAD_NUM=${BW_TREE_TEST_THREAD_NUM}
+  )
   target_include_directories(${BW_TREE_TEST_TARGET} PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}"
+    ${CMAKE_CURRENT_SOURCE_DIR}
   )
   target_link_libraries(${BW_TREE_TEST_TARGET} PRIVATE
     bw_tree
     gtest_main
   )
-
-  if(DEFINED BW_TREE_TEST_THREAD_NUM)
-    target_compile_definitions(${BW_TREE_TEST_TARGET} PRIVATE
-      BW_TREE_TEST_THREAD_NUM=${BW_TREE_TEST_THREAD_NUM}
-    )
-  endif()
-
-  if(DEFINED BW_TREE_TEST_TOTAL_EXEC_NUM)
-    target_compile_definitions(${BW_TREE_TEST_TARGET} PRIVATE
-      BW_TREE_TEST_TOTAL_EXEC_NUM=${BW_TREE_TEST_TOTAL_EXEC_NUM}
-    )
-  endif()
-
-  if(${BW_TREE_TEST_USE_JEMALLOC})
-    target_include_directories(${BW_TREE_TEST_TARGET} PRIVATE
-      ${JEMALLOC_INCLUDE_DIRS}
-    )
-    target_link_libraries(${BW_TREE_TEST_TARGET} PRIVATE
-      PkgConfig::JEMALLOC
-    )
-  endif()
 
   add_test(
     NAME ${BW_TREE_TEST_TARGET}

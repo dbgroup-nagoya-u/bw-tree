@@ -76,39 +76,19 @@ constexpr size_t kWordSize = sizeof(uintptr_t);
 /// Assumes that one word is represented by 8 bytes
 constexpr size_t kCacheLineSize = 64;
 
-#ifdef BW_TREE_PAGE_SIZE
-/// The page size of each node
+/// The default page size of each node
 constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
-#else
-/// The page size of each node
-constexpr size_t kPageSize = 8192;
-#endif
 
-#ifdef BW_TREE_MAX_DELTA_NODE_NUM
-/// The page size of each node
-constexpr size_t kMaxDeltaNodeNum = BW_TREE_MAX_DELTA_NODE_NUM;
-#else
-/// The page size of each node
-constexpr size_t kMaxDeltaNodeNum = 32;
-#endif
+/// The number of delta records for invoking consolidation
+constexpr size_t kMaxDeltaNodeNum = BW_TREE_MAX_DELTA_RECORD_NUM;
 
-#ifdef BW_TREE_MAX_VARIABLE_DATA_SIZE
-/// the maximun size of variable-length data
+/// The maximun size of variable-length data
 constexpr size_t kMaxVariableSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
-#else
-/// the maximun size of variable-length data
-constexpr size_t kMaxVariableSize = 128;
-#endif
 
-#ifdef BW_TREE_MIN_NODE_SIZE
-/// the maximun size of variable-length data
+/// The minimum size of nodes for invoking merging
 constexpr size_t kMinNodeSize = BW_TREE_MIN_NODE_SIZE;
-#else
-/// the maximun size of variable-length data
-constexpr size_t kMinNodeSize = 1024;
-#endif
 
-/// check whether the specified page size is valid
+/// Check whether the specified page size is valid
 static_assert(kPageSize % kWordSize == 0);
 
 }  // namespace dbgroup::index::bw_tree
