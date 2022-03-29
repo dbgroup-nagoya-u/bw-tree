@@ -1023,7 +1023,7 @@ class BwTreeFixLen
     constexpr auto kIsLeaf = !std::is_same_v<T, LogicalID *>;
 
     // sort delta records
-    std::vector<std::pair<Key, const void *>> records{};
+    std::vector<const void *> records{};
     std::vector<ConsolidateInfo> consol_info{};
     records.reserve(kMaxDeltaNodeNum * 4);
     consol_info.reserve(kMaxDeltaNodeNum);

@@ -518,7 +518,7 @@ class DeltaRecord
   template <class T>
   auto
   Sort(  //
-      std::vector<std::pair<Key, const void *>> &records,
+      std::vector<const void *> &records,
       std::vector<ConsolidateInfo> &consol_info) const  //
       -> std::pair<bool, int64_t>
   {
@@ -539,13 +539,13 @@ class DeltaRecord
             // check uniqueness
             auto it = records.cbegin();
             const auto it_end = records.cend();
-            for (; it != it_end && Comp{}(it->first, rec_key); ++it) {
+            for (; it != it_end && Less(*it, rec_key); ++it) {
               // skip smaller keys
             }
             if (it == it_end) {
-              records.emplace_back(rec_key, cur_rec);
-            } else if (Comp{}(rec_key, it->first)) {
-              records.insert(it, std::make_pair(rec_key, cur_rec));
+              records.emplace_back(cur_rec);
+            } else if (Less(rec_key, *it)) {
+              records.insert(it, cur_rec);
             }
 
             // update the page size
@@ -614,6 +614,30 @@ class DeltaRecord
   SetPayload(const T &payload)
   {
     memcpy(payload_, &payload, sizeof(T));
+  }
+
+  /*####################################################################################
+   * Internal utilities
+   *##################################################################################*/
+
+  [[nodiscard]] static auto
+  Less(  //
+      const void *ptr,
+      const Key &rec_key)  //
+      -> bool
+  {
+    const auto *delta = reinterpret_cast<const DeltaRecord *>(ptr);
+    return Comp{}(delta->key_, rec_key);
+  }
+
+  [[nodiscard]] static auto
+  Less(  //
+      const Key &rec_key,
+      const void *ptr)  //
+      -> bool
+  {
+    const auto *delta = reinterpret_cast<const DeltaRecord *>(ptr);
+    return Comp{}(rec_key, delta->key_);
   }
 
   /*####################################################################################

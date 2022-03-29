@@ -335,7 +335,7 @@ class Node
   void
   LeafConsolidate(  //
       const std::vector<ConsolidateInfo> &consol_info,
-      const std::vector<std::pair<Key, const void *>> &records,
+      const std::vector<const void *> &records,
       bool do_split)
   {
     const auto new_rec_num = records.size();
@@ -359,13 +359,13 @@ class Node
       for (size_t i = 0; i < base_rec_num; ++i) {
         // copy new records
         const auto &node_key = node->keys_[i];
-        for (; j < new_rec_num && Comp{}(records[j].first, node_key); ++j) {
-          offset = CopyRecordFrom<T>(records[j].second, offset, do_split);
+        for (; j < new_rec_num && Less(records[j], node_key); ++j) {
+          offset = CopyRecordFrom<T>(records[j], offset, do_split);
         }
 
         // check a new record is updated one
-        if (j < new_rec_num && !Comp{}(node_key, records[j].first)) {
-          offset = CopyRecordFrom<T>(records[j].second, offset, do_split);
+        if (j < new_rec_num && !Less(node_key, records[j])) {
+          offset = CopyRecordFrom<T>(records[j], offset, do_split);
           ++j;
         } else {
           offset = CopyRecordFrom<T>(node, i, offset, do_split);
@@ -375,7 +375,7 @@ class Node
 
     // copy remaining new records
     for (; j < new_rec_num; ++j) {
-      offset = CopyRecordFrom<T>(records[j].second, offset, do_split);
+      offset = CopyRecordFrom<T>(records[j], offset, do_split);
     }
 
     // copy a highest key
@@ -385,7 +385,7 @@ class Node
   void
   InternalConsolidate(  //
       const std::vector<ConsolidateInfo> &consol_info,
-      const std::vector<std::pair<Key, const void *>> &records,
+      const std::vector<const void *> &records,
       bool do_split)
   {
     const auto new_rec_num = records.size();
@@ -429,14 +429,14 @@ class Node
 
         // insert new index entries
         const auto &node_key = (i == end_pos) ? node->low_key_ : node->keys_[i];
-        for (; j < new_rec_num && Comp{}(records[j].first, node_key); ++j) {
-          offset = CopyIndexEntryFrom(records[j].second, offset, do_split);
+        for (; j < new_rec_num && Less(records[j], node_key); ++j) {
+          offset = CopyIndexEntryFrom(records[j], offset, do_split);
         }
 
         // set a key for the current record
-        if (j < new_rec_num && !Comp{}(node_key, records[j].first)) {
+        if (j < new_rec_num && !Less(node_key, records[j])) {
           // a record is in a base node, but it may be deleted and inserted again
-          offset = CopyIndexEntryFrom(records[j].second, offset, do_split);
+          offset = CopyIndexEntryFrom(records[j], offset, do_split);
           payload_is_embedded = true;
           ++j;
         } else {
@@ -462,7 +462,7 @@ class Node
 
     // copy remaining new records
     for (; j < new_rec_num; ++j) {
-      offset = CopyIndexEntryFrom(records[j].second, offset, do_split);
+      offset = CopyIndexEntryFrom(records[j], offset, do_split);
     }
     ++record_count_;
 
@@ -517,6 +517,26 @@ class Node
   /*####################################################################################
    * Internal utilities
    *##################################################################################*/
+
+  [[nodiscard]] static auto
+  Less(  //
+      const void *ptr,
+      const Key &node_key)  //
+      -> bool
+  {
+    const auto *delta = reinterpret_cast<const Node *>(ptr);
+    return Comp{}(delta->low_key_, node_key);
+  }
+
+  [[nodiscard]] static auto
+  Less(  //
+      const Key &node_key,
+      const void *ptr)  //
+      -> bool
+  {
+    const auto *delta = reinterpret_cast<const Node *>(ptr);
+    return Comp{}(node_key, delta->low_key_);
+  }
 
   void
   CopyHighKeyFrom(const ConsolidateInfo &consol_info)
