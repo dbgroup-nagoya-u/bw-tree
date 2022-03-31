@@ -22,7 +22,7 @@
 namespace dbgroup::index::bw_tree::component
 {
 /**
- * @brief A class for rataining a node and its separator key to be consolidated.
+ * @brief A class for rataining a consolidated node and its separator key.
  *
  */
 struct ConsolidateInfo {
@@ -31,22 +31,46 @@ struct ConsolidateInfo {
    * Public constructors and assignment operators
    *##################################################################################*/
 
-  ConsolidateInfo(  //
+  constexpr ConsolidateInfo() = default;
+
+  /**
+   * @brief Create a new consolidated node's information.
+   *
+   * @param node_ptr a pointer to a consolidated/merged node.
+   * @param sep_ptr a pointer to a delta records that includes a separator key.
+   */
+  constexpr ConsolidateInfo(  //
       const void *node_ptr,
       const void *sep_ptr)
       : node{node_ptr}, split_d{sep_ptr}
   {
   }
 
+  constexpr ConsolidateInfo(const ConsolidateInfo &) = default;
+  constexpr ConsolidateInfo(ConsolidateInfo &&) = default;
+
+  constexpr auto operator=(const ConsolidateInfo &) -> ConsolidateInfo & = default;
+  constexpr auto operator=(ConsolidateInfo &&) -> ConsolidateInfo & = default;
+
+  /*####################################################################################
+   * Public destructors
+   *##################################################################################*/
+
+  /**
+   * @brief Destroy the object.
+   *
+   */
+  ~ConsolidateInfo() = default;
+
   /*####################################################################################
    * Public member variables
    *##################################################################################*/
 
   // an address of a base node to be consolidated.
-  const void *node{};
+  const void *node{nullptr};
 
   // an address of a corresponding split-delta record if exist.
-  const void *split_d{};
+  const void *split_d{nullptr};
 
   // the number of records to be consolidated.
   size_t rec_num{0};

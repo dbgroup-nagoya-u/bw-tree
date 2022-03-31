@@ -27,10 +27,10 @@
 namespace dbgroup::index::bw_tree::component
 {
 /**
- * @brief
+ * @brief A class for managing locigal IDs.
  *
- * @tparam Key a target key class.
- * @tparam Comp a comparetor class for keys.
+ * @tparam Node a class for representing base nodes.
+ * @tparam Delta a class for representing delta records.
  */
 template <class Node, class Delta>
 class MappingTable
@@ -44,21 +44,17 @@ class MappingTable
    * @brief Construct a new MappingTable object.
    *
    */
-  MappingTable()
+  MappingTable() : table_{new BufferedMap{}}
   {
-    auto *table = new BufferedMap{};
-    table_.store(table, std::memory_order_relaxed);
-
-    std::unique_lock guard{full_tables_mtx_};
-    full_tables_.reserve(kExpectedTableNum);
-    full_tables_.emplace_back(table);
+    tables_.reserve(kDefaultTableNum);
+    tables_.emplace_back(table_.load(std::memory_order_relaxed));
   }
 
   MappingTable(const MappingTable &) = delete;
   MappingTable(MappingTable &&) = delete;
 
-  MappingTable &operator=(const MappingTable &) = delete;
-  MappingTable &operator=(MappingTable &&) = delete;
+  auto operator=(const MappingTable &) -> MappingTable & = delete;
+  auto operator=(MappingTable &&) -> MappingTable & = delete;
 
   /*####################################################################################
    * Public destructors
@@ -71,7 +67,7 @@ class MappingTable
    */
   ~MappingTable()
   {
-    for (auto &&table : full_tables_) {
+    for (auto &&table : tables_) {
       delete table;
     }
   }
@@ -81,7 +77,7 @@ class MappingTable
    *##################################################################################*/
 
   /**
-   * @brief Get a new logical ID (i.e., an address to mapping information).
+   * @brief Get a new logical ID.
    *
    * @return a reserved logical ID.
    */
@@ -90,7 +86,7 @@ class MappingTable
       -> LogicalID *
   {
     auto *current_table = table_.load(std::memory_order_relaxed);
-    auto new_id = current_table->ReserveNewID();
+    auto *new_id = current_table->ReserveNewID();
     while (new_id == nullptr) {
       std::unique_lock guard{full_tables_mtx_, std::defer_lock};
       if (guard.try_lock()) {
@@ -98,8 +94,8 @@ class MappingTable
         table_.store(new_table, std::memory_order_relaxed);
         new_id = new_table->ReserveNewID();
 
-        // retain the old table to release nodes in it
-        full_tables_.emplace_back(new_table);
+        // retain the new table to release nodes in it
+        tables_.emplace_back(new_table);
       } else {
         // since another thread may install a new mapping table, recheck a current table
         current_table = table_.load(std::memory_order_relaxed);
@@ -115,7 +111,7 @@ class MappingTable
    *##################################################################################*/
 
   /**
-   * @brief An internal class to represent a certain mapping table.
+   * @brief An internal class for representing an actual mapping table.
    *
    */
   class BufferedMap
@@ -134,8 +130,8 @@ class MappingTable
     BufferedMap(const BufferedMap &) = delete;
     BufferedMap(BufferedMap &&) = delete;
 
-    BufferedMap &operator=(const BufferedMap &) = delete;
-    BufferedMap &operator=(BufferedMap &&) = delete;
+    auto operator=(const BufferedMap &) -> BufferedMap & = delete;
+    auto operator=(BufferedMap &&) -> BufferedMap & = delete;
 
     /*##################################################################################
      * Public destructors
@@ -148,7 +144,7 @@ class MappingTable
      */
     ~BufferedMap()
     {
-      auto size = head_id_.load(std::memory_order_relaxed);
+      auto size = head_pos_.load(std::memory_order_relaxed);
       if (size > kMappingTableCapacity) {
         size = kMappingTableCapacity;
       }
@@ -159,9 +155,9 @@ class MappingTable
 
         // delete delta records
         while (!rec->IsBaseNode()) {
-          auto *ptr = rec->GetNext();
+          auto *next = rec->GetNext();
           delete rec;
-          rec = reinterpret_cast<Delta *>(ptr);
+          rec = next;
         }
 
         // delete a base node
@@ -175,7 +171,7 @@ class MappingTable
      *################################################################################*/
 
     /**
-     * @brief Reserve a new logical ID (i.e., the pointer to a mapping record).
+     * @brief Reserve a new logical ID.
      *
      * If this function returns nullptr, it means that this table is full.
      *
@@ -185,7 +181,7 @@ class MappingTable
     ReserveNewID()  //
         -> LogicalID *
     {
-      auto current_id = head_id_.fetch_add(1, std::memory_order_relaxed);
+      const auto current_id = head_pos_.fetch_add(1, std::memory_order_relaxed);
 
       if (current_id >= kMappingTableCapacity) return nullptr;
       return &logical_ids_[current_id];
@@ -196,8 +192,8 @@ class MappingTable
      * Internal member variables
      *################################################################################*/
 
-    /// the current head ID of this table (the total number of reserved IDs).
-    std::atomic_size_t head_id_{0};
+    /// the current head position of this table (i.e., the total number of reserved IDs).
+    std::atomic_size_t head_pos_{0};
 
     /// an actual mapping table.
     std::array<LogicalID, kMappingTableCapacity> logical_ids_{};
@@ -207,7 +203,8 @@ class MappingTable
    * Internal constants
    *##################################################################################*/
 
-  static constexpr size_t kExpectedTableNum = 128;
+  /// the default number of mapping tables.
+  static constexpr size_t kDefaultTableNum = 128;
 
   /*####################################################################################
    * Internal member variables
@@ -217,9 +214,9 @@ class MappingTable
   std::atomic<BufferedMap *> table_{};
 
   /// full mapping tables.
-  std::vector<BufferedMap *> full_tables_{};
+  std::vector<BufferedMap *> tables_{};
 
-  /// a mutex object to modify full_tables_.
+  /// a mutex object to modify tables_.
   std::mutex full_tables_mtx_{};
 };
 

@@ -24,7 +24,7 @@
 namespace dbgroup::index::bw_tree::component
 {
 /**
- * @brief A class for wrapping physical pointers by logical ones.
+ * @brief A class for wrapping physical pointers in logical ones.
  *
  */
 class LogicalID
@@ -39,8 +39,8 @@ class LogicalID
   LogicalID(const LogicalID &) = delete;
   LogicalID(LogicalID &&) = delete;
 
-  LogicalID &operator=(const LogicalID &) = delete;
-  LogicalID &operator=(LogicalID &&) = delete;
+  auto operator=(const LogicalID &) -> LogicalID & = delete;
+  auto operator=(LogicalID &&) -> LogicalID & = delete;
 
   /*####################################################################################
    * Public destructors
@@ -52,6 +52,14 @@ class LogicalID
    * Public utility functions
    *##################################################################################*/
 
+  /**
+   * @brief Load a current physical pointer from this logical ID.
+   *
+   * Note that this function sets an acquire fence.
+   *
+   * @tparam T a target class to be loaded.
+   * @return an address of a base node or a delta record.
+   */
   template <class T>
   [[nodiscard]] auto
   Load() const  //
@@ -62,6 +70,14 @@ class LogicalID
     return reinterpret_cast<T>(physical_ptr_.load(std::memory_order_acquire));
   }
 
+  /**
+   * @brief Store a physical pointer into this logical ID.
+   *
+   * Note that this function sets a release fence.
+   *
+   * @tparam T a target class to be stored.
+   * @param desired a physical pointer to be stored.
+   */
   template <class T>
   void
   Store(const T desired)
@@ -71,12 +87,28 @@ class LogicalID
     physical_ptr_.store(reinterpret_cast<uintptr_t>(desired), std::memory_order_release);
   }
 
+  /**
+   * @brief Clear a stored address from this logical ID.
+   *
+   */
   void
   Clear()
   {
     physical_ptr_.store(kNullPtr, std::memory_order_relaxed);
   }
 
+  /**
+   * @brief Perform a weak-CAS operation with given expected/desired values.
+   *
+   * Note that this function sets a release fence.
+   *
+   * @tparam T1 a class of an expected value.
+   * @tparam T2 a class of a desired value.
+   * @param expected an expected value to be compared.
+   * @param desired a desired value to be stored.
+   * @return true if this CAS operation succeeds.
+   * @return false otherwise.
+   */
   template <class T1, class T2>
   auto
   CASWeak(  //
@@ -94,6 +126,18 @@ class LogicalID
         std::memory_order_release);
   }
 
+  /**
+   * @brief Perform a strong-CAS operation with given expected/desired values.
+   *
+   * Note that this function sets a release fence.
+   *
+   * @tparam T1 a class of an expected value.
+   * @tparam T2 a class of a desired value.
+   * @param expected an expected value to be compared.
+   * @param desired a desired value to be stored.
+   * @return true if this CAS operation succeeds.
+   * @return false otherwise.
+   */
   template <class T1, class T2>
   auto
   CASStrong(  //
@@ -116,9 +160,15 @@ class LogicalID
    * Internal utility functions
    *##################################################################################*/
 
+  /**
+   * @tparam T a target class to be wrapped.
+   * @retval true if a given template class is valid as physical pointers.
+   * @retval false otherwise.
+   */
   template <class T>
   static constexpr auto
-  IsValidTarget()
+  IsValidTarget()  //
+      -> bool
   {
     if constexpr (std::is_same_v<T, uintptr_t>) {
       return true;
@@ -133,7 +183,7 @@ class LogicalID
    * Internal member variables
    *##################################################################################*/
 
-  // an address of a base node to be consolidated.
+  // an address of a node or a delta record.
   std::atomic_uintptr_t physical_ptr_{kNullPtr};
 };
 
