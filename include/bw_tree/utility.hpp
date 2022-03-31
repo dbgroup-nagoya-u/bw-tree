@@ -21,9 +21,37 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 
 namespace dbgroup::index::bw_tree
 {
+/*######################################################################################
+ * Global constants
+ *####################################################################################*/
+
+/// Assumes that one word is represented by 8 bytes
+constexpr size_t kWordSize = sizeof(uintptr_t);
+
+/*######################################################################################
+ * Tuning parameters for Bw-tree
+ *####################################################################################*/
+
+/// The default page size of each node
+constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
+
+/// The number of delta records for invoking consolidation
+constexpr size_t kMaxDeltaNodeNum = BW_TREE_MAX_DELTA_RECORD_NUM;
+
+/// The maximun size of variable-length data
+constexpr size_t kMaxVarDataSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
+
+/// The minimum size of nodes for invoking merging
+constexpr size_t kMinNodeSize = BW_TREE_MIN_NODE_SIZE;
+
+// Check whether the specified page size is valid
+static_assert(kPageSize % kWordSize == 0);
+static_assert(kMaxVarDataSize * 2 < kPageSize);
+
 /*######################################################################################
  * Utility enum and classes
  *####################################################################################*/
@@ -44,8 +72,9 @@ enum ReturnCode
  *
  */
 struct CompareAsCString {
-  constexpr bool
-  operator()(const void *a, const void *b) const noexcept
+  constexpr auto
+  operator()(const void *a, const void *b) const noexcept  //
+      -> bool
   {
     if (a == nullptr) return false;
     if (b == nullptr) return true;
@@ -59,37 +88,13 @@ struct CompareAsCString {
  * @retval false if a target class is static-length data.
  */
 template <class T>
-constexpr bool
-IsVariableLengthData()
+constexpr auto
+IsVariableLengthData()  //
+    -> bool
 {
   static_assert(std::is_trivially_copyable_v<T>);
   return false;
 }
-
-/*######################################################################################
- * Tuning parameters for Bw-tree
- *####################################################################################*/
-
-/// Assumes that one word is represented by 8 bytes
-constexpr size_t kWordSize = sizeof(uintptr_t);
-
-/// Assumes that one word is represented by 8 bytes
-constexpr size_t kCacheLineSize = 64;
-
-/// The default page size of each node
-constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
-
-/// The number of delta records for invoking consolidation
-constexpr size_t kMaxDeltaNodeNum = BW_TREE_MAX_DELTA_RECORD_NUM;
-
-/// The maximun size of variable-length data
-constexpr size_t kMaxVariableSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
-
-/// The minimum size of nodes for invoking merging
-constexpr size_t kMinNodeSize = BW_TREE_MIN_NODE_SIZE;
-
-/// Check whether the specified page size is valid
-static_assert(kPageSize % kWordSize == 0);
 
 }  // namespace dbgroup::index::bw_tree
 

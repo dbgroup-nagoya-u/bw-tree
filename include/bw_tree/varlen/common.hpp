@@ -37,7 +37,7 @@ constexpr auto
 GetMaxDeltaSize()  //
     -> size_t
 {
-  const auto key_length = (IsVariableLengthData<Key>()) ? kMaxVariableSize : sizeof(Key);
+  const auto key_length = (IsVariableLengthData<Key>()) ? kMaxVarDataSize : sizeof(Key);
   const auto pay_length = (sizeof(Payload) > kWordSize) ? sizeof(Payload) : kWordSize;
   return kHeaderLength + 2 * key_length + pay_length;
 }

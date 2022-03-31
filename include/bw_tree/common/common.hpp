@@ -17,9 +17,6 @@
 #ifndef BW_TREE_COMMON_COMMON_HPP
 #define BW_TREE_COMMON_COMMON_HPP
 
-#include <cstring>
-#include <memory>
-
 #include "bw_tree/utility.hpp"
 
 namespace dbgroup::index::bw_tree::component
@@ -29,27 +26,31 @@ namespace dbgroup::index::bw_tree::component
  *################################################################################################*/
 
 /**
- * @brief Internal return codes for representing results of delta chain traversal.
+ * @brief Internal return codes for representing results of delta-chain traversal.
  *
  */
 enum DeltaRC
 {
-  kRecordFound = -100,
+  kReachBaseNode = 0,
+  kRecordFound,
   kRecordDeleted,
   kNodeRemoved,
-  kKeyIsInSibling,
-  kReachBaseNode = 0
-};
-
-enum SMOStatus
-{
-  kSplitMayIncomplete = -100,
-  kMergeMayIncomplete,
-  kNoPartialSMOs = 0
+  kKeyIsInSibling
 };
 
 /**
- * @brief A flag to distinguish leaf/internal nodes.
+ * @brief Internal recurn codes for representing a status of SMOs.
+ *
+ */
+enum SMOStatus
+{
+  kNoPartialSMOs = 0,
+  kSplitMayIncomplete,
+  kMergeMayIncomplete
+};
+
+/**
+ * @brief A flag for distinguishing leaf/internal nodes.
  *
  */
 enum NodeType : uint16_t
@@ -59,7 +60,7 @@ enum NodeType : uint16_t
 };
 
 /**
- * @brief A flag to represent the types of delta nodes
+ * @brief A flag for representing the types of delta records.
  *
  */
 enum DeltaType : uint16_t
@@ -77,8 +78,10 @@ enum DeltaType : uint16_t
  * Internal constants
  *################################################################################################*/
 
+/// a flag for indicating closed intervals
 constexpr bool kClosed = true;
 
+/// the NULL value for uintptr_t
 constexpr uintptr_t kNullPtr = 0;
 
 /// the capacity of each mapping table.
@@ -94,13 +97,14 @@ constexpr size_t kMappingTableCapacity = (kPageSize - kWordSize) / kWordSize;
  * @param obj_1 an object to be compared.
  * @param obj_2 another object to be compared.
  * @retval true if given objects are equivalent.
- * @retval false if given objects are different.
+ * @retval false otherwise.
  */
 template <class Compare, class T>
-constexpr bool
+constexpr auto
 IsEqual(  //
     const T &obj_1,
-    const T &obj_2)
+    const T &obj_2)  //
+    -> bool
 {
   return !Compare{}(obj_1, obj_2) && !Compare{}(obj_2, obj_1);
 }
@@ -112,10 +116,11 @@ IsEqual(  //
  * @param offset an offset to shift.
  * @return void* a shifted address.
  */
-constexpr void *
+constexpr auto
 ShiftAddr(  //
     const void *addr,
-    const size_t offset)
+    const size_t offset)  //
+    -> void *
 {
   return static_cast<std::byte *>(const_cast<void *>(addr)) + offset;
 }
