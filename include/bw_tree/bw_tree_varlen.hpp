@@ -615,9 +615,10 @@ class BwTreeVarLen
 
   static constexpr size_t kExpectedTreeHeight = 8;
 
-  static constexpr size_t kMaxDeltaSize = component::varlen::GetMaxDeltaSize<Key, Payload>();
+  static constexpr size_t kMaxDeltaSize = Delta_t::template GetMaxDeltaSize<Payload>();
 
-  static constexpr auto kHeaderLength = component::varlen::kHeaderLength;
+  /// Header length in bytes.
+  static constexpr size_t kHeaderLength = sizeof(Node_t);
 
   static constexpr auto kClosed = component::kClosed;
 
@@ -1053,7 +1054,7 @@ class BwTreeVarLen
     if (consolidated) return kAlreadyConsolidated;
 
     // calculate the size a consolidated node
-    auto size = kHeaderLength + Node_t::template PreConsolidate<kIsLeaf>(consol_info) + diff;
+    auto size = kHeaderLength + Node_t::PreConsolidate(consol_info, kIsLeaf) + diff;
     bool do_split = false;
     if (!is_scan && size > kPageSize) {
       do_split = true;

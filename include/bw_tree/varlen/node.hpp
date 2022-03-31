@@ -23,15 +23,12 @@
 
 #include "bw_tree/common/consolidate_info.hpp"
 #include "bw_tree/common/logical_id.hpp"
-#include "common.hpp"
 #include "metadata.hpp"
 
 namespace dbgroup::index::bw_tree::component::varlen
 {
 /**
- * @brief A class to represent nodes in Bw-tree.
- *
- * Note that this class represents both base nodes and delta nodes.
+ * @brief A class for represent leaf/internal nodes in Bw-tree.
  *
  * @tparam Key a target key class.
  * @tparam Comp a comparetor class for keys.
@@ -48,18 +45,18 @@ class Node
    * @brief Construct an initial root node.
    *
    */
-  constexpr Node() : node_type_{kLeaf}, delta_type_{kNotDelta} {}
+  constexpr Node() : is_leaf_{kLeaf}, delta_type_{kNotDelta} {}
 
   /**
    * @brief Construct a new root node.
    *
-   * @param split_ptr
-   * @param left_lid
+   * @param split_d a split-delta record.
+   * @param left_lid a logical ID of a split-left child.
    */
   Node(  //
       const Node *split_d,
       const LogicalID *left_lid)
-      : node_type_{kInternal}, delta_type_{kNotDelta}, record_count_{2}
+      : is_leaf_{kInternal}, delta_type_{kNotDelta}, record_count_{2}
   {
     // set a split-left page
     const auto meta = split_d->low_meta_;
@@ -78,12 +75,15 @@ class Node
   /**
    * @brief Construct a consolidated base node object.
    *
-   * @param node_type a flag to indicate whether a leaf or internal node is constructed.
+   * Note that this construcor sets only header information.
+   *
+   * @param node_type a flag for indicating whether a leaf or internal node is constructed.
+   * @param node_size the virtual size of this node.
    */
   Node(  //
       const bool node_type,
       const size_t node_size)
-      : node_type_{static_cast<NodeType>(node_type)},
+      : is_leaf_{static_cast<NodeType>(node_type)},
         delta_type_{kNotDelta},
         node_size_{static_cast<uint32_t>(node_size)}
   {
@@ -111,18 +111,18 @@ class Node
 
   /**
    * @retval true if this is a leaf node.
-   * @retval false if this is an internal node.
+   * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
   IsLeaf() const  //
       -> bool
   {
-    return node_type_ == kLeaf;
+    return is_leaf_;
   }
 
   /**
    * @retval true if this is a base node.
-   * @retval false if this is a delta record.
+   * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
   IsBaseNode() const  //
@@ -141,6 +141,14 @@ class Node
     return record_count_;
   }
 
+  /**
+   * @brief Get the next pointer of a delta record, a base node, or a logical ID.
+   *
+   * Note that this funcion returns a logical ID if this is a base node.
+   *
+   * @tparam T a expected class to be loaded.
+   * @return a pointer to the next object.
+   */
   template <class T = const Node *>
   [[nodiscard]] constexpr auto
   GetNext() const  //
@@ -151,7 +159,7 @@ class Node
 
   /**
    * @param position the position of record metadata to be get.
-   * @return Metadata: record metadata.
+   * @return record metadata.
    */
   [[nodiscard]] constexpr auto
   GetMetadata(const size_t position) const  //
@@ -180,10 +188,9 @@ class Node
   /**
    * @brief Get the lowest key in this node.
    *
-   * This function assumes that the node has the lowest key (i.e., has a left sibling
-   * node) and does not check its existence.
+   * If this node is the leftmost node in its level, this returns std::nullopt.
    *
-   * @return the lowest key.
+   * @return the lowest key if exist.
    */
   [[nodiscard]] auto
   GetLowKey() const  //
@@ -208,6 +215,14 @@ class Node
     return payload;
   }
 
+  /**
+   * @brief Get the leftmost child node.
+   *
+   * If this object is actually a delta record, this function traverses a delta-chain
+   * and returns the left most child from a base node.
+   *
+   * @return the logical ID of the leftmost child node.
+   */
   [[nodiscard]] auto
   GetLeftmostChild() const  //
       -> LogicalID *
@@ -221,6 +236,14 @@ class Node
     return cur->template GetPayload<LogicalID *>(cur->meta_array_[0]);
   }
 
+  /**
+   * @brief Copy and return a highest key for scanning.
+   *
+   * This function allocates memory dynamically for variable-length keys, so it must be
+   * released by the caller.
+   *
+   * @return the highest key in this node.
+   */
   [[nodiscard]] auto
   CopyHighKey() const  //
       -> Key
@@ -243,21 +266,24 @@ class Node
    *##################################################################################*/
 
   /**
-   * @brief Get the position of a specified key by using binary search. If there is no
-   * specified key, this returns the minimum metadata position that is greater than the
-   * specified key
+   * @brief Get the position of a specified key by using binary search.
+   *
+   * If there is no specified key in this node, this returns the minimum position that
+   * is greater than the specified key.
+   *
+   * NOTE: This function assumes that the given key must be in the range of this node.
+   * If the given key is greater than the highest key of this node, this function will
+   * returns incorrect results.
    *
    * @param key a target key.
-   * @param range_is_closed a flag to indicate that a target key is included.
-   * @return std::pair<ReturnCode, size_t>: record's existence and the position of a
-   * specified key if exist.
+   * @return the pair of record's existence and the searched position.
    */
   [[nodiscard]] auto
   SearchRecord(const Key &key) const  //
       -> std::pair<ReturnCode, size_t>
   {
     int64_t end_pos{};
-    if (node_type_ == kLeaf) {
+    if (is_leaf_) {
       end_pos = record_count_ - 1;
     } else if (high_meta_.GetKeyLength() == 0 || Comp{}(key, GetKey(high_meta_))) {
       end_pos = record_count_ - 2;
@@ -283,13 +309,14 @@ class Node
   }
 
   /**
-   * @brief Get the position of a specified key by using binary search. If there is no
-   * specified key, this returns the minimum metadata index that is greater than the
-   * specified key
+   * @brief Get the corresponding child node with a specified key.
+   *
+   * If there is no specified key in this node, this returns the child in the minimum
+   * position that is greater than the specified key.
    *
    * @param key a target key.
-   * @param range_is_closed a flag to indicate that a target key is included.
-   * @return the position of a specified key.
+   * @param range_is_closed a flag for indicating a target range includes the key.
+   * @return the logical ID of searched child node.
    */
   [[nodiscard]] auto
   SearchChild(  //
@@ -301,7 +328,6 @@ class Node
     int64_t end_pos = record_count_ - 2;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
-
       const auto &index_key = GetKey(meta_array_[pos]);
 
       if (Comp{}(key, index_key)) {  // a target key is in a left side
@@ -318,6 +344,13 @@ class Node
     return GetPayload<LogicalID *>(meta_array_[begin_pos]);
   }
 
+  /**
+   * @brief Get the end position of records for scanning and check it has been finished.
+   *
+   * @param end_key a pair of a target key and its closed/open-interval flag.
+   * @retval 1st: true if this node is end of scanning.
+   * @retval 2nd: the end position for scanning.
+   */
   [[nodiscard]] auto
   SearchEndPositionFor(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
       -> std::pair<bool, size_t>
@@ -335,9 +368,24 @@ class Node
     return {is_end, end_pos};
   }
 
-  template <bool kIsLeaf>
+  /*####################################################################################
+   * Public SMO functions
+   *##################################################################################*/
+
+  /**
+   * @brief Compute record counts to be consolidated and the total block size.
+   *
+   * This function modifies a given consol_info's third variable (i.e., record count)
+   * for the following consolidation procedure.
+   *
+   * @param consol_info the set of consolidated nodes.
+   * @param is_leaf a flag for indicating a target node is leaf or internal ones.
+   * @return the total block size of a consolidated node.
+   */
   [[nodiscard]] static auto
-  PreConsolidate(std::vector<ConsolidateInfo> &consol_info)  //
+  PreConsolidate(  //
+      std::vector<ConsolidateInfo> &consol_info,
+      const bool is_leaf)  //
       -> size_t
   {
     const auto end_pos = consol_info.size() - 1;
@@ -349,7 +397,7 @@ class Node
       const auto *split_d = reinterpret_cast<const Node *>(d_ptr);
 
       // add the length of the lowest key
-      if (!kIsLeaf || i == end_pos) {
+      if (!is_leaf || i == end_pos) {
         size += node->low_meta_.GetKeyLength();
       }
 
@@ -357,16 +405,18 @@ class Node
       if (split_d == nullptr) {
         rec_num = node->record_count_;
 
-        if (i == 0) {  // add the length of the highest key
+        if (i == 0) {
+          // add the length of the highest key
           size += node->high_meta_.GetKeyLength();
         }
       } else {
         const auto sep_meta = split_d->low_meta_;
         const auto &sep_key = split_d->GetKey(sep_meta);
         auto [rc, pos] = node->SearchRecord(sep_key);
-        rec_num = (!kIsLeaf || rc == kKeyExist) ? pos + 1 : pos;
+        rec_num = (!is_leaf || rc == kKeyExist) ? pos + 1 : pos;
 
-        if (i == 0) {  // add the length of the highest key
+        if (i == 0) {
+          // add the length of the highest key
           size += sep_meta.GetKeyLength();
         }
       }
@@ -383,6 +433,14 @@ class Node
     return size;
   }
 
+  /**
+   * @brief Consolidate given leaf nodes into this.
+   *
+   * @tparam T a class of payloads.
+   * @param consol_info the set of consolidated nodes.
+   * @param records insert/modify/delete-delta records.
+   * @param do_split a flag for indicating this node is split.
+   */
   template <class T>
   void
   LeafConsolidate(  //
@@ -431,6 +489,13 @@ class Node
     CopyHighKeyFrom(consol_info.front(), offset);
   }
 
+  /**
+   * @brief Consolidate given internal nodes into this.
+   *
+   * @param consol_info the set of consolidated nodes.
+   * @param records insert/modify/delete-delta records.
+   * @param do_split a flag for indicating this node is split.
+   */
   void
   InternalConsolidate(  //
       const std::vector<ConsolidateInfo> &consol_info,
@@ -502,9 +567,21 @@ class Node
 
  private:
   /*####################################################################################
+   * Internal constants
+   *##################################################################################*/
+
+  /// Header length in bytes.
+  static constexpr size_t kHeaderLength = sizeof(Node);
+
+  /*####################################################################################
    * Internal getters setters
    *##################################################################################*/
 
+  /**
+   * @param end_key a pair of a target key and its closed/open-interval flag.
+   * @retval true if this node is a rightmost node for the given key.
+   * @retval false otherwise.
+   */
   [[nodiscard]] auto
   IsRightmostOf(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
       -> bool
@@ -537,12 +614,13 @@ class Node
   }
 
   /**
-   * @brief Set a target data directly.
+   * @brief Set a target key directly.
    *
-   * @tparam T a class of data.
-   * @param offset an offset to set a target data.
-   * @param payload a target payload to be set.
-   * @param payload_length the length of a target payload.
+   * @tparam T a class of keys.
+   * @param offset an offset to the bottom of free space.
+   * @param key a target key to be set.
+   * @param key_len the length of a target key.
+   * @return an offset to the set key.
    */
   template <class T>
   auto
@@ -561,6 +639,14 @@ class Node
     return offset;
   }
 
+  /**
+   * @brief Set a target payload directly.
+   *
+   * @tparam T a class of payloads.
+   * @param offset an offset to the bottom of free space.
+   * @param payload a target payload to be set.
+   * @return an offset to the set payload.
+   */
   template <class T>
   auto
   SetPayload(  //
@@ -577,6 +663,13 @@ class Node
    * Internal utilities
    *##################################################################################*/
 
+  /**
+   * @brief Copy a lowest key from a given base node.
+   *
+   * @param node a base node that includes a lowest key.
+   * @param meta corresponding metadata of lowest key.
+   * @return an offset to the set key.
+   */
   auto
   CopyLowKeyFrom(  //
       const Node *node,
@@ -597,6 +690,12 @@ class Node
     return offset;
   }
 
+  /**
+   * @brief Copy a highest key from a given consolidated node.
+   *
+   * @param consol_info a consolidated node and a corresponding split-delta record.
+   * @param offset an offset to the bottom of free space.
+   */
   void
   CopyHighKeyFrom(  //
       const ConsolidateInfo &consol_info,
@@ -631,10 +730,11 @@ class Node
   /**
    * @brief Copy a record from a base node in the leaf level.
    *
-   * @param node an original base node or delta record.
-   * @param meta metadata of a target record.
-   * @param offset the current offset of this node.
-   * @return the updated offset value.
+   * @param node an original base node.
+   * @param meta the corresponding metadata of a target record.
+   * @param offset an offset to the bottom of free space.
+   * @param do_split a flag for ignoring split-left records if needed.
+   * @return an offset to the copied record.
    */
   template <class T>
   auto
@@ -669,8 +769,9 @@ class Node
    * @brief Copy a record from a delta record in the leaf level.
    *
    * @param rec_ptr an original delta record.
-   * @param offset the current offset of this node.
-   * @return the updated offset value.
+   * @param offset an offset to the bottom of free space.
+   * @param do_split a flag for ignoring split-left records if needed.
+   * @return an offset to the copied record.
    */
   template <class T>
   auto
@@ -706,12 +807,13 @@ class Node
   }
 
   /**
-   * @brief Copy a record from a base node.
+   * @brief Copy a key from a base node.
    *
    * @param node an original node that has a target record.
    * @param meta the corresponding metadata of a target record.
-   * @param offset the current offset of this node.
-   * @return the updated offset value.
+   * @param offset an offset to the bottom of free space.
+   * @param do_split a flag for ignoring split-left records if needed.
+   * @return an offset to the copied key.
    */
   auto
   CopyKeyFrom(  //
@@ -742,12 +844,13 @@ class Node
   }
 
   /**
-   * @brief Copy a record from a base node.
+   * @brief Copy a payload from a base node.
    *
    * @param node an original node that has a target record.
    * @param meta the corresponding metadata of a target record.
-   * @param offset the current offset of this node.
-   * @return the updated offset value.
+   * @param offset an offset to the bottom of free space.
+   * @param do_split a flag for ignoring split-left records if needed.
+   * @return an offset to the copied payload.
    */
   template <class T>
   auto
@@ -769,6 +872,14 @@ class Node
     return offset;
   }
 
+  /**
+   * @brief Copy an index-entry from a delta record.
+   *
+   * @param delta_ptr an address of a target delta record.
+   * @param offset an offset to the bottom of free space.
+   * @param do_split a flag for ignoring split-left records if needed.
+   * @return an offset to the copied payload.
+   */
   auto
   CopyIndexEntryFrom(  //
       const void *delta_ptr,
@@ -793,10 +904,10 @@ class Node
    * Internal variables
    *##################################################################################*/
 
-  /// a flag to indicate whether this node is a leaf or internal node.
-  uint16_t node_type_ : 1;
+  /// a flag for indicating whether this node is a leaf or internal node.
+  uint16_t is_leaf_ : 1;
 
-  /// a flag to indicate the types of a delta node.
+  /// a flag for indicating the types of delta records.
   uint16_t delta_type_ : 3;
 
   /// a blank block for alignment.
@@ -805,16 +916,16 @@ class Node
   /// the number of records in this node.
   uint16_t record_count_{0};
 
-  /// a blank block for alignment.
+  /// an offset to the bottom of this node.
   uint32_t node_size_{kPageSize};
 
-  /// the pointer to the next node.
+  /// the pointer to a sibling node.
   uintptr_t next_{kNullPtr};
 
-  /// metadata of a lowest key or a first record in a delta node
+  /// metadata of a lowest key or a first record in a delta record.
   Metadata low_meta_{kPageSize, 0, 0};
 
-  /// metadata of a highest key or a second record in a delta node
+  /// metadata of a highest key.
   Metadata high_meta_{kPageSize, 0, 0};
 
   /// an actual data block (it starts with record metadata).
