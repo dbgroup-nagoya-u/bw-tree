@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_VARLEN_METADATA_HPP
-#define BW_TREE_VARLEN_METADATA_HPP
+#ifndef BW_TREE_COMPONENT_VARLEN_METADATA_HPP
+#define BW_TREE_COMPONENT_VARLEN_METADATA_HPP
 
-#include "bw_tree/common/common.hpp"
+#include "bw_tree/component/common.hpp"
 
 namespace dbgroup::index::bw_tree::component::varlen
 {
@@ -159,4 +159,4 @@ class Metadata
 
 }  // namespace dbgroup::index::bw_tree::component::varlen
 
-#endif  // BW_TREE_VARLEN_METADATA_HPP
+#endif  // BW_TREE_COMPONENT_VARLEN_METADATA_HPP

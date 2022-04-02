@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_COMMON_CONSOLIDATE_INFO_HPP
-#define BW_TREE_COMMON_CONSOLIDATE_INFO_HPP
+#ifndef BW_TREE_COMPONENT_CONSOLIDATE_INFO_HPP
+#define BW_TREE_COMPONENT_CONSOLIDATE_INFO_HPP
 
 #include "common.hpp"
 
@@ -78,4 +78,4 @@ struct ConsolidateInfo {
 
 }  // namespace dbgroup::index::bw_tree::component
 
-#endif  // BW_TREE_COMMON_CONSOLIDATE_INFO_HPP
+#endif  // BW_TREE_COMPONENT_CONSOLIDATE_INFO_HPP

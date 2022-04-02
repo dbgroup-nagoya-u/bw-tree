@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_BW_TREE_FIXLEN_HPP
-#define BW_TREE_BW_TREE_FIXLEN_HPP
+#ifndef BW_TREE_COMPONENT_BW_TREE_INTERNAL_HPP
+#define BW_TREE_COMPONENT_BW_TREE_INTERNAL_HPP
 
 #include <functional>
 #include <memory>
@@ -23,13 +23,12 @@
 #include <utility>
 #include <vector>
 
-#include "common/logical_id.hpp"
-#include "common/mapping_table.hpp"
-#include "fixlen/delta_record.hpp"
-#include "fixlen/node.hpp"
+#include "consolidate_info.hpp"
+#include "logical_id.hpp"
+#include "mapping_table.hpp"
 #include "memory/epoch_based_gc.hpp"
 
-namespace dbgroup::index::bw_tree
+namespace dbgroup::index::bw_tree::component
 {
 /**
  * @brief A class to represent Bw-tree.
@@ -38,206 +37,17 @@ namespace dbgroup::index::bw_tree
  * @tparam Payload a target payload class.
  * @tparam Comp a comparetor class for keys.
  */
-template <class Key, class Payload, class Comp = ::std::less<Key>>
-class BwTreeFixLen
+template <class Key, class Payload, class Node_t, class Delta_t, class Iterator_t, bool kIsVarLen>
+class BwTree
 {
   /*####################################################################################
    * Type aliases
    *##################################################################################*/
 
-  using NodeType = component::NodeType;
-  using DeltaType = component::DeltaType;
-  using DeltaRC = component::DeltaRC;
-  using SMOStatus = component::SMOStatus;
-  using LogicalID = component::LogicalID;
-  using ConsolidateInfo = component::ConsolidateInfo;
-  using Node_t = component::fixlen::Node<Key, Comp>;
-  using Delta_t = component::fixlen::DeltaRecord<Key, Comp>;
-  using MappingTable_t = component::MappingTable<Node_t, Delta_t>;
+  using MappingTable_t = MappingTable<Node_t, Delta_t>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t, Delta_t>;
 
  public:
-  /*####################################################################################
-   * Public internal classes
-   *##################################################################################*/
-
-  /**
-   * @brief A class to represent a iterator for scan results.
-   *
-   * @tparam Key a target key class
-   * @tparam Payload a target payload class
-   * @tparam Comp a key-comparator class
-   */
-  class RecordIterator
-  {
-    using BwTree_t = BwTreeFixLen<Key, Payload, Comp>;
-
-   public:
-    /*##################################################################################
-     * Public constructors and assignment operators
-     *################################################################################*/
-
-    RecordIterator(  //
-        BwTree_t *bw_tree,
-        NodeGC_t *gc,
-        Node_t *node,
-        size_t begin_pos,
-        size_t end_pos,
-        const std::optional<std::pair<const Key &, bool>> end_key,
-        const bool is_end)
-        : bw_tree_{bw_tree},
-          gc_{gc},
-          node_{node},
-          record_count_{end_pos},
-          current_pos_{begin_pos},
-          end_key_{std::move(end_key)},
-          is_end_{is_end}
-    {
-    }
-
-    RecordIterator(  //
-        Node_t *node,
-        size_t begin_pos,
-        size_t end_pos,
-        const bool is_end)
-        : node_{node}, record_count_{end_pos}, current_pos_{begin_pos}, is_end_{is_end}
-    {
-    }
-
-    RecordIterator(const RecordIterator &) = delete;
-    RecordIterator(RecordIterator &&) = delete;
-
-    auto operator=(const RecordIterator &) -> RecordIterator & = delete;
-
-    constexpr auto
-    operator=(RecordIterator &&obj) noexcept  //
-        -> RecordIterator &
-    {
-      node_ = obj.node_;
-      obj.node_ = nullptr;
-      record_count_ = obj.record_count_;
-      current_pos_ = obj.current_pos_;
-      is_end_ = obj.is_end_;
-
-      return *this;
-    }
-
-    /*##################################################################################
-     * Public destructors
-     *################################################################################*/
-
-    ~RecordIterator()
-    {
-      if (node_ != nullptr) {
-        gc_->AddGarbage(node_);
-      }
-    }
-
-    /*##################################################################################
-     * Public operators for iterators
-     *################################################################################*/
-
-    /**
-     * @return a current key and payload pair.
-     */
-    auto
-    operator*() const  //
-        -> std::pair<const Key &, Payload>
-    {
-      return {GetKey(), GetPayload()};
-    }
-
-    /**
-     * @brief Forward this iterator.
-     *
-     */
-    constexpr void
-    operator++()
-    {
-      ++current_pos_;
-    }
-
-    /*##################################################################################
-     * Public getters/setters
-     *################################################################################*/
-
-    /**
-     * @brief Check if there are any records left.
-     *
-     * Note that this may call a scan function internally to get a sibling node.
-     *
-     * @retval true if there are any records or next node left.
-     * @retval false otherwise.
-     */
-    [[nodiscard]] auto
-    HasNext()  //
-        -> bool
-    {
-      while (true) {
-        if (current_pos_ < record_count_) return true;  // records remain in this node
-        if (is_end_) return false;                      // this node is the end of range-scan
-
-        // go to the next sibling node and continue scanning
-        const auto &next_key = node_->GetHighKey();
-        auto *sib_page = node_->template GetNext<LogicalID *>();
-        *this = bw_tree_->SiblingScan(sib_page, node_, *next_key, end_key_);
-      }
-    }
-
-    /**
-     * @return Key: a key of a current record
-     */
-    [[nodiscard]] auto
-    GetKey() const  //
-        -> const Key &
-    {
-      return node_->GetKey(current_pos_);
-    }
-
-    /**
-     * @return Payload: a payload of a current record
-     */
-    [[nodiscard]] auto
-    GetPayload() const  //
-        -> Payload
-    {
-      return node_->template GetPayload<Payload>(current_pos_);
-    }
-
-   private:
-    /*##################################################################################
-     * Internal member variables
-     *################################################################################*/
-
-    /// a pointer to BwTree to perform continuous scan
-    BwTree_t *bw_tree_{nullptr};
-
-    /// garbage collector
-    NodeGC_t *gc_{nullptr};
-
-    /// the pointer to a node that includes partial scan results
-    Node_t *node_{nullptr};
-
-    /// the number of records in this node.
-    size_t record_count_{0};
-
-    /// an index of a current record
-    size_t current_pos_{0};
-
-    /// the end key given from a user
-    std::optional<std::pair<const Key &, bool>> end_key_{};
-
-    bool is_end_{true};
-  };
-
-  /*####################################################################################
-   * Public constants
-   *##################################################################################*/
-
-  static constexpr size_t kDefaultGCTime = 100000;
-
-  static constexpr size_t kDefaultGCThreadNum = 1;
-
   /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/
@@ -247,9 +57,9 @@ class BwTreeFixLen
    *
    * @param gc_interval_microsec GC internal [us]
    */
-  explicit BwTreeFixLen(  //
+  explicit BwTree(  //
       const size_t gc_interval_microsec,
-      const size_t gc_thread_num = kDefaultGCThreadNum)
+      const size_t gc_thread_num)
       : gc_{gc_interval_microsec, gc_thread_num, true}
   {
     // create an empty Bw-tree
@@ -259,11 +69,11 @@ class BwTreeFixLen
     root_.store(root_lid, std::memory_order_relaxed);
   }
 
-  BwTreeFixLen(const BwTreeFixLen &) = delete;
-  BwTreeFixLen(BwTreeFixLen &&) = delete;
+  BwTree(const BwTree &) = delete;
+  BwTree(BwTree &&) = delete;
 
-  BwTreeFixLen &operator=(const BwTreeFixLen &) = delete;
-  BwTreeFixLen &operator=(BwTreeFixLen &&) = delete;
+  auto operator=(const BwTree &) -> BwTree & = delete;
+  auto operator=(BwTree &&) -> BwTree & = delete;
 
   /*####################################################################################
    * Public destructors
@@ -273,7 +83,7 @@ class BwTreeFixLen
    * @brief Destroy the BwTree object.
    *
    */
-  ~BwTreeFixLen() = default;
+  ~BwTree() = default;
 
   /*####################################################################################
    * Public read APIs
@@ -331,7 +141,11 @@ class BwTreeFixLen
           const auto *node = reinterpret_cast<Node_t *>(out_ptr);
           std::tie(rc, out_ptr) = node->SearchRecord(key);
           if (rc == kKeyExist) {
-            payload = node->template GetPayload<Payload>(out_ptr);
+            if constexpr (kIsVarLen) {
+              payload = node->template GetPayload<Payload>(node->GetMetadata(out_ptr));
+            } else {
+              payload = node->template GetPayload<Payload>(out_ptr);
+            }
           }
         }
       }
@@ -358,7 +172,7 @@ class BwTreeFixLen
   Scan(  //
       const std::optional<std::pair<const Key &, bool>> &begin_key = std::nullopt,
       const std::optional<std::pair<const Key &, bool>> &end_key = std::nullopt)  //
-      -> RecordIterator
+      -> Iterator_t
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
@@ -383,7 +197,32 @@ class BwTreeFixLen
     // check the end position of scanning
     const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
 
-    return RecordIterator{this, &gc_, node, begin_pos, end_pos, end_key, is_end};
+    return Iterator_t{this, &gc_, node, begin_pos, end_pos, end_key, is_end};
+  }
+
+  /**
+   * @brief Consolidate a leaf node for range scanning.
+   *
+   * @param node the target node.
+   * @retval the pointer to consolidated leaf node
+   */
+  auto
+  SiblingScan(  //
+      LogicalID *sib_lid,
+      Node_t *node,
+      const Key &begin_key,
+      const std::optional<std::pair<const Key &, bool>> &end_key)  //
+      -> Iterator_t
+  {
+    // consolidate a sibling node
+    std::vector<LogicalID *> stack{sib_lid};
+    stack.reserve(kExpectedTreeHeight);
+    const auto begin_pos = ConsolidateForScan(node, begin_key, !kClosed, stack);
+
+    // check the end position of scanning
+    const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
+
+    return Iterator_t{node, begin_pos, end_pos, is_end};
   }
 
   /*####################################################################################
@@ -402,12 +241,15 @@ class BwTreeFixLen
    *
    * @param key a target key to be written.
    * @param payload a target payload to be written.
+   * @param key_len the length of a target key.
+   * @param pay_len the length of a target payload.
    * @return kSuccess.
    */
   auto
   Write(  //
       const Key &key,
-      const Payload &payload)  //
+      const Payload &payload,
+      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
@@ -417,7 +259,12 @@ class BwTreeFixLen
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
-    auto *insert_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, payload};
+    Delta_t *insert_d{};
+    if constexpr (kIsVarLen) {
+      insert_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload};
+    } else {
+      insert_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, payload};
+    }
     while (true) {
       // check whether the target node includes incomplete SMOs
       const auto *head = GetHead(key, kClosed, stack);
@@ -447,13 +294,16 @@ class BwTreeFixLen
    *
    * @param key a target key to be written.
    * @param payload a target payload to be written.
+   * @param key_length the length of a target key.
+   * @param payload_length the length of a target payload.
    * @retval.kSuccess if inserted.
    * @retval kKeyExist if a specified key exists.
    */
   ReturnCode
   Insert(  //
       const Key &key,
-      const Payload &payload)
+      const Payload &payload,
+      [[maybe_unused]] const size_t key_len = sizeof(Key))
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
@@ -462,7 +312,12 @@ class BwTreeFixLen
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
-    auto *insert_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, payload};
+    Delta_t *insert_d{};
+    if constexpr (kIsVarLen) {
+      insert_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload};
+    } else {
+      insert_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, payload};
+    }
     auto rc = kSuccess;
     while (true) {
       // check target record's existence and get a head pointer
@@ -498,13 +353,16 @@ class BwTreeFixLen
    *
    * @param key a target key to be written.
    * @param payload a target payload to be written.
+   * @param key_length the length of a target key.
+   * @param payload_length the length of a target payload.
    * @retval kSuccess if updated.
    * @retval kKeyNotExist if a specified key does not exist.
    */
   ReturnCode
   Update(  //
       const Key &key,
-      const Payload &payload)
+      const Payload &payload,
+      [[maybe_unused]] const size_t key_len = sizeof(Key))
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
@@ -513,7 +371,12 @@ class BwTreeFixLen
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
-    auto *modify_d = new (GetRecPage()) Delta_t{DeltaType::kModify, key, payload};
+    Delta_t *modify_d{};
+    if constexpr (kIsVarLen) {
+      modify_d = new (GetRecPage()) Delta_t{DeltaType::kModify, key, key_len, payload};
+    } else {
+      modify_d = new (GetRecPage()) Delta_t{DeltaType::kModify, key, payload};
+    }
     auto rc = kSuccess;
     while (true) {
       // check target record's existence and get a head pointer
@@ -548,11 +411,14 @@ class BwTreeFixLen
    * bytes.
    *
    * @param key a target key to be written.
+   * @param key_len the length of a target key.
    * @retval kSuccess if deleted.
    * @retval kKeyNotExist if a specified key does not exist.
    */
   auto
-  Delete(const Key &key)  //
+  Delete(  //
+      const Key &key,
+      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
@@ -562,7 +428,12 @@ class BwTreeFixLen
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
-    auto *delete_d = new (GetRecPage()) Delta_t{key};
+    Delta_t *delete_d{};
+    if constexpr (kIsVarLen) {
+      delete_d = new (GetRecPage()) Delta_t{key, key_len};
+    } else {
+      delete_d = new (GetRecPage()) Delta_t{key};
+    }
     auto rc = kSuccess;
     while (true) {
       // check target record's existence and get a head pointer
@@ -595,11 +466,9 @@ class BwTreeFixLen
 
   static constexpr size_t kHeaderLength = sizeof(Node_t);
 
-  static constexpr size_t kDeltaRecLength = kHeaderLength + sizeof(Payload);
+  static constexpr size_t kDeltaRecLength = Delta_t::template GetMaxDeltaSize<Payload>();
 
-  static constexpr auto kClosed = component::kClosed;
-
-  static constexpr auto kIsScan = true;
+  static constexpr bool kIsScan = true;
 
   enum SMOsRC
   {
@@ -922,31 +791,6 @@ class BwTreeFixLen
     return (rc == kKeyNotExist || closed) ? pos : pos + 1;
   }
 
-  /**
-   * @brief Consolidate a leaf node for range scanning.
-   *
-   * @param node the target node.
-   * @retval the pointer to consolidated leaf node
-   */
-  auto
-  SiblingScan(  //
-      LogicalID *sib_lid,
-      Node_t *node,
-      const Key &begin_key,
-      const std::optional<std::pair<const Key &, bool>> &end_key)  //
-      -> RecordIterator
-  {
-    // consolidate a sibling node
-    std::vector<LogicalID *> stack{sib_lid};
-    stack.reserve(kExpectedTreeHeight);
-    const auto begin_pos = ConsolidateForScan(node, begin_key, !kClosed, stack);
-
-    // check the end position of scanning
-    const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
-
-    return RecordIterator{node, begin_pos, end_pos, is_end};
-  }
-
   /*####################################################################################
    * Internal structure modifications
    *##################################################################################*/
@@ -1021,46 +865,82 @@ class BwTreeFixLen
       -> SMOsRC
   {
     constexpr auto kIsLeaf = !std::is_same_v<T, LogicalID *>;
-
-    // sort delta records
-    std::vector<const void *> records{};
-    std::vector<ConsolidateInfo> consol_info{};
-    records.reserve(kMaxDeltaNodeNum * 4);
-    consol_info.reserve(kMaxDeltaNodeNum);
-    const auto [consolidated, diff] = head->template Sort<T>(records, consol_info);
-    if (consolidated) return kAlreadyConsolidated;
-
-    // calculate the size a consolidated node
-    const auto rec_num = Node_t::template PreConsolidate<kIsLeaf>(consol_info) + diff;
     size_t size{};
-    if constexpr (kIsLeaf) {
-      size = kHeaderLength + rec_num * (sizeof(Key) + sizeof(T));
-    } else {
-      size = (kHeaderLength - sizeof(Key)) + rec_num * (sizeof(Key) + sizeof(T));
-    }
     bool do_split = false;
-    if (!is_scan && size > kPageSize) {
-      do_split = true;
-      size = size / 2 + (kHeaderLength / 2);
-    }
 
-    // prepare a page for a new node
-    void *page{};
-    if (consol_node == nullptr) {
-      page = GetNodePage(size);
-    } else if (size > kPageSize) {
-      page = GetNodePage(size);
-      AddToGC(consol_node);
-    } else {
-      page = consol_node;
-    }
+    if constexpr (kIsVarLen) {
+      // sort delta records
+      std::vector<std::pair<Key, const void *>> records{};
+      std::vector<ConsolidateInfo> consol_info{};
+      records.reserve(kMaxDeltaNodeNum * 4);
+      consol_info.reserve(kMaxDeltaNodeNum);
+      const auto [consolidated, diff] = head->template Sort<T>(records, consol_info);
+      if (consolidated) return kAlreadyConsolidated;
 
-    // consolidate a target node
-    consol_node = new (page) Node_t{kIsLeaf, size};
-    if constexpr (kIsLeaf) {
-      consol_node->template LeafConsolidate<T>(consol_info, records, do_split);
+      // calculate the size a consolidated node
+      size = kHeaderLength + Node_t::PreConsolidate(consol_info, kIsLeaf) + diff;
+      if (!is_scan && size > kPageSize) {
+        do_split = true;
+        size = size / 2 + (kHeaderLength / 2);
+      }
+
+      // prepare a page for a new node
+      void *page{};
+      if (consol_node == nullptr) {
+        page = GetNodePage(size);
+      } else if (size > kPageSize) {
+        page = GetNodePage(size);
+        AddToGC(consol_node);
+      } else {
+        page = consol_node;
+      }
+
+      // consolidate a target node
+      consol_node = new (page) Node_t{kIsLeaf, size};
+      if constexpr (kIsLeaf) {
+        consol_node->template LeafConsolidate<T>(consol_info, records, do_split);
+      } else {
+        consol_node->InternalConsolidate(consol_info, records, do_split);
+      }
     } else {
-      consol_node->InternalConsolidate(consol_info, records, do_split);
+      // sort delta records
+      std::vector<const void *> records{};
+      std::vector<ConsolidateInfo> consol_info{};
+      records.reserve(kMaxDeltaNodeNum * 4);
+      consol_info.reserve(kMaxDeltaNodeNum);
+      const auto [consolidated, diff] = head->template Sort<T>(records, consol_info);
+      if (consolidated) return kAlreadyConsolidated;
+
+      // calculate the size a consolidated node
+      const auto rec_num = Node_t::PreConsolidate(consol_info, kIsLeaf) + diff;
+      if constexpr (kIsLeaf) {
+        size = kHeaderLength + rec_num * (sizeof(Key) + sizeof(T));
+      } else {
+        size = (kHeaderLength - sizeof(Key)) + rec_num * (sizeof(Key) + sizeof(T));
+      }
+      if (!is_scan && size > kPageSize) {
+        do_split = true;
+        size = size / 2 + (kHeaderLength / 2);
+      }
+
+      // prepare a page for a new node
+      void *page{};
+      if (consol_node == nullptr) {
+        page = GetNodePage(size);
+      } else if (size > kPageSize) {
+        page = GetNodePage(size);
+        AddToGC(consol_node);
+      } else {
+        page = consol_node;
+      }
+
+      // consolidate a target node
+      consol_node = new (page) Node_t{kIsLeaf, size};
+      if constexpr (kIsLeaf) {
+        consol_node->template LeafConsolidate<T>(consol_info, records, do_split);
+      } else {
+        consol_node->InternalConsolidate(consol_info, records, do_split);
+      }
     }
 
     if (do_split) return kTrySplit;
@@ -1208,7 +1088,7 @@ class BwTreeFixLen
     // insert a merge delta into the left sibling node
     auto *merge_d = new (GetRecPage()) Delta_t{DeltaType::kMerge, removed_node, removed_lid};
     while (true) {  // continue until insertion succeeds
-      const auto sib_head = GetHead(low_key, kClosed, stack);
+      const auto *sib_head = GetHead(low_key, kClosed, stack);
       merge_d->SetNext(sib_head);
       if (stack.back()->CASWeak(sib_head, merge_d)) break;
     }
@@ -1324,12 +1204,12 @@ class BwTreeFixLen
   MappingTable_t mapping_table_{};
 
   /// garbage collector
-  NodeGC_t gc_{kDefaultGCTime, kDefaultGCThreadNum, true};
+  NodeGC_t gc_{};
 
   /// a page ID to be consolidated
   inline static thread_local LogicalID *consol_page_{};  // NOLINT
 };
 
-}  // namespace dbgroup::index::bw_tree
+}  // namespace dbgroup::index::bw_tree::component
 
-#endif  // BW_TREE_BW_TREE_FIXLEN_HPP
+#endif  // BW_TREE_COMPONENT_BW_TREE_INTERNAL_HPP

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_COMMON_LOGICAL_ID_HPP
-#define BW_TREE_COMMON_LOGICAL_ID_HPP
+#ifndef BW_TREE_COMPONENT_LOGICAL_ID_HPP
+#define BW_TREE_COMPONENT_LOGICAL_ID_HPP
 
 #include <atomic>
 
@@ -189,4 +189,4 @@ class LogicalID
 
 }  // namespace dbgroup::index::bw_tree::component
 
-#endif  // BW_TREE_COMMON_LOGICAL_ID_HPP
+#endif  // BW_TREE_COMPONENT_LOGICAL_ID_HPP

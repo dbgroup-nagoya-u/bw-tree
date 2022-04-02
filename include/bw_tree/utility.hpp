@@ -32,6 +32,10 @@ namespace dbgroup::index::bw_tree
 /// Assumes that one word is represented by 8 bytes
 constexpr size_t kWordSize = sizeof(uintptr_t);
 
+constexpr size_t kDefaultGCTime = 100000;
+
+constexpr size_t kDefaultGCThreadNum = 1;
+
 /*######################################################################################
  * Tuning parameters for Bw-tree
  *####################################################################################*/

@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_FIXLEN_NODE_HPP
-#define BW_TREE_FIXLEN_NODE_HPP
+#ifndef BW_TREE_COMPONENT_FIXLEN_NODE_HPP
+#define BW_TREE_COMPONENT_FIXLEN_NODE_HPP
 
 #include <optional>
 #include <utility>
 #include <vector>
 
-#include "bw_tree/common/common.hpp"
-#include "bw_tree/common/consolidate_info.hpp"
-#include "bw_tree/common/logical_id.hpp"
+#include "bw_tree/component/common.hpp"
+#include "bw_tree/component/consolidate_info.hpp"
+#include "bw_tree/component/logical_id.hpp"
 
 namespace dbgroup::index::bw_tree::component::fixlen
 {
@@ -304,9 +304,10 @@ class Node
     return {is_end, end_pos};
   }
 
-  template <bool kIsLeaf>
   [[nodiscard]] static auto
-  PreConsolidate(std::vector<ConsolidateInfo> &consol_info)  //
+  PreConsolidate(  //
+      std::vector<ConsolidateInfo> &consol_info,
+      const bool is_leaf)  //
       -> size_t
   {
     const auto end_pos = consol_info.size() - 1;
@@ -322,7 +323,7 @@ class Node
         rec_num = node->record_count_;
       } else {
         const auto [rc, pos] = node->SearchRecord(split_d->low_key_);
-        rec_num = (!kIsLeaf || rc == kKeyExist) ? pos + 1 : pos;
+        rec_num = (!is_leaf || rc == kKeyExist) ? pos + 1 : pos;
       }
 
       total_rec_num += rec_num;
@@ -715,4 +716,4 @@ class Node
 
 }  // namespace dbgroup::index::bw_tree::component::fixlen
 
-#endif  // BW_TREE_FIXLEN_NODE_HPP
+#endif  // BW_TREE_COMPONENT_FIXLEN_NODE_HPP

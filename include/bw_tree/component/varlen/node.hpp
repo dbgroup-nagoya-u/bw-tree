@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_VARLEN_NODE_HPP
-#define BW_TREE_VARLEN_NODE_HPP
+#ifndef BW_TREE_COMPONENT_VARLEN_NODE_HPP
+#define BW_TREE_COMPONENT_VARLEN_NODE_HPP
 
 #include <optional>
 #include <utility>
 #include <vector>
 
-#include "bw_tree/common/consolidate_info.hpp"
-#include "bw_tree/common/logical_id.hpp"
+#include "bw_tree/component/consolidate_info.hpp"
+#include "bw_tree/component/logical_id.hpp"
 #include "metadata.hpp"
 
 namespace dbgroup::index::bw_tree::component::varlen
@@ -934,4 +934,4 @@ class Node
 
 }  // namespace dbgroup::index::bw_tree::component::varlen
 
-#endif  // BW_TREE_VARLEN_NODE_HPP
+#endif  // BW_TREE_COMPONENT_VARLEN_NODE_HPP

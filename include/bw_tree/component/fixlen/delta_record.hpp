@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_FIXLEN_DELTA_RECORD_HPP
-#define BW_TREE_FIXLEN_DELTA_RECORD_HPP
+#ifndef BW_TREE_COMPONENT_FIXLEN_DELTA_RECORD_HPP
+#define BW_TREE_COMPONENT_FIXLEN_DELTA_RECORD_HPP
 
 #include <optional>
 #include <utility>
 #include <vector>
 
-#include "bw_tree/common/common.hpp"
-#include "bw_tree/common/consolidate_info.hpp"
-#include "bw_tree/common/logical_id.hpp"
+#include "bw_tree/component/common.hpp"
+#include "bw_tree/component/consolidate_info.hpp"
+#include "bw_tree/component/logical_id.hpp"
 
 namespace dbgroup::index::bw_tree::component::fixlen
 {
@@ -255,6 +255,20 @@ class DeltaRecord
   /*####################################################################################
    * Public utilities
    *##################################################################################*/
+
+  /**
+   * @brief Compute the maximum size of delta records with given template classes.
+   *
+   * @tparam Payload a class of payloads.
+   * @return the maximum size of delta records in bytes.
+   */
+  template <class Payload>
+  static constexpr auto
+  GetMaxDeltaSize()  //
+      -> size_t
+  {
+    return kHeaderLength + sizeof(Payload);
+  }
 
   [[nodiscard]] auto
   HasSameLowKeyWith(const Key &key) const  //
@@ -674,4 +688,4 @@ class DeltaRecord
 
 }  // namespace dbgroup::index::bw_tree::component::fixlen
 
-#endif  // BW_TREE_FIXLEN_DELTA_RECORD_HPP
+#endif  // BW_TREE_COMPONENT_FIXLEN_DELTA_RECORD_HPP
