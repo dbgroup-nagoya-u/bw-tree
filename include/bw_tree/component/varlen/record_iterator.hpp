@@ -31,15 +31,21 @@ namespace dbgroup::index::bw_tree::component::varlen
  * @tparam Payload a target payload class
  * @tparam Comp a key-comparator class
  */
-template <class Key, class Payload, class Comp>
+template <class Key_t, class Payload_t, class Comp>
 class RecordIterator
 {
+ public:
+  /*####################################################################################
+   * Type aliases
+   *##################################################################################*/
+
+  using Key = Key_t;
+  using Payload = Payload_t;
   using Node_t = Node<Key, Comp>;
   using Delta_t = DeltaRecord<Key, Comp>;
-  using BwTree_t = BwTree<Key, Payload, Node_t, Delta_t, RecordIterator, kIsVarLen>;
+  using BwTree_t = BwTree<RecordIterator, kIsVarLen>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t, Delta_t>;
 
- public:
   /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/

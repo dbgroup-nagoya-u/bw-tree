@@ -154,7 +154,7 @@ class MappingTable
         if (rec == nullptr) continue;
 
         // delete delta records
-        while (!rec->IsBaseNode()) {
+        while (rec->GetDeltaType() != kNotDelta) {
           auto *next = rec->GetNext();
           delete rec;
           rec = next;

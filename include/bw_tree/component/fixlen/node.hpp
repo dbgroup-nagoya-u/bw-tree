@@ -47,7 +47,7 @@ class Node
    * @brief Construct an initial root node.
    *
    */
-  constexpr Node() : node_type_{kLeaf}, delta_type_{kNotDelta}, has_low_key_{0}, has_high_key_{0} {}
+  constexpr Node() : is_leaf_{kLeaf}, delta_type_{kNotDelta}, has_low_key_{0}, has_high_key_{0} {}
 
   /**
    * @brief Construct a new root node.
@@ -58,7 +58,7 @@ class Node
   Node(  //
       const Node *split_d,
       const LogicalID *left_lid)
-      : node_type_{kInternal},
+      : is_leaf_{kInternal},
         delta_type_{kNotDelta},
         has_low_key_{0},
         has_high_key_{0},
@@ -77,7 +77,7 @@ class Node
   Node(  //
       const bool node_type,
       const size_t node_size)
-      : node_type_{static_cast<NodeType>(node_type)},
+      : is_leaf_{static_cast<NodeType>(node_type)},
         delta_type_{kNotDelta},
         has_low_key_{0},
         has_high_key_{0},
@@ -113,7 +113,7 @@ class Node
   IsLeaf() const  //
       -> bool
   {
-    return node_type_ == kLeaf;
+    return is_leaf_ == kLeaf;
   }
 
   /**
@@ -227,7 +227,7 @@ class Node
       -> std::pair<ReturnCode, size_t>
   {
     int64_t end_pos{};
-    if (node_type_ == kLeaf) {
+    if (is_leaf_ == kLeaf) {
       end_pos = record_count_ - 1;
     } else if (!has_high_key_ || Comp{}(key, high_key_)) {
       end_pos = record_count_ - 2;
@@ -681,7 +681,7 @@ class Node
    *##################################################################################*/
 
   /// a flag to indicate whether this node is a leaf or internal node.
-  uint16_t node_type_ : 1;
+  uint16_t is_leaf_ : 1;
 
   /// a flag to indicate the types of a delta node.
   uint16_t delta_type_ : 3;

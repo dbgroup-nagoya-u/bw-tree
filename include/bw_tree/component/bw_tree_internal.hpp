@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "consolidate_info.hpp"
+#include "delta_chain.hpp"
 #include "logical_id.hpp"
 #include "mapping_table.hpp"
 #include "memory/epoch_based_gc.hpp"
@@ -37,17 +38,23 @@ namespace dbgroup::index::bw_tree::component
  * @tparam Payload a target payload class.
  * @tparam Comp a comparetor class for keys.
  */
-template <class Key, class Payload, class Node_t, class Delta_t, class Iterator_t, bool kIsVarLen>
+template <class Iterator_t, bool kIsVarLen>
 class BwTree
 {
+ public:
   /*####################################################################################
    * Type aliases
    *##################################################################################*/
 
+  using Key = typename Iterator_t::Key;
+  using Payload = typename Iterator_t::Payload;
+  using DeltaType = component::DeltaType;
+  using Node_t = typename Iterator_t::Node_t;
+  using Delta_t = typename Iterator_t::Delta_t;
   using MappingTable_t = MappingTable<Node_t, Delta_t>;
+  using DC = DeltaChain<Delta_t>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t, Delta_t>;
 
- public:
   /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/
@@ -114,7 +121,7 @@ class BwTree
       // check whether the node is active and has a target key
       const auto *head = LoadValidHead(key, kClosed, stack);
       size_t delta_num = 0;
-      switch (uintptr_t out_ptr{}; head->SearchRecord(key, out_ptr, delta_num)) {
+      switch (uintptr_t out_ptr{}; DC::SearchRecord(head, key, out_ptr, delta_num)) {
         case DeltaRC::kRecordFound:
           rc = kKeyExist;
           payload = reinterpret_cast<Delta_t *>(out_ptr)->template GetPayload<Payload>();
@@ -515,15 +522,15 @@ class BwTree
 
     // delete delta records
     const auto *garbage = reinterpret_cast<const Delta_t *>(ptr);
-    while (!garbage->IsBaseNode()) {
+    while (garbage->GetDeltaType() != kNotDelta) {
       // register this delta record with GC
       gc_.AddGarbage(garbage);
 
       // if the delta record is merge-delta, delete the merged sibling node
-      if (garbage->IsMergeDelta()) {
+      if (garbage->GetDeltaType() == kMerge) {
         auto *sib_lid = garbage->template GetPayload<LogicalID *>();
         const auto *remove_d = sib_lid->template Load<Delta_t *>();
-        if (remove_d->IsRemoveNodeDelta()) {  // check merging is not aborted
+        if (remove_d->GetDeltaType() == kRemoveNode) {  // check merging is not aborted
           sib_lid->Clear();
           AddToGC(remove_d);
         }
@@ -552,7 +559,7 @@ class BwTree
     for (uintptr_t out_ptr{}; true;) {
       size_t delta_num = 0;
       const auto *head = LoadValidHead(key, closed, stack);
-      switch (head->SearchChildNode(key, closed, out_ptr, delta_num)) {
+      switch (DC::SearchChildNode(head, key, closed, out_ptr, delta_num)) {
         case DeltaRC::kRecordFound:
           stack.emplace_back(reinterpret_cast<LogicalID *>(out_ptr));
           return;
@@ -630,7 +637,7 @@ class BwTree
     while (true) {
       auto *root_lid = root_.load(std::memory_order_relaxed);
       const auto *root_d = root_lid->template Load<const Delta_t *>();
-      if (root_d != nullptr && !root_d->IsRemoveNodeDelta()) return root_lid;
+      if (root_d != nullptr && root_d->GetDeltaType() != kRemoveNode) return root_lid;
     }
   }
 
@@ -660,7 +667,7 @@ class BwTree
       const Delta_t *head,
       std::vector<LogicalID *> &stack)
   {
-    switch (head->GetSMOStatus()) {
+    switch (DC::GetSMOStatus(head)) {
       case SMOStatus::kSplitMayIncomplete:
         // complete splitting and traverse to a sibling node
         CompleteSplit(head, stack);
@@ -694,7 +701,7 @@ class BwTree
 
       // check whether the node is active and can include a target key
       size_t delta_num = 0;
-      switch (head->Validate(key, closed, sib_lid, delta_num)) {
+      switch (DC::Validate(head, key, closed, sib_lid, delta_num)) {
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
           *stack.rbegin() = sib_lid;
@@ -733,7 +740,7 @@ class BwTree
 
       // check whether the node is active and has a target key
       size_t delta_num = 0;
-      switch (head->SearchRecord(key, out_ptr, delta_num)) {
+      switch (DC::SearchRecord(head, key, out_ptr, delta_num)) {
         case DeltaRC::kRecordFound:
           rc = kKeyExist;
           break;
@@ -864,83 +871,54 @@ class BwTree
       const bool is_scan = false)  //
       -> SMOsRC
   {
+    using Record = typename Delta_t::Record;
     constexpr auto kIsLeaf = !std::is_same_v<T, LogicalID *>;
+
+    // sort delta records
+    std::vector<Record> records{};
+    std::vector<ConsolidateInfo> consol_info{};
+    records.reserve(kMaxDeltaNodeNum * 4);
+    consol_info.reserve(kMaxDeltaNodeNum);
+    const auto [consolidated, diff] = DC::template Sort<T>(head, records, consol_info);
+    if (consolidated) return kAlreadyConsolidated;
+
+    // calculate the size of a consolidated node
     size_t size{};
-    bool do_split = false;
-
     if constexpr (kIsVarLen) {
-      // sort delta records
-      std::vector<std::pair<Key, const void *>> records{};
-      std::vector<ConsolidateInfo> consol_info{};
-      records.reserve(kMaxDeltaNodeNum * 4);
-      consol_info.reserve(kMaxDeltaNodeNum);
-      const auto [consolidated, diff] = head->template Sort<T>(records, consol_info);
-      if (consolidated) return kAlreadyConsolidated;
-
-      // calculate the size a consolidated node
       size = kHeaderLength + Node_t::PreConsolidate(consol_info, kIsLeaf) + diff;
-      if (!is_scan && size > kPageSize) {
-        do_split = true;
-        size = size / 2 + (kHeaderLength / 2);
-      }
-
-      // prepare a page for a new node
-      void *page{};
-      if (consol_node == nullptr) {
-        page = GetNodePage(size);
-      } else if (size > kPageSize) {
-        page = GetNodePage(size);
-        AddToGC(consol_node);
-      } else {
-        page = consol_node;
-      }
-
-      // consolidate a target node
-      consol_node = new (page) Node_t{kIsLeaf, size};
-      if constexpr (kIsLeaf) {
-        consol_node->template LeafConsolidate<T>(consol_info, records, do_split);
-      } else {
-        consol_node->InternalConsolidate(consol_info, records, do_split);
-      }
     } else {
-      // sort delta records
-      std::vector<const void *> records{};
-      std::vector<ConsolidateInfo> consol_info{};
-      records.reserve(kMaxDeltaNodeNum * 4);
-      consol_info.reserve(kMaxDeltaNodeNum);
-      const auto [consolidated, diff] = head->template Sort<T>(records, consol_info);
-      if (consolidated) return kAlreadyConsolidated;
-
-      // calculate the size a consolidated node
       const auto rec_num = Node_t::PreConsolidate(consol_info, kIsLeaf) + diff;
       if constexpr (kIsLeaf) {
         size = kHeaderLength + rec_num * (sizeof(Key) + sizeof(T));
       } else {
         size = (kHeaderLength - sizeof(Key)) + rec_num * (sizeof(Key) + sizeof(T));
       }
-      if (!is_scan && size > kPageSize) {
-        do_split = true;
-        size = size / 2 + (kHeaderLength / 2);
-      }
+    }
 
-      // prepare a page for a new node
-      void *page{};
-      if (consol_node == nullptr) {
-        page = GetNodePage(size);
-      } else if (size > kPageSize) {
-        page = GetNodePage(size);
-        AddToGC(consol_node);
-      } else {
-        page = consol_node;
-      }
+    // check whether splitting is needed
+    bool do_split = false;
+    if (!is_scan && size > kPageSize) {
+      do_split = true;
+      size = size / 2 + (kHeaderLength / 2);
+    }
 
-      // consolidate a target node
-      consol_node = new (page) Node_t{kIsLeaf, size};
-      if constexpr (kIsLeaf) {
-        consol_node->template LeafConsolidate<T>(consol_info, records, do_split);
-      } else {
-        consol_node->InternalConsolidate(consol_info, records, do_split);
-      }
+    // prepare a page for a new node
+    void *page{};
+    if (consol_node == nullptr) {
+      page = GetNodePage(size);
+    } else if (size > kPageSize) {
+      page = GetNodePage(size);
+      AddToGC(consol_node);
+    } else {
+      page = consol_node;
+    }
+
+    // consolidate a target node
+    consol_node = new (page) Node_t{kIsLeaf, size};
+    if constexpr (kIsLeaf) {
+      consol_node->template LeafConsolidate<T>(consol_info, records, do_split);
+    } else {
+      consol_node->InternalConsolidate(consol_info, records, do_split);
     }
 
     if (do_split) return kTrySplit;
@@ -1059,8 +1037,8 @@ class BwTree
     // if a parent node has the same lowest-key, the child is the leftmost node in it
     std::vector<LogicalID *> copied_stack{stack};
     copied_stack.pop_back();
-    const auto *parent = GetHead(*low_key, kClosed, copied_stack);
-    return !parent->HasSameLowKeyWith(*low_key);
+    const auto *parent_head = GetHead(*low_key, kClosed, copied_stack);
+    return !DC::HasSameLowKeyWith(parent_head, *low_key);
   }
 
   auto
@@ -1134,7 +1112,7 @@ class BwTree
       const auto *sib_head = GetHead(del_key, !kClosed, stack);
       if (cur_lid != stack.back()) {
         // the target node was split, so check whether the merged nodes span two parent nodes
-        if (sib_head->HasSameLowKeyWith(del_key)) {
+        if (DC::HasSameLowKeyWith(sib_head, del_key)) {
           // the merged nodes have different parent nodes, so abort
           AbortMerge(merge_d);
           break;
@@ -1155,7 +1133,7 @@ class BwTree
     // check this merging is still active
     auto *sib_lid = merge_d->template GetPayload<LogicalID *>();
     const auto *remove_d = sib_lid->template Load<Delta_t *>();
-    if (!remove_d->IsRemoveNodeDelta()) return;  // merging has been already aborted
+    if (remove_d->GetDeltaType() != kRemoveNode) return;  // merging has been already aborted
 
     // delete the remove-node delta to allow other threads to modify the node
     sib_lid->CASStrong(remove_d, remove_d->GetNext());

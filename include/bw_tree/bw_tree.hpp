@@ -27,17 +27,14 @@ namespace dbgroup::index::bw_tree
 template <class Key, class Payload, class Comp = ::std::less<Key>>
 class BwTreeVarLen
 {
+ public:
   /*####################################################################################
    * Type aliases
    *##################################################################################*/
 
-  using Node_t = component::varlen::Node<Key, Comp>;
-  using Delta_t = component::varlen::DeltaRecord<Key, Comp>;
   using Iterator_t = component::varlen::RecordIterator<Key, Payload, Comp>;
-  using BwTree_t =
-      component::BwTree<Key, Payload, Node_t, Delta_t, Iterator_t, component::kIsVarLen>;
+  using BwTree_t = component::BwTree<Iterator_t, component::kIsVarLen>;
 
- public:
   /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/
@@ -225,17 +222,14 @@ class BwTreeVarLen
 template <class Key, class Payload, class Comp = ::std::less<Key>>
 class BwTreeFixLen
 {
+ public:
   /*####################################################################################
    * Type aliases
    *##################################################################################*/
 
-  using Node_t = component::fixlen::Node<Key, Comp>;
-  using Delta_t = component::fixlen::DeltaRecord<Key, Comp>;
   using Iterator_t = component::fixlen::RecordIterator<Key, Payload, Comp>;
-  using BwTree_t =
-      component::BwTree<Key, Payload, Node_t, Delta_t, Iterator_t, !component::kIsVarLen>;
+  using BwTree_t = component::BwTree<Iterator_t, !component::kIsVarLen>;
 
- public:
   /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/
