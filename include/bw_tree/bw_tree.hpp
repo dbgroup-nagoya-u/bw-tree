@@ -18,8 +18,10 @@
 #define BW_TREE_BW_TREE_HPP
 
 #include "component/bw_tree_internal.hpp"
-#include "component/fixlen/record_iterator.hpp"
-#include "component/varlen/record_iterator.hpp"
+#include "component/fixlen/delta_record.hpp"
+#include "component/fixlen/node.hpp"
+#include "component/varlen/delta_record.hpp"
+#include "component/varlen/node.hpp"
 
 namespace dbgroup::index::bw_tree
 {
@@ -32,8 +34,10 @@ class BwTreeVarLen
    * Type aliases
    *##################################################################################*/
 
-  using Iterator_t = component::varlen::RecordIterator<Key, Payload, Comp>;
-  using BwTree_t = component::BwTree<Iterator_t, component::kIsVarLen>;
+  using Node_t = component::varlen::Node<Key, Comp>;
+  using Delta_t = component::varlen::DeltaRecord<Key, Comp>;
+  using BwTree_t = component::BwTree<Payload, Node_t, Delta_t, component::kIsVarLen>;
+  using Iterator_t = typename BwTree_t::RecordIterator;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -227,8 +231,10 @@ class BwTreeFixLen
    * Type aliases
    *##################################################################################*/
 
-  using Iterator_t = component::fixlen::RecordIterator<Key, Payload, Comp>;
-  using BwTree_t = component::BwTree<Iterator_t, !component::kIsVarLen>;
+  using Node_t = component::fixlen::Node<Key, Comp>;
+  using Delta_t = component::fixlen::DeltaRecord<Key, Comp>;
+  using BwTree_t = component::BwTree<Payload, Node_t, Delta_t, !component::kIsVarLen>;
+  using Iterator_t = typename BwTree_t::RecordIterator;
 
   /*####################################################################################
    * Public constructors and assignment operators

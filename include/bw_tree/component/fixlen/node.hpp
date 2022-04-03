@@ -107,24 +107,13 @@ class Node
 
   /**
    * @retval true if this is a leaf node.
-   * @retval false if this is an internal node.
+   * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
   IsLeaf() const  //
       -> bool
   {
     return is_leaf_ == kLeaf;
-  }
-
-  /**
-   * @retval true if this is a base node.
-   * @retval false if this is a delta record.
-   */
-  [[nodiscard]] constexpr auto
-  IsBaseNode() const  //
-      -> bool
-  {
-    return delta_type_ == kNotDelta;
   }
 
   /**
@@ -137,6 +126,14 @@ class Node
     return record_count_;
   }
 
+  /**
+   * @brief Get the next pointer of a delta record, a base node, or a logical ID.
+   *
+   * Note that this funcion returns a logical ID if this is a base node.
+   *
+   * @tparam T a expected class to be loaded.
+   * @return a pointer to the next object.
+   */
   template <class T = const Node *>
   [[nodiscard]] constexpr auto
   GetNext() const  //
@@ -146,23 +143,11 @@ class Node
   }
 
   /**
-   * @param meta metadata of a corresponding record.
-   * @return a target key.
-   */
-  [[nodiscard]] auto
-  GetKey(const size_t pos) const  //
-      -> const Key &
-  {
-    return keys_[pos];
-  }
-
-  /**
    * @brief Get the lowest key in this node.
    *
-   * This function assumes that the node has the lowest key (i.e., has a left sibling
-   * node) and does not check its existence.
+   * If this node is the leftmost node in its level, this returns std::nullopt.
    *
-   * @return the lowest key.
+   * @return the lowest key if exist.
    */
   [[nodiscard]] auto
   GetLowKey() const  //
@@ -172,18 +157,35 @@ class Node
     return low_key_;
   }
 
+  /**
+   * @brief Copy and return a highest key for scanning.
+   *
+   * NOTE: this function does not check the existence of a highest key.
+   *
+   * @return the highest key in this node.
+   */
   [[nodiscard]] auto
   GetHighKey() const  //
-      -> std::optional<Key>
+      -> Key
   {
-    if (!has_high_key_) return std::nullopt;
     return high_key_;
   }
 
   /**
+   * @param pos the position of a target record.
+   * @return a key in a target record.
+   */
+  [[nodiscard]] auto
+  GetKey(const size_t pos) const  //
+      -> const Key &
+  {
+    return keys_[pos];
+  }
+
+  /**
    * @tparam T a class of a target payload.
-   * @param meta metadata of a corresponding record.
-   * @return a target payload.
+   * @param pos the position of a target record.
+   * @return a payload in a target record.
    */
   template <class T>
   [[nodiscard]] auto
@@ -195,12 +197,34 @@ class Node
     return payload;
   }
 
+  /**
+   * @tparam T a class of a target payload.
+   * @param pos the position of a target record.
+   * @retval 1st: a key in a target record.
+   * @retval 2nd: a payload in a target record.
+   */
+  template <class T>
+  [[nodiscard]] auto
+  GetRecord(const size_t pos) const  //
+      -> std::pair<Key, T>
+  {
+    return {keys_[pos], GetPayload<T>(pos)};
+  }
+
+  /**
+   * @brief Get the leftmost child node.
+   *
+   * If this object is actually a delta record, this function traverses a delta-chain
+   * and returns the left most child from a base node.
+   *
+   * @return the logical ID of the leftmost child node.
+   */
   [[nodiscard]] auto
   GetLeftmostChild() const  //
       -> LogicalID *
   {
     const auto *cur = this;
-    for (; !cur->IsBaseNode(); cur = cur->template GetNext<const Node *>()) {
+    for (; cur->delta_type_ != kNotDelta; cur = cur->template GetNext<const Node *>()) {
       // go to the next delta record or base node
     }
 

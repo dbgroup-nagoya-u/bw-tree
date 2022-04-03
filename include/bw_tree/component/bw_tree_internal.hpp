@@ -36,9 +36,8 @@ namespace dbgroup::index::bw_tree::component
  *
  * @tparam Key a target key class.
  * @tparam Payload a target payload class.
- * @tparam Comp a comparetor class for keys.
  */
-template <class Iterator_t, bool kIsVarLen>
+template <class Payload, class Node_t, class Delta_t, bool kIsVarLen>
 class BwTree
 {
  public:
@@ -46,14 +45,208 @@ class BwTree
    * Type aliases
    *##################################################################################*/
 
-  using Key = typename Iterator_t::Key;
-  using Payload = typename Iterator_t::Payload;
+  using Key = typename Delta_t::Key;
   using DeltaType = component::DeltaType;
-  using Node_t = typename Iterator_t::Node_t;
-  using Delta_t = typename Iterator_t::Delta_t;
   using MappingTable_t = MappingTable<Node_t, Delta_t>;
   using DC = DeltaChain<Delta_t>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t, Delta_t>;
+
+  /*####################################################################################
+   * Public sub -classes
+   *##################################################################################*/
+
+  /**
+   * @brief A class for representing an iterator of scan results.
+   *
+   */
+  class RecordIterator
+  {
+   public:
+    /*##################################################################################
+     * Public constructors and assignment operators
+     *################################################################################*/
+
+    /**
+     * @brief Construct a new object as an initial iterator.
+     *
+     * @param bw_tree a pointer to an index.
+     * @param gc a garbage collector for useless nodes.
+     * @param node a copied node for scanning results.
+     * @param begin_pos the begin position of a current node.
+     * @param end_pos the end position of a current node.
+     * @param end_key an optional end-point key.
+     * @param is_end a flag for indicating a current node is rightmost in scan-range.
+     */
+    RecordIterator(  //
+        BwTree *bw_tree,
+        NodeGC_t *gc,
+        Node_t *node,
+        size_t begin_pos,
+        size_t end_pos,
+        const std::optional<std::pair<const Key &, bool>> end_key,
+        const bool is_end)
+        : bw_tree_{bw_tree},
+          gc_{gc},
+          node_{node},
+          record_count_{end_pos},
+          current_pos_{begin_pos},
+          end_key_{std::move(end_key)},
+          is_end_{is_end}
+    {
+    }
+
+    /**
+     * @brief Construct a new object for sibling scanning.
+     *
+     * @param node a copied node for scanning results.
+     * @param begin_pos the begin position of a current node.
+     * @param end_pos the end position of a current node.
+     * @param is_end a flag for indicating a current node is rightmost in scan-range.
+     */
+    RecordIterator(  //
+        Node_t *node,
+        size_t begin_pos,
+        size_t end_pos,
+        const bool is_end)
+        : node_{node}, record_count_{end_pos}, current_pos_{begin_pos}, is_end_{is_end}
+    {
+    }
+
+    RecordIterator(const RecordIterator &) = delete;
+    RecordIterator(RecordIterator &&) = delete;
+
+    auto operator=(const RecordIterator &) -> RecordIterator & = delete;
+
+    constexpr auto
+    operator=(RecordIterator &&obj) noexcept  //
+        -> RecordIterator &
+    {
+      node_ = obj.node_;
+      obj.node_ = nullptr;
+      record_count_ = obj.record_count_;
+      current_pos_ = obj.current_pos_;
+      is_end_ = obj.is_end_;
+
+      return *this;
+    }
+
+    /*##################################################################################
+     * Public destructors
+     *################################################################################*/
+
+    /**
+     * @brief Destroy the iterator and a retained node if exist.
+     *
+     */
+    ~RecordIterator()
+    {
+      if (node_ != nullptr) {
+        gc_->AddGarbage(node_);
+      }
+    }
+
+    /*##################################################################################
+     * Public operators for iterators
+     *################################################################################*/
+
+    /**
+     * @return a current key and payload pair.
+     */
+    auto
+    operator*() const  //
+        -> std::pair<Key, Payload>
+    {
+      return node_->template GetRecord<Payload>(current_pos_);
+    }
+
+    /**
+     * @brief Forward this iterator.
+     *
+     */
+    constexpr void
+    operator++()
+    {
+      ++current_pos_;
+    }
+
+    /*##################################################################################
+     * Public getters/setters
+     *################################################################################*/
+
+    /**
+     * @brief Check if there are any records left.
+     *
+     * NOTE: this may call a scanning function internally to get a sibling node.
+     *
+     * @retval true if there are any records or next node left.
+     * @retval false otherwise.
+     */
+    [[nodiscard]] auto
+    HasNext()  //
+        -> bool
+    {
+      while (true) {
+        if (current_pos_ < record_count_) return true;  // records remain in this node
+        if (is_end_) return false;                      // this node is the end of range-scan
+
+        // go to the next sibling node and continue scanning
+        const auto &next_key = node_->GetHighKey();
+        auto *sib_page = node_->template GetNext<LogicalID *>();
+        *this = bw_tree_->SiblingScan(sib_page, node_, next_key, end_key_);
+
+        if constexpr (kIsVarLen && IsVariableLengthData<Key>()) {
+          // release a dynamically allocated key
+          delete next_key;
+        }
+      }
+    }
+
+    /**
+     * @return a key of a current record
+     */
+    [[nodiscard]] auto
+    GetKey() const  //
+        -> Key
+    {
+      return node_->GetKey(current_pos_);
+    }
+
+    /**
+     * @return a payload of a current record
+     */
+    [[nodiscard]] auto
+    GetPayload() const  //
+        -> Payload
+    {
+      return node_->template GetPayload<Payload>(current_pos_);
+    }
+
+   private:
+    /*##################################################################################
+     * Internal member variables
+     *################################################################################*/
+
+    /// a pointer to a BwTree for sibling scanning.
+    BwTree *bw_tree_{nullptr};
+
+    /// garbage collector.
+    NodeGC_t *gc_{nullptr};
+
+    /// the pointer to a node that includes partial scan results.
+    Node_t *node_{nullptr};
+
+    /// the number of records in this node.
+    size_t record_count_{0};
+
+    /// the position of a current record.
+    size_t current_pos_{0};
+
+    /// the end key given from a user.
+    std::optional<std::pair<const Key &, bool>> end_key_{};
+
+    /// a flag for indicating a current node is rightmost in scan-range.
+    bool is_end_{true};
+  };
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -148,11 +341,7 @@ class BwTree
           const auto *node = reinterpret_cast<Node_t *>(out_ptr);
           std::tie(rc, out_ptr) = node->SearchRecord(key);
           if (rc == kKeyExist) {
-            if constexpr (kIsVarLen) {
-              payload = node->template GetPayload<Payload>(node->GetMetadata(out_ptr));
-            } else {
-              payload = node->template GetPayload<Payload>(out_ptr);
-            }
+            payload = node->template GetPayload<Payload>(out_ptr);
           }
         }
       }
@@ -179,7 +368,7 @@ class BwTree
   Scan(  //
       const std::optional<std::pair<const Key &, bool>> &begin_key = std::nullopt,
       const std::optional<std::pair<const Key &, bool>> &end_key = std::nullopt)  //
-      -> Iterator_t
+      -> RecordIterator
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
@@ -204,32 +393,7 @@ class BwTree
     // check the end position of scanning
     const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
 
-    return Iterator_t{this, &gc_, node, begin_pos, end_pos, end_key, is_end};
-  }
-
-  /**
-   * @brief Consolidate a leaf node for range scanning.
-   *
-   * @param node the target node.
-   * @retval the pointer to consolidated leaf node
-   */
-  auto
-  SiblingScan(  //
-      LogicalID *sib_lid,
-      Node_t *node,
-      const Key &begin_key,
-      const std::optional<std::pair<const Key &, bool>> &end_key)  //
-      -> Iterator_t
-  {
-    // consolidate a sibling node
-    std::vector<LogicalID *> stack{sib_lid};
-    stack.reserve(kExpectedTreeHeight);
-    const auto begin_pos = ConsolidateForScan(node, begin_key, !kClosed, stack);
-
-    // check the end position of scanning
-    const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
-
-    return Iterator_t{node, begin_pos, end_pos, is_end};
+    return RecordIterator{this, &gc_, node, begin_pos, end_pos, end_key, is_end};
   }
 
   /*####################################################################################
@@ -796,6 +960,31 @@ class BwTree
     const auto [rc, pos] = node->SearchRecord(begin_key);
 
     return (rc == kKeyNotExist || closed) ? pos : pos + 1;
+  }
+
+  /**
+   * @brief Consolidate a leaf node for range scanning.
+   *
+   * @param node the target node.
+   * @retval the pointer to consolidated leaf node
+   */
+  auto
+  SiblingScan(  //
+      LogicalID *sib_lid,
+      Node_t *node,
+      const Key &begin_key,
+      const std::optional<std::pair<const Key &, bool>> &end_key)  //
+      -> RecordIterator
+  {
+    // consolidate a sibling node
+    std::vector<LogicalID *> stack{sib_lid};
+    stack.reserve(kExpectedTreeHeight);
+    const auto begin_pos = ConsolidateForScan(node, begin_key, !kClosed, stack);
+
+    // check the end position of scanning
+    const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
+
+    return RecordIterator{node, begin_pos, end_pos, is_end};
   }
 
   /*####################################################################################

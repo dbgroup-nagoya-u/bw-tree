@@ -121,17 +121,6 @@ class Node
   }
 
   /**
-   * @retval true if this is a base node.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] constexpr auto
-  IsBaseNode() const  //
-      -> bool
-  {
-    return delta_type_ == kNotDelta;
-  }
-
-  /**
    * @return the number of records in this node.
    */
   [[nodiscard]] constexpr auto
@@ -158,34 +147,6 @@ class Node
   }
 
   /**
-   * @param position the position of record metadata to be get.
-   * @return record metadata.
-   */
-  [[nodiscard]] constexpr auto
-  GetMetadata(const size_t position) const  //
-      -> Metadata
-  {
-    return meta_array_[position];
-  }
-
-  /**
-   * @param meta metadata of a corresponding record.
-   * @return a target key.
-   */
-  [[nodiscard]] auto
-  GetKey(const Metadata meta) const  //
-      -> Key
-  {
-    if constexpr (IsVariableLengthData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(meta));
-    } else {
-      Key key{};
-      memcpy(&key, GetKeyAddr(meta), sizeof(Key));
-      return key;
-    }
-  }
-
-  /**
    * @brief Get the lowest key in this node.
    *
    * If this node is the leftmost node in its level, this returns std::nullopt.
@@ -201,18 +162,68 @@ class Node
   }
 
   /**
+   * @brief Copy and return a highest key for scanning.
+   *
+   * NOTE: this function does not check the existence of a highest key.
+   * NOTE: this function allocates memory dynamically for variable-length keys, so it
+   * must be released by the caller.
+   *
+   * @return the highest key in this node.
+   */
+  [[nodiscard]] auto
+  GetHighKey() const  //
+      -> Key
+  {
+    const auto key_len = high_meta_.GetKeyLength();
+
+    Key high_key{};
+    if constexpr (IsVariableLengthData<Key>()) {
+      high_key = reinterpret_cast<Key>(::operator new(key_len));
+      memcpy(high_key, GetKeyAddr(high_meta_), key_len);
+    } else {
+      memcpy(&high_key, GetKeyAddr(high_meta_), key_len);
+    }
+
+    return high_key;
+  }
+
+  /**
+   * @param pos the position of a target record.
+   * @return a key in a target record.
+   */
+  [[nodiscard]] auto
+  GetKey(const size_t pos) const  //
+      -> Key
+  {
+    return GetKey(meta_array_[pos]);
+  }
+
+  /**
    * @tparam T a class of a target payload.
-   * @param meta metadata of a corresponding record.
-   * @return a target payload.
+   * @param pos the position of a target record.
+   * @return a payload in a target record.
    */
   template <class T>
   [[nodiscard]] auto
-  GetPayload(const Metadata meta) const  //
+  GetPayload(const size_t pos) const  //
       -> T
   {
-    T payload{};
-    memcpy(&payload, GetPayloadAddr(meta), sizeof(T));
-    return payload;
+    return GetPayload<T>(meta_array_[pos]);
+  }
+
+  /**
+   * @tparam T a class of a target payload.
+   * @param pos the position of a target record.
+   * @retval 1st: a key in a target record.
+   * @retval 2nd: a payload in a target record.
+   */
+  template <class T>
+  [[nodiscard]] auto
+  GetRecord(const size_t pos) const  //
+      -> std::pair<Key, T>
+  {
+    const auto meta = meta_array_[pos];
+    return {GetKey(meta), GetPayload<T>(meta)};
   }
 
   /**
@@ -228,37 +239,12 @@ class Node
       -> LogicalID *
   {
     const auto *cur = this;
-    for (; !cur->IsBaseNode(); cur = cur->template GetNext<const Node *>()) {
+    for (; cur->delta_type_ != kNotDelta; cur = cur->template GetNext<const Node *>()) {
       // go to the next delta record or base node
     }
 
     // get a leftmost node
-    return cur->template GetPayload<LogicalID *>(cur->meta_array_[0]);
-  }
-
-  /**
-   * @brief Copy and return a highest key for scanning.
-   *
-   * This function allocates memory dynamically for variable-length keys, so it must be
-   * released by the caller.
-   *
-   * @return the highest key in this node.
-   */
-  [[nodiscard]] auto
-  CopyHighKey() const  //
-      -> Key
-  {
-    const auto key_len = high_meta_.GetKeyLength();
-
-    Key high_key{};
-    if constexpr (IsVariableLengthData<Key>()) {
-      high_key = reinterpret_cast<Key>(::operator new(key_len));
-      memcpy(high_key, GetKeyAddr(high_meta_), key_len);
-    } else {
-      memcpy(&high_key, GetKeyAddr(high_meta_), key_len);
-    }
-
-    return high_key;
+    return cur->template GetPayload<LogicalID *>(0);
   }
 
   /*####################################################################################
@@ -341,7 +327,7 @@ class Node
       }
     }
 
-    return GetPayload<LogicalID *>(meta_array_[begin_pos]);
+    return GetPayload<LogicalID *>(begin_pos);
   }
 
   /**
@@ -604,6 +590,23 @@ class Node
 
   /**
    * @param meta metadata of a corresponding record.
+   * @return a target key.
+   */
+  [[nodiscard]] auto
+  GetKey(const Metadata meta) const  //
+      -> Key
+  {
+    if constexpr (IsVariableLengthData<Key>()) {
+      return reinterpret_cast<Key>(GetKeyAddr(meta));
+    } else {
+      Key key{};
+      memcpy(&key, GetKeyAddr(meta), sizeof(Key));
+      return key;
+    }
+  }
+
+  /**
+   * @param meta metadata of a corresponding record.
    * @return an address of a target payload.
    */
   [[nodiscard]] constexpr auto
@@ -611,6 +614,21 @@ class Node
       -> void *
   {
     return ShiftAddr(this, meta.GetOffset() + meta.GetKeyLength());
+  }
+
+  /**
+   * @tparam T a class of a target payload.
+   * @param meta metadata of a corresponding record.
+   * @return a target payload.
+   */
+  template <class T>
+  [[nodiscard]] auto
+  GetPayload(const Metadata meta) const  //
+      -> T
+  {
+    T payload{};
+    memcpy(&payload, GetPayloadAddr(meta), sizeof(T));
+    return payload;
   }
 
   /**
