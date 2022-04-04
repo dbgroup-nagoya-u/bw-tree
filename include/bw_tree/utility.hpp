@@ -39,26 +39,6 @@ constexpr size_t kDefaultGCTime = 100000;
 constexpr size_t kDefaultGCThreadNum = 1;
 
 /*######################################################################################
- * Tuning parameters for Bw-tree
- *####################################################################################*/
-
-/// The default page size of each node
-constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
-
-/// The number of delta records for invoking consolidation
-constexpr size_t kMaxDeltaNodeNum = BW_TREE_MAX_DELTA_RECORD_NUM;
-
-/// The maximun size of variable-length data
-constexpr size_t kMaxVarDataSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
-
-/// The minimum size of nodes for invoking merging
-constexpr size_t kMinNodeSize = BW_TREE_MIN_NODE_SIZE;
-
-// Check whether the specified page size is valid
-static_assert(kPageSize % kWordSize == 0);
-static_assert(kMaxVarDataSize * 2 < kPageSize);
-
-/*######################################################################################
  * Utility enum and classes
  *####################################################################################*/
 
@@ -104,6 +84,38 @@ IsVariableLengthData()  //
 {
   return false;
 }
+
+/**
+ * @param val a target value.
+ * @return the binary logarithm of a given value.
+ */
+constexpr auto
+Log2(const size_t val)  //
+    -> size_t
+{
+  if (val == 0) return 0;
+  return (val == 1) ? 0 : Log2(val >> 1UL) + 1;
+}
+
+/*######################################################################################
+ * Tuning parameters for Bw-tree
+ *####################################################################################*/
+
+/// The default page size of each node
+constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
+
+/// The number of delta records for invoking consolidation
+constexpr size_t kMaxDeltaNodeNum = BW_TREE_MAX_DELTA_RECORD_NUM;
+
+/// The maximun size of variable-length data
+constexpr size_t kMaxVarDataSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
+
+/// The minimum size of nodes for invoking merging
+constexpr size_t kMinNodeSize = BW_TREE_MIN_NODE_SIZE;
+
+// Check whether the specified page size is valid
+static_assert(kPageSize % kWordSize == 0);
+static_assert(kMaxVarDataSize * 2 < kPageSize);
 
 }  // namespace dbgroup::index::bw_tree
 

@@ -2,7 +2,7 @@
 
 ![Ubuntu-20.04](https://github.com/dbgroup-nagoya-u/bw-tree/workflows/Ubuntu-20.04/badge.svg?branch=main)
 
-This repository is an open source implementation of a [Bw-tree](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/bw-tree-icde2013-final.pdf)[1] for research use. The purpose of this implementation is to reproduce a Bw-tree and measure its performance.
+This repository is an open source implementation of a [Bw-tree][https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/bw-tree-icde2013-final.pdf](1) for research use. The purpose of this implementation is to reproduce a Bw-tree and measure its performance.
 
 > [1] J. Levandoski, D. Lomet, S. Sengupta, "The Bw-Tree: A B-tree for New Hardware Platforms,” In Proc. ICDE, pp. 302-313, 2013.
 
@@ -20,8 +20,8 @@ sudo apt update && sudo apt install -y build-essential cmake
 
 #### Tuning Parameters
 
-- `BW_TREE_PAGE_SIZE`: invoking a split-operation if the size of a base page exceeds this threshold  (default `8192`).
-- `BW_TREE_MAX_DELTA_RECORD_NUM`: invoking consolidation if the number of delta records exceeds this threshold (default `8`).
+- `BW_TREE_PAGE_SIZE`: invoking a split-operation if the size of a base page exceeds this threshold  (default `1024`).
+- `BW_TREE_MAX_DELTA_RECORD_NUM`: invoking consolidation if the number of delta records exceeds this threshold (default `2 * Log2(${BW_TREE_PAGE_SIZE} / 256)`, i.e., `4`).
 - `BW_TREE_MIN_NODE_SIZE`: invoking a merge-operation if the size of a node becomes lower than this threshold (default `${BW_TREE_PAGE_SIZE} / 8`).
 - `BW_TREE_MAX_VARIABLE_DATA_SIZE`: the expected maximum size of a variable-length data in this library (default `128`).
 

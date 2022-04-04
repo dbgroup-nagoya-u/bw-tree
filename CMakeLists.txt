@@ -21,8 +21,8 @@ set(MEMORY_MANAGER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/memory-manag
 # Bw-tree's configurations
 #--------------------------------------------------------------------------------------#
 
-set(BW_TREE_PAGE_SIZE "8192" CACHE STRING "The default page size of each node.")
-set(BW_TREE_MAX_DELTA_RECORD_NUM "8" CACHE STRING "The number of delta records for invoking consolidation.")
+set(BW_TREE_PAGE_SIZE "1024" CACHE STRING "The default page size of each node.")
+set(BW_TREE_MAX_DELTA_RECORD_NUM "2 * Log2(${BW_TREE_PAGE_SIZE} / 256)" CACHE STRING "The number of delta records for invoking consolidation.")
 set(BW_TREE_MIN_NODE_SIZE "${BW_TREE_PAGE_SIZE} / 8" CACHE STRING "The minimum size of nodes for invoking merging.")
 set(BW_TREE_MAX_VARIABLE_DATA_SIZE "128" CACHE STRING "The maximun size of variable-length data.")
 
