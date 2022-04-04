@@ -25,7 +25,16 @@
 
 namespace dbgroup::index::bw_tree
 {
-
+/**
+ * @brief A class for representing Bw-trees with variable-length keys.
+ *
+ * This implementation can store variable-length keys (i.e., 'text' type in PostgreSQL).
+ * If you use only fixed-length keys, 'BwTreeFixLen' will achieve better performance.
+ *
+ * @tparam Key a class of stored keys.
+ * @tparam Payload a class of stored payloads (only fixed-length data for simplicity).
+ * @tparam Comp a class for ordering keys.
+ */
 template <class Key, class Payload, class Comp = ::std::less<Key>>
 class BwTreeVarLen
 {
@@ -46,7 +55,8 @@ class BwTreeVarLen
   /**
    * @brief Construct a new BwTree object.
    *
-   * @param gc_interval_microsec GC internal [us]
+   * @param gc_interval_microsec time interval for performing GC [us].
+   * @param gc_thread_num the number of worker threads for GC.
    */
   explicit BwTreeVarLen(  //
       const size_t gc_interval_microsec = kDefaultGCTime,
@@ -76,14 +86,11 @@ class BwTreeVarLen
    *##################################################################################*/
 
   /**
-   * @brief Read a payload of a specified key if it exists.
-   *
-   * This function returns two return codes: kSuccess and kKeyNotExist. If a return code
-   * is kSuccess, a returned pair contains a target payload. If a return code is
-   * kKeyNotExist, the value of a returned payload is undefined.
+   * @brief Read the payload corresponding to a given key if it exists.
    *
    * @param key a target key.
-   * @return a read payload or std::nullopt.
+   * @retval the payload of a given key wrapped with std::optional if it is in this tree.
+   * @retval std::nullopt otherwise.
    */
   auto
   Read(const Key &key)  //
@@ -93,11 +100,11 @@ class BwTreeVarLen
   }
 
   /**
-   * @brief Perform a range scan with specified keys.
+   * @brief Perform a range scan with given keys.
    *
    * @param begin_key a pair of a begin key and its openness (true=closed).
    * @param end_key a pair of an end key and its openness (true=closed).
-   * @return an iterator to access target records.
+   * @return an iterator to access scanned records.
    */
   auto
   Scan(  //
@@ -113,17 +120,15 @@ class BwTreeVarLen
    *##################################################################################*/
 
   /**
-   * @brief Write (i.e., put) a specified kay/payload pair.
+   * @brief Write (i.e., put) a given kay/payload pair.
    *
-   * If a specified key does not exist in the index, this function performs an insert
-   * operation. If a specified key has been already inserted, this function perfroms an
+   * If a given key does not exist in this tree, this function performs an insert
+   * operation. If a given key has been already inserted, this function perfroms an
    * update operation. Thus, this function always returns kSuccess as a return code.
-   *
-   * Note that if a target key/payload is binary data, it is required to specify its
-   * length in bytes.
    *
    * @param key a target key to be written.
    * @param payload a target payload to be written.
+   * @param key_len the length of a target key.
    * @return kSuccess.
    */
   auto
@@ -137,67 +142,64 @@ class BwTreeVarLen
   }
 
   /**
-   * @brief Insert a specified key/payload pair.
+   * @brief Insert a given key/payload pair.
    *
-   * This function performs a uniqueness check in its processing. If a specified key
-   * does not exist, this function insert a target payload into the index. If a
-   * specified key exists in the index, this function does nothing and returns kKeyExist
+   * This function performs a uniqueness check in its processing. If a given key does
+   * not exist in this tree, this function inserts a target payload to this tree. If
+   * there is a given key in this tree, this function does nothing and returns kKeyExist
    * as a return code.
    *
-   * Note that if a target key/payload is binary data, it is required to specify its
-   * length in bytes.
-   *
-   * @param key a target key to be written.
-   * @param payload a target payload to be written.
+   * @param key a target key to be inserted.
+   * @param payload a target payload to be inserted.
+   * @param key_len the length of a target key.
    * @retval.kSuccess if inserted.
-   * @retval kKeyExist if a specified key exists.
+   * @retval kKeyExist otherwise.
    */
-  ReturnCode
+  auto
   Insert(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))
+      const size_t key_len = sizeof(Key))  //
+      -> ReturnCode
   {
     return bw_tree_.Insert(key, payload, key_len);
   }
 
   /**
-   * @brief Update a target kay with a specified payload.
+   * @brief Update the record corresponding to a given kay with a given payload.
    *
-   * This function performs a uniqueness check in its processing. If a specified key
-   * exist, this function update a target payload. If a specified key does not exist in
-   * the index, this function does nothing and returns kKeyNotExist as a return code.
+   * This function performs a uniqueness check in its processing. If there is a given
+   * key in this tree, this function updates the corresponding record. If a given key
+   * does not exist in this tree, this function does nothing and returns kKeyNotExist as
+   * a return code.
    *
-   * Note that if a target key/payload is binary data, it is required to specify its
-   * length in bytes.
-   *
-   * @param key a target key to be written.
-   * @param payload a target payload to be written.
+   * @param key a target key to be updated.
+   * @param payload a payload for updating.
+   * @param key_len the length of a target key.
    * @retval kSuccess if updated.
-   * @retval kKeyNotExist if a specified key does not exist.
+   * @retval kKeyNotExist otherwise.
    */
-  ReturnCode
+  auto
   Update(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))
+      const size_t key_len = sizeof(Key))  //
+      -> ReturnCode
   {
     return bw_tree_.Update(key, payload, key_len);
   }
 
   /**
-   * @brief Delete a target kay from the index.
+   * @brief Delete the record corresponding to a given key from this tree.
    *
-   * This function performs a uniqueness check in its processing. If a specified key
-   * exist, this function deletes it. If a specified key does not exist in the index,
-   * this function does nothing and returns kKeyNotExist as a return code.
+   * This function performs a uniqueness check in its processing. If there is a given
+   * key in this tree, this function deletes it. If a given key does not exist in this
+   * tree, this function does nothing and returns kKeyNotExist as a return code.
    *
-   * Note that if a target key is binary data, it is required to specify its length in
-   * bytes.
-   *
-   * @param key a target key to be written.
+   * @param key a target key to be deleted.
+   * @param key_len the length of a target key.
    * @retval kSuccess if deleted.
-   * @retval kKeyNotExist if a specified key does not exist.
+   * @retval kKeyNotExist otherwise.
    */
   auto
   Delete(const Key &key,
@@ -217,11 +219,14 @@ class BwTreeVarLen
 };
 
 /**
- * @brief A class to represent Bw-tree.
+ * @brief A class for representing Bw-trees with fixed-length keys.
  *
- * @tparam Key a target key class.
- * @tparam Payload a target payload class.
- * @tparam Comp a comparetor class for keys.
+ * This implementation is optimized for fixed-length keys. If you want to store
+ * variable-length keys, use 'BwTreeVarLen' instead.
+ *
+ * @tparam Key a class of stored keys.
+ * @tparam Payload a class of stored payloads (only fixed-length data for simplicity).
+ * @tparam Comp a class for ordering keys.
  */
 template <class Key, class Payload, class Comp = ::std::less<Key>>
 class BwTreeFixLen
@@ -243,7 +248,8 @@ class BwTreeFixLen
   /**
    * @brief Construct a new BwTree object.
    *
-   * @param gc_interval_microsec GC internal [us]
+   * @param gc_interval_microsec time interval for performing GC [us].
+   * @param gc_thread_num the number of worker threads for GC.
    */
   explicit BwTreeFixLen(  //
       const size_t gc_interval_microsec = kDefaultGCTime,
@@ -273,14 +279,11 @@ class BwTreeFixLen
    *##################################################################################*/
 
   /**
-   * @brief Read a payload of a specified key if it exists.
-   *
-   * This function returns two return codes: kSuccess and kKeyNotExist. If a return code
-   * is kSuccess, a returned pair contains a target payload. If a return code is
-   * kKeyNotExist, the value of a returned payload is undefined.
+   * @brief Read the payload corresponding to a given key if it exists.
    *
    * @param key a target key.
-   * @return a read payload or std::nullopt.
+   * @retval the payload of a given key wrapped with std::optional if it is in this tree.
+   * @retval std::nullopt otherwise.
    */
   auto
   Read(const Key &key)  //
@@ -290,11 +293,11 @@ class BwTreeFixLen
   }
 
   /**
-   * @brief Perform a range scan with specified keys.
+   * @brief Perform a range scan with given keys.
    *
    * @param begin_key a pair of a begin key and its openness (true=closed).
    * @param end_key a pair of an end key and its openness (true=closed).
-   * @return an iterator to access target records.
+   * @return an iterator to access scanned records.
    */
   auto
   Scan(  //
@@ -310,14 +313,11 @@ class BwTreeFixLen
    *##################################################################################*/
 
   /**
-   * @brief Write (i.e., put) a specified kay/payload pair.
+   * @brief Write (i.e., put) a given kay/payload pair.
    *
-   * If a specified key does not exist in the index, this function performs an insert
-   * operation. If a specified key has been already inserted, this function perfroms an
+   * If a given key does not exist in this tree, this function performs an insert
+   * operation. If a given key has been already inserted, this function perfroms an
    * update operation. Thus, this function always returns kSuccess as a return code.
-   *
-   * Note that if a target key/payload is binary data, it is required to specify its
-   * length in bytes.
    *
    * @param key a target key to be written.
    * @param payload a target payload to be written.
@@ -333,65 +333,59 @@ class BwTreeFixLen
   }
 
   /**
-   * @brief Insert a specified key/payload pair.
+   * @brief Insert a given key/payload pair.
    *
-   * This function performs a uniqueness check in its processing. If a specified key
-   * does not exist, this function insert a target payload into the index. If a
-   * specified key exists in the index, this function does nothing and returns kKeyExist
+   * This function performs a uniqueness check in its processing. If a given key does
+   * not exist in this tree, this function inserts a target payload to this tree. If
+   * there is a given key in this tree, this function does nothing and returns kKeyExist
    * as a return code.
    *
-   * Note that if a target key/payload is binary data, it is required to specify its
-   * length in bytes.
-   *
-   * @param key a target key to be written.
-   * @param payload a target payload to be written.
+   * @param key a target key to be inserted.
+   * @param payload a target payload to be inserted.
    * @retval.kSuccess if inserted.
-   * @retval kKeyExist if a specified key exists.
+   * @retval kKeyExist otherwise.
    */
-  ReturnCode
+  auto
   Insert(  //
       const Key &key,
-      const Payload &payload)
+      const Payload &payload)  //
+      -> ReturnCode
   {
     return bw_tree_.Insert(key, payload);
   }
 
   /**
-   * @brief Update a target kay with a specified payload.
+   * @brief Update the record corresponding to a given kay with a given payload.
    *
-   * This function performs a uniqueness check in its processing. If a specified key
-   * exist, this function update a target payload. If a specified key does not exist in
-   * the index, this function does nothing and returns kKeyNotExist as a return code.
+   * This function performs a uniqueness check in its processing. If there is a given
+   * key in this tree, this function updates the corresponding record. If a given key
+   * does not exist in this tree, this function does nothing and returns kKeyNotExist as
+   * a return code.
    *
-   * Note that if a target key/payload is binary data, it is required to specify its
-   * length in bytes.
-   *
-   * @param key a target key to be written.
-   * @param payload a target payload to be written.
+   * @param key a target key to be updated.
+   * @param payload a payload for updating.
    * @retval kSuccess if updated.
-   * @retval kKeyNotExist if a specified key does not exist.
+   * @retval kKeyNotExist otherwise.
    */
-  ReturnCode
+  auto
   Update(  //
       const Key &key,
-      const Payload &payload)
+      const Payload &payload)  //
+      -> ReturnCode
   {
     return bw_tree_.Update(key, payload);
   }
 
   /**
-   * @brief Delete a target kay from the index.
+   * @brief Delete the record corresponding to a given key from this tree.
    *
-   * This function performs a uniqueness check in its processing. If a specified key
-   * exist, this function deletes it. If a specified key does not exist in the index,
-   * this function does nothing and returns kKeyNotExist as a return code.
+   * This function performs a uniqueness check in its processing. If there is a given
+   * key in this tree, this function deletes it. If a given key does not exist in this
+   * tree, this function does nothing and returns kKeyNotExist as a return code.
    *
-   * Note that if a target key is binary data, it is required to specify its length in
-   * bytes.
-   *
-   * @param key a target key to be written.
+   * @param key a target key to be deleted.
    * @retval kSuccess if deleted.
-   * @retval kKeyNotExist if a specified key does not exist.
+   * @retval kKeyNotExist otherwise.
    */
   auto
   Delete(const Key &key)  //

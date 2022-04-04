@@ -32,10 +32,12 @@
 namespace dbgroup::index::bw_tree::component
 {
 /**
- * @brief A class to represent Bw-tree.
+ * @brief The entity of implementations of Bw-trees.
  *
- * @tparam Key a target key class.
- * @tparam Payload a target payload class.
+ * @tparam Payload a class of stored payloads.
+ * @tparam Node_t a class of base nodes with variable/fixed-length data.
+ * @tparam Delta_t a class of delta records with variable/fixed-length data.
+ * @tparam kIsVarLen a flag for indicating this tree deals with variable-length data.
  */
 template <class Payload, class Node_t, class Delta_t, bool kIsVarLen>
 class BwTree
@@ -257,6 +259,7 @@ class BwTree
    * @brief Construct a new BwTree object.
    *
    * @param gc_interval_microsec GC internal [us]
+   * @param gc_thread_num the number of GC threads.
    */
   explicit BwTree(  //
       const size_t gc_interval_microsec,
@@ -291,14 +294,11 @@ class BwTree
    *##################################################################################*/
 
   /**
-   * @brief Read a payload of a specified key if it exists.
-   *
-   * This function returns two return codes: kSuccess and kKeyNotExist. If a return code
-   * is kSuccess, a returned pair contains a target payload. If a return code is
-   * kKeyNotExist, the value of a returned payload is undefined.
+   * @brief The entity of a function for reading records.
    *
    * @param key a target key.
-   * @return a read payload or std::nullopt.
+   * @retval the payload of a given key wrapped with std::optional if it is in this tree.
+   * @retval std::nullopt otherwise.
    */
   auto
   Read(const Key &key)  //
@@ -359,11 +359,11 @@ class BwTree
   }
 
   /**
-   * @brief Perform a range scan with specified keys.
+   * @brief The entity of a function for scanning records.
    *
    * @param begin_key a pair of a begin key and its openness (true=closed).
    * @param end_key a pair of an end key and its openness (true=closed).
-   * @return an iterator to access target records.
+   * @return an iterator to access scanned records.
    */
   auto
   Scan(  //
@@ -402,19 +402,11 @@ class BwTree
    *##################################################################################*/
 
   /**
-   * @brief Write (i.e., upsert) a specified kay/payload pair.
-   *
-   * If a specified key does not exist in the index, this function performs an insert
-   * operation. If a specified key has been already inserted, this function perfroms an
-   * update operation. Thus, this function always returns kSuccess as a return code.
-   *
-   * Note that if a target key/payload is binary data, it is required to specify its
-   * length in bytes.
+   * @brief The entity of a function for putting records.
    *
    * @param key a target key to be written.
    * @param payload a target payload to be written.
    * @param key_len the length of a target key.
-   * @param pay_len the length of a target payload.
    * @return kSuccess.
    */
   auto
@@ -454,22 +446,13 @@ class BwTree
   }
 
   /**
-   * @brief Insert a specified key/payload pair.
+   * @brief The entity of a function for inserting records.
    *
-   * This function performs a uniqueness check in its processing. If a specified key
-   * does not exist, this function insert a target payload into the index. If a
-   * specified key exists in the index, this function does nothing and returns kKeyExist
-   * as a return code.
-   *
-   * Note that if a target key/payload is binary data, it is required to specify its
-   * length in bytes.
-   *
-   * @param key a target key to be written.
-   * @param payload a target payload to be written.
-   * @param key_length the length of a target key.
-   * @param payload_length the length of a target payload.
+   * @param key a target key to be inserted.
+   * @param payload a target payload to be inserted.
+   * @param key_len the length of a target key.
    * @retval.kSuccess if inserted.
-   * @retval kKeyExist if a specified key exists.
+   * @retval kKeyExist otherwise.
    */
   ReturnCode
   Insert(  //
@@ -514,21 +497,13 @@ class BwTree
   }
 
   /**
-   * @brief Update a target kay with a specified payload.
+   * @brief The entity of a function for updating records.
    *
-   * This function performs a uniqueness check in its processing. If a specified key
-   * exist, this function update a target payload. If a specified key does not exist in
-   * the index, this function does nothing and returns kKeyNotExist as a return code.
-   *
-   * Note that if a target key/payload is binary data, it is required to specify its
-   * length in bytes.
-   *
-   * @param key a target key to be written.
-   * @param payload a target payload to be written.
-   * @param key_length the length of a target key.
-   * @param payload_length the length of a target payload.
+   * @param key a target key to be updated.
+   * @param payload a payload for updating.
+   * @param key_len the length of a target key.
    * @retval kSuccess if updated.
-   * @retval kKeyNotExist if a specified key does not exist.
+   * @retval kKeyNotExist otherwise.
    */
   ReturnCode
   Update(  //
@@ -573,19 +548,12 @@ class BwTree
   }
 
   /**
-   * @brief Delete a target kay from the index.
+   * @brief The entity of a function for deleting records.
    *
-   * This function performs a uniqueness check in its processing. If a specified key
-   * exist, this function deletes it. If a specified key does not exist in the index,
-   * this function does nothing and returns kKeyNotExist as a return code.
-   *
-   * Note that if a target key is binary data, it is required to specify its length in
-   * bytes.
-   *
-   * @param key a target key to be written.
+   * @param key a target key to be deleted.
    * @param key_len the length of a target key.
    * @retval kSuccess if deleted.
-   * @retval kKeyNotExist if a specified key does not exist.
+   * @retval kKeyNotExist otherwise.
    */
   auto
   Delete(  //
@@ -634,14 +602,22 @@ class BwTree
    * Internal constants
    *##################################################################################*/
 
+  /// an expected maximum height of a tree.
   static constexpr size_t kExpectedTreeHeight = 8;
 
+  /// Header length in bytes.
   static constexpr size_t kHeaderLength = sizeof(Node_t);
 
-  static constexpr size_t kDeltaRecLength = Delta_t::template GetMaxDeltaSize<Payload>();
+  /// the maximum size of delta records.
+  static constexpr size_t kDeltaRecSize = Delta_t::template GetMaxDeltaSize<Payload>();
 
+  /// a flag for preventing a consolidate-operation from splitting a node.
   static constexpr bool kIsScan = true;
 
+  /**
+   * @brief An internal enum for distinguishing a partial SMO status.
+   *
+   */
   enum SMOsRC
   {
     kConsolidate,
@@ -655,11 +631,10 @@ class BwTree
    *##################################################################################*/
 
   /**
-   * @brief Create a New Node accordint to a given template paramter.
+   * @brief Allocate or reuse a memory region for a base node.
    *
-   * @tparam T a template paramter for indicating whether a new node is a leaf.
-   * @retval an empty leaf node if Payload is given as a template.
-   * @retval an empty internal node otherwise.
+   * @param size the desired page size.
+   * @returns the reserved memory page.
    */
   [[nodiscard]] auto
   GetNodePage(const size_t size)  //
@@ -671,22 +646,36 @@ class BwTree
     return (page == nullptr) ? (::operator new(kPageSize)) : page;
   }
 
+  /**
+   * @brief Allocate or reuse a memory region for a delta record.
+   *
+   * @returns the reserved memory page.
+   */
   [[nodiscard]] auto
   GetRecPage()  //
       -> void *
   {
     auto *page = gc_.template GetPageIfPossible<Delta_t>();
-    return (page == nullptr) ? (::operator new(kDeltaRecLength)) : page;
+    return (page == nullptr) ? (::operator new(kDeltaRecSize)) : page;
   }
 
+  /**
+   * @brief Add a given delta-chain to GC targets.
+   *
+   * If a given delta-chain has multiple delta records and base nodes, this function
+   * adds all of them to GC.
+   *
+   * @tparam T a templated class for simplicity.
+   * @param head the head pointer of a target delta-chain.
+   */
   template <class T>
   void
-  AddToGC(const T *ptr)
+  AddToGC(const T *head)
   {
     static_assert(std::is_same_v<T, Node_t> || std::is_same_v<T, Delta_t>);
 
     // delete delta records
-    const auto *garbage = reinterpret_cast<const Delta_t *>(ptr);
+    const auto *garbage = reinterpret_cast<const Delta_t *>(head);
     while (garbage->GetDeltaType() != kNotDelta) {
       // register this delta record with GC
       gc_.AddGarbage(garbage);
@@ -710,6 +699,13 @@ class BwTree
     gc_.AddGarbage(reinterpret_cast<const Node_t *>(garbage));
   }
 
+  /**
+   * @brief Search a child node of the top node in a given stack.
+   *
+   * @param key a search key.
+   * @param closed a flag for indicating closed/open-interval.
+   * @param stack a stack of traversed nodes.
+   */
   void
   SearchChildNode(  //
       const Key &key,
@@ -755,6 +751,13 @@ class BwTree
     }
   }
 
+  /**
+   * @brief Search a leaf node that may have a target key.
+   *
+   * @param key a search key.
+   * @param closed a flag for indicating closed/open-interval.
+   * @return a stack of traversed nodes.
+   */
   [[nodiscard]] auto
   SearchLeafNode(  //
       const Key &key,
@@ -778,6 +781,11 @@ class BwTree
     }
   }
 
+  /**
+   * @brief Search a leftmost leaf node in this tree.
+   *
+   * @return a stack of traversed nodes.
+   */
   [[nodiscard]] auto
   SearchLeftmostLeaf() const  //
       -> std::vector<LogicalID *>
@@ -795,6 +803,9 @@ class BwTree
     return stack;
   }
 
+  /**
+   * @return the logical ID of a current root node.
+   */
   [[nodiscard]] auto
   LoadValidRoot() const  //
       -> LogicalID *
@@ -806,6 +817,14 @@ class BwTree
     }
   }
 
+  /**
+   * @brief Get a valid (i.e., not NULL) head pointer of a logical node.
+   *
+   * @param key a search key.
+   * @param closed a flag for indicating closed/open-interval.
+   * @param stack a stack of traversed nodes.
+   * @return the head of this logical node.
+   */
   auto
   LoadValidHead(  //
       const Key &key,
@@ -827,6 +846,12 @@ class BwTree
     }
   }
 
+  /**
+   * @brief Complete a partial structure modification operation if exist.
+   *
+   * @param head the current head pointer of a target logical node.
+   * @param stack a stack of traversed nodes.
+   */
   void
   CompletePartialSMOsIfExist(  //
       const Delta_t *head,
@@ -849,6 +874,15 @@ class BwTree
     }
   }
 
+  /**
+   * @brief Get the head pointer of a logical node.
+   *
+   * @param key a search key.
+   * @param closed a flag for indicating closed/open-interval.
+   * @param stack a stack of traversed nodes.
+   * @param read_only a flag for preventing this function from completing partial SMOs.
+   * @return the head of this logical node.
+   */
   auto
   GetHead(  //
       const Key &key,
@@ -891,6 +925,14 @@ class BwTree
     }
   }
 
+  /**
+   * @brief Get the head pointer of a logical node and check key existence.
+   *
+   * @param key a search key.
+   * @param stack a stack of traversed nodes.
+   * @retval 1st: the head of this logical node.
+   * @retval 2nd: key existence.
+   */
   auto
   GetHeadWithKeyCheck(  //
       const Key &key,
@@ -943,6 +985,15 @@ class BwTree
    * Internal scan utilities
    *##################################################################################*/
 
+  /**
+   * @brief Perform consolidation for scanning.
+   *
+   * @param node a node page to store records.
+   * @param begin_key a search key.
+   * @param closed a flag for indicating closed/open-interval.
+   * @param stack a stack of traversed nodes.
+   * @return the begin position for scanning.
+   */
   auto
   ConsolidateForScan(  //
       Node_t *&node,
@@ -964,10 +1015,13 @@ class BwTree
   }
 
   /**
-   * @brief Consolidate a leaf node for range scanning.
+   * @brief Perform scanning with a given sibling node.
    *
-   * @param node the target node.
-   * @retval the pointer to consolidated leaf node
+   * @param sib_lid the logical ID of a sibling node.
+   * @param node a node page to store records.
+   * @param begin_key a begin key (i.e., the highest key of the previous node).
+   * @param end_key an optional end key for scanning.
+   * @return the next iterator for scanning.
    */
   auto
   SiblingScan(  //
@@ -992,6 +1046,16 @@ class BwTree
    * Internal structure modifications
    *##################################################################################*/
 
+  /**
+   * @brief Try consolidation of a given node.
+   *
+   * This function will perform splitting/merging if needed.
+   *
+   * @param target_lid the logical ID of a target node.
+   * @param key a search key.
+   * @param closed a flag for indicating closed/open-interval.
+   * @param stack a stack of traversed nodes.
+   */
   void
   TryConsolidation(  //
       LogicalID *target_lid,
@@ -1008,7 +1072,6 @@ class BwTree
       consol_page_ = nullptr;
       const auto *head = GetHead(key, closed, stack);
       if (consol_page_ != target_lid) return;
-      if (stack.back() != target_lid) return;
 
       // prepare a consolidated node
       Node_t *new_node = nullptr;
@@ -1053,6 +1116,15 @@ class BwTree
     }
   }
 
+  /**
+   * @brief Consolidate a given node.
+   *
+   * @tparam T a class of expected payloads.
+   * @param head the head pointer of a terget node.
+   * @param consol_node a node page to store consolidated records.
+   * @param is_scan a flag to prevent a split-operation.
+   * @return the status of a consolidation result.
+   */
   template <class T>
   auto
   Consolidate(  //
@@ -1116,12 +1188,12 @@ class BwTree
   }
 
   /**
-   * @brief Consolidate given leaf nodes into this.
+   * @brief Consolidate given leaf nodes and delta records.
    *
-   * @tparam T a class of payloads.
-   * @param consol_info the set of consolidated nodes.
+   * @tparam T a class of expected payloads.
+   * @param consol_node a node page to store consolidated records.
+   * @param consol_info the set of leaf nodes to be consolidated.
    * @param records insert/modify/delete-delta records.
-   * @param do_split a flag for indicating this node is split.
    */
   template <class T>
   void
@@ -1167,11 +1239,12 @@ class BwTree
   }
 
   /**
-   * @brief Consolidate given internal nodes into this.
+   * @brief Consolidate given internal nodes and delta records.
    *
-   * @param consol_info the set of consolidated nodes.
+   * @tparam T a class of expected payloads.
+   * @param consol_node a node page to store consolidated records.
+   * @param consol_info the set of internal nodes to be consolidated.
    * @param records insert/modify/delete-delta records.
-   * @param do_split a flag for indicating this node is split.
    */
   void
   InternalConsolidate(  //
@@ -1234,6 +1307,15 @@ class BwTree
     consol_node->CopyHighKeyFrom(consol_info.front(), offset);
   }
 
+  /**
+   * @brief Try splitting a target node.
+   *
+   * @param head the head pointer of a terget node.
+   * @param split_node a split-right node to be inserted to this tree.
+   * @param stack a stack of traversed nodes.
+   * @retval true if partial splitting succeeds.
+   * @retval false otherwise.
+   */
   bool
   TrySplit(  //
       const Delta_t *head,
@@ -1267,6 +1349,12 @@ class BwTree
     return true;
   }
 
+  /**
+   * @brief Complete partial splitting by inserting index-entry to this tree.
+   *
+   * @param split_d a split-delta record.
+   * @param stack a stack of traversed nodes.
+   */
   void
   CompleteSplit(  //
       const Delta_t *split_d,
@@ -1300,6 +1388,14 @@ class BwTree
     stack.emplace_back(cur_lid);
   }
 
+  /**
+   * @brief Perform splitting a root node.
+   *
+   * @param split_d a split-delta record.
+   * @param stack a stack of traversed nodes.
+   * @retval true if splitting succeeds.
+   * @retval false otherwise.
+   */
   auto
   RootSplit(  //
       const Node_t *split_d,
@@ -1333,6 +1429,16 @@ class BwTree
     return success;
   }
 
+  /**
+   * @brief Check a given node can be merged with its left-sibling node.
+   *
+   * That is, this function checks a given node is not leftmost in its parent node.
+   *
+   * @param child a node to be merged.
+   * @param stack a stack of traversed nodes.
+   * @retval true if a target node can be merged with its left-sibling node.
+   * @retval false otherwise.
+   */
   [[nodiscard]] auto
   CanMerge(  //
       const Node_t *child,
@@ -1349,6 +1455,15 @@ class BwTree
     return !DC::HasSameLowKeyWith(parent_head, *low_key);
   }
 
+  /**
+   * @brief
+   *
+   * @param head the head pointer of a terget node.
+   * @param removed_node a removed (i.e., merged) node.
+   * @param stack a stack of traversed nodes.
+   * @retval true if partial merging succeeds.
+   * @retval false otherwise.
+   */
   auto
   TryMerge(  //
       const Delta_t *head,
@@ -1390,6 +1505,12 @@ class BwTree
     return true;
   }
 
+  /**
+   * @brief Complete partial merging by deleting index-entry from this tree.
+   *
+   * @param merge_d a merge-delta record.
+   * @param stack a stack of traversed nodes.
+   */
   void
   CompleteMerge(  //
       const Delta_t *merge_d,
@@ -1435,6 +1556,11 @@ class BwTree
     stack.emplace_back(child_lid);
   }
 
+  /**
+   * @brief Abort partial merging by deleting a remove-node delta record.
+   *
+   * @param merge_d a merge-delta record.
+   */
   void
   AbortMerge(const Delta_t *merge_d)
   {
@@ -1447,6 +1573,15 @@ class BwTree
     sib_lid->CASStrong(remove_d, remove_d->GetNext());
   }
 
+  /**
+   * @brief Remove a root node that has only one child node from this tree.
+   *
+   * @param head the head pointer of an expected root node.
+   * @param new_root a desired root node.
+   * @param root_lid the logical ID of an expected root node.
+   * @retval true if a root node is removed.
+   * @retval false otherwise.
+   */
   auto
   TryRemoveRoot(  //
       const Delta_t *head,
@@ -1483,16 +1618,16 @@ class BwTree
    * Internal member variables
    *##################################################################################*/
 
-  /// a root node of Bw-tree
+  /// a root node of this Bw-tree.
   std::atomic<LogicalID *> root_{nullptr};
 
-  /// a mapping table
+  /// a table to map logical IDs with physical pointers.
   MappingTable_t mapping_table_{};
 
-  /// garbage collector
+  /// a garbage collector of base nodes and delta records.
   NodeGC_t gc_{};
 
-  /// a page ID to be consolidated
+  /// the logical ID of a node to be consolidated.
   inline static thread_local LogicalID *consol_page_{};  // NOLINT
 };
 

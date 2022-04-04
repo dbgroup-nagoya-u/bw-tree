@@ -381,7 +381,7 @@ class Node
    */
   [[nodiscard]] static auto
   LE(  //
-      const Record &rec,
+      const Record rec,
       const Key &key)  //
       -> bool
   {

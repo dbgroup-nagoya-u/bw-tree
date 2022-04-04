@@ -29,11 +29,13 @@ namespace dbgroup::index::bw_tree
  * Global constants
  *####################################################################################*/
 
-/// Assumes that one word is represented by 8 bytes
+/// Assumes that one word is represented by 8 bytes.
 constexpr size_t kWordSize = sizeof(uintptr_t);
 
+/// the default time interval for garbage collection [us].
 constexpr size_t kDefaultGCTime = 100000;
 
+/// the default number of worker threads for garbage collection.
 constexpr size_t kDefaultGCThreadNum = 1;
 
 /*######################################################################################
@@ -72,12 +74,16 @@ enum ReturnCode
 };
 
 /**
- * @brief Comp binary keys as CString. The end of every key must be '\\0'.
+ * @brief Compare binary keys as CString.
+ *
+ * NOTE: the end of every key must be '\\0'.
  *
  */
 struct CompareAsCString {
   constexpr auto
-  operator()(const void *a, const void *b) const noexcept  //
+  operator()(  //
+      const void *a,
+      const void *b) const noexcept  //
       -> bool
   {
     if (a == nullptr) return false;
@@ -89,14 +95,13 @@ struct CompareAsCString {
 /**
  * @tparam T a target class.
  * @retval true if a target class is variable-length data.
- * @retval false if a target class is static-length data.
+ * @retval false otherwise.
  */
 template <class T>
 constexpr auto
 IsVariableLengthData()  //
     -> bool
 {
-  static_assert(std::is_trivially_copyable_v<T>);
   return false;
 }
 
