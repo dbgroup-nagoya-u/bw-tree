@@ -38,6 +38,12 @@ class Node
 {
  public:
   /*####################################################################################
+   * Type aliases
+   *##################################################################################*/
+
+  using Record = std::pair<Key, const void *>;
+
+  /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/
 
@@ -45,7 +51,7 @@ class Node
    * @brief Construct an initial root node.
    *
    */
-  constexpr Node() : is_leaf_{kLeaf}, delta_type_{kNotDelta} {}
+  constexpr Node() : is_leaf_{kLeaf}, delta_type_{kNotDelta}, do_split_{0} {}
 
   /**
    * @brief Construct a new root node.
@@ -56,7 +62,7 @@ class Node
   Node(  //
       const Node *split_d,
       const LogicalID *left_lid)
-      : is_leaf_{kInternal}, delta_type_{kNotDelta}, record_count_{2}
+      : is_leaf_{kInternal}, delta_type_{kNotDelta}, do_split_{0}, record_count_{2}
   {
     // set a split-left page
     const auto meta = split_d->low_meta_;
@@ -79,12 +85,15 @@ class Node
    *
    * @param node_type a flag for indicating whether a leaf or internal node is constructed.
    * @param node_size the virtual size of this node.
+   * @param do_split a flag for skipping left-split records in consolidation.
    */
   Node(  //
       const bool node_type,
-      const size_t node_size)
+      const size_t node_size,
+      const bool do_split)
       : is_leaf_{static_cast<NodeType>(node_type)},
         delta_type_{kNotDelta},
+        do_split_{static_cast<uint16_t>(do_split)},
         node_size_{static_cast<uint32_t>(node_size)}
   {
   }
@@ -355,8 +364,38 @@ class Node
   }
 
   /*####################################################################################
-   * Public SMO functions
+   * Public utilities for consolidation
    *##################################################################################*/
+
+  /**
+   * @param rec a target delta record.
+   * @param key a comparison key.
+   * @retval true if delta record's key is less than a given one.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] static auto
+  LT(  //
+      const Record &rec,
+      const Key &key)  //
+      -> bool
+  {
+    return Comp{}(rec.first, key);
+  }
+
+  /**
+   * @param rec a target delta record.
+   * @param key a comparison key.
+   * @retval true if delta record's key is less than or equal to a given one.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] static auto
+  LE(  //
+      const Record &rec,
+      const Key &key)  //
+      -> bool
+  {
+    return !Comp{}(key, rec.first);
+  }
 
   /**
    * @brief Compute record counts to be consolidated and the total block size.
@@ -420,135 +459,235 @@ class Node
   }
 
   /**
-   * @brief Consolidate given leaf nodes into this.
+   * @brief Copy a lowest key for consolidation or set an initial used page size for
+   * splitting.
    *
-   * @tparam T a class of payloads.
-   * @param consol_info the set of consolidated nodes.
-   * @param records insert/modify/delete-delta records.
-   * @param do_split a flag for indicating this node is split.
+   * @param consol_info an original node that has a lowest key.
+   * @return an initial offset.
    */
-  template <class T>
-  void
-  LeafConsolidate(  //
-      const std::vector<ConsolidateInfo> &consol_info,
-      const std::vector<std::pair<Key, const void *>> &records,
-      bool do_split)
+  auto
+  CopyLowKeyOrSetInitialOffset(const ConsolidateInfo &consol_info)  //
+      -> size_t
   {
-    const auto new_rec_num = records.size();
-
-    // copy a lowest key when consolidation
-    size_t offset = kHeaderLength / 2;
-    if (!do_split) {
-      const auto *low_node = reinterpret_cast<const Node *>(consol_info.back().node);
-      offset = CopyLowKeyFrom(low_node, low_node->low_meta_);
-    }
-
-    // perform merge-sort to consolidate a node
-    size_t j = 0;
-    for (int64_t k = consol_info.size() - 1; k >= 0; --k) {
-      const auto [n_ptr, dummy, base_rec_num] = consol_info.at(k);
-      const auto *node = reinterpret_cast<const Node *>(n_ptr);
-      for (size_t i = 0; i < base_rec_num; ++i) {
-        // copy new records
-        const auto meta = node->meta_array_[i];
-        const auto &node_key = node->GetKey(meta);
-        for (; j < new_rec_num && Comp{}(records[j].first, node_key); ++j) {
-          offset = CopyRecordFrom<T>(records[j].second, offset, do_split);
-        }
-
-        // check a new record is updated one
-        if (j < new_rec_num && !Comp{}(node_key, records[j].first)) {
-          offset = CopyRecordFrom<T>(records[j].second, offset, do_split);
-          ++j;
-        } else {
-          offset = CopyRecordFrom<T>(node, meta, offset, do_split);
-        }
-      }
-    }
-
-    // copy remaining new records
-    for (; j < new_rec_num; ++j) {
-      offset = CopyRecordFrom<T>(records[j].second, offset, do_split);
-    }
-
-    // copy a highest key
-    CopyHighKeyFrom(consol_info.front(), offset);
+    if (do_split_) return kHeaderLength;  // the initial skipped page size
+    return CopyLowKeyFrom(reinterpret_cast<const Node *>(consol_info.node));
   }
 
   /**
-   * @brief Consolidate given internal nodes into this.
+   * @brief Copy a highest key from a given consolidated node.
    *
-   * @param consol_info the set of consolidated nodes.
-   * @param records insert/modify/delete-delta records.
-   * @param do_split a flag for indicating this node is split.
+   * @param consol_info a consolidated node and a corresponding split-delta record.
+   * @param offset an offset to the bottom of free space.
    */
   void
-  InternalConsolidate(  //
-      const std::vector<ConsolidateInfo> &consol_info,
-      const std::vector<std::pair<Key, const void *>> &records,
-      bool do_split)
+  CopyHighKeyFrom(  //
+      const ConsolidateInfo &consol_info,
+      size_t offset)
   {
-    const auto new_rec_num = records.size();
-
-    // copy a lowest key when consolidation
-    size_t offset = kHeaderLength / 2;
-    if (!do_split) {
-      const auto *low_node = reinterpret_cast<const Node *>(consol_info.back().node);
-      offset = CopyLowKeyFrom(low_node, low_node->low_meta_);
+    // prepare a node that has the highest key, and copy the next logical ID
+    const Node *node{};
+    Metadata meta{};
+    if (consol_info.split_d == nullptr) {
+      // an original or merged base node
+      node = reinterpret_cast<const Node *>(consol_info.node);
+      meta = node->high_meta_;
+      next_ = node->next_;
+    } else {
+      // a split-delta record
+      node = reinterpret_cast<const Node *>(consol_info.split_d);
+      meta = node->low_meta_;
+      next_ = node->template GetPayload<uintptr_t>(meta);
     }
 
-    // perform merge-sort to consolidate a node
-    bool payload_is_embedded = false;
-    size_t j = 0;
-    for (int64_t k = consol_info.size() - 1; k >= 0; --k) {
-      const auto *node = reinterpret_cast<const Node *>(consol_info.at(k).node);
-      const auto end_pos = consol_info.at(k).rec_num - 1;
-      for (size_t i = 0; i <= end_pos; ++i) {
-        // copy a payload of a base node in advance to swap that of a new index entry
-        auto meta = node->meta_array_[i];
-        if (!payload_is_embedded) {  // skip a deleted page
-          offset = CopyPayloadFrom<LogicalID *>(node, meta, offset, do_split);
-        }
+    // copy the highest key
+    const auto key_len = meta.GetKeyLength();
+    if (key_len > 0) {
+      offset -= key_len;
+      memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
+      high_meta_ = Metadata{offset, key_len, key_len};
+    } else {
+      high_meta_ = Metadata{0, 0, 0};
+    }
+  }
 
-        // get a current key in the base node
-        if (i == end_pos) {
-          if (k == 0) break;  // the last record does not need a key
+  /**
+   * @brief Copy a record from a base node in the leaf level.
+   *
+   * @param node an original base node.
+   * @param pos the position of a target record.
+   * @param offset an offset to the bottom of free space.
+   * @return an offset to the copied record.
+   */
+  template <class T>
+  auto
+  CopyRecordFrom(  //
+      const Node *node,
+      const size_t pos,
+      size_t offset)  //
+      -> size_t
+  {
+    const auto meta = node->meta_array_[pos];
+    const auto rec_len = meta.GetTotalLength();
 
-          // if nodes are merged, a current key is equivalent with the lowest one in the next node
-          node = reinterpret_cast<const Node *>(consol_info.at(k - 1).node);
-          meta = node->low_meta_;
-        }
-        const auto &node_key = node->GetKey(meta);
+    if (!do_split_) {
+      // copy a record from the given node
+      offset -= rec_len;
+      memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), rec_len);
+      meta_array_[record_count_++] = meta.UpdateForLeaf(offset);
+    } else {
+      if (offset < node_size_) {
+        // calculate the skipped page size
+        offset += rec_len + kWordSize;
+      } else {
+        // this record is the end one in a split-left node
+        do_split_ = false;
+        offset = CopyLowKeyFrom(node, pos);
+      }
+    }
 
-        // insert new index entries
-        for (; j < new_rec_num && Comp{}(records[j].first, node_key); ++j) {
-          offset = CopyIndexEntryFrom(records[j].second, offset, do_split);
-        }
+    return offset;
+  }
 
-        // set a key for the current record
-        if (j < new_rec_num && !Comp{}(node_key, records[j].first)) {
-          // a record is in a base node, but it may be deleted and inserted again
-          offset = CopyIndexEntryFrom(records[j].second, offset, do_split);
-          payload_is_embedded = true;
-          ++j;
+  /**
+   * @brief Copy a record from a delta record in the leaf level.
+   *
+   * @param rec_pair a pair of original delta record and its key.
+   * @param offset an offset to the bottom of free space.
+   * @return an offset to the copied record.
+   */
+  template <class T>
+  auto
+  CopyRecordFrom(  //
+      const Record &rec_pair,
+      size_t offset)  //
+      -> size_t
+  {
+    const auto *rec = reinterpret_cast<const Node *>(rec_pair.second);
+    if (rec->delta_type_ != kDelete) {
+      // the target record is insert/modify delta
+      const auto meta = rec->low_meta_;
+      const auto rec_len = meta.GetTotalLength();
+
+      if (!do_split_) {
+        // copy a record from the given node
+        offset -= rec_len;
+        memcpy(ShiftAddr(this, offset), rec->GetKeyAddr(meta), rec_len);
+        meta_array_[record_count_++] = meta.UpdateForLeaf(offset);
+      } else {
+        if (offset < node_size_) {
+          // calculate the skipped page size
+          offset += rec_len + kWordSize;
         } else {
-          // copy a key in a base node
-          offset = CopyKeyFrom(node, meta, offset, do_split);
-          payload_is_embedded = false;
+          // this record is the end one in a split-left node
+          do_split_ = false;
+          offset = CopyLowKeyFrom(rec);
         }
       }
     }
 
-    // copy remaining new records
-    for (; j < new_rec_num; ++j) {
-      offset = CopyIndexEntryFrom(records[j].second, offset, do_split);
+    return offset;
+  }
+
+  /**
+   * @brief Copy a key from a base node or a delta record.
+   *
+   * @param node an original node that has a target record.
+   * @param offset an offset to the bottom of free space.
+   * @param pos the position of a target record.
+   * @return an offset to the copied key.
+   */
+  auto
+  CopyKeyFrom(  //
+      const Node *node,
+      size_t offset,
+      const int64_t pos = kCopyLowKey)  //
+      -> size_t
+  {
+    const auto meta = (pos < 0) ? node->low_meta_ : node->meta_array_[pos];
+    const auto key_len = meta.GetKeyLength();
+
+    if (!do_split_) {
+      // copy a record from the given node
+      offset -= key_len;
+      memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
+      meta_array_[record_count_++] = meta.UpdateForInternal(offset);
+    } else {
+      if (offset < node_size_) {
+        // calculate the skipped page size
+        offset += key_len;
+      } else {
+        // this record is the end one in a split-left node
+        do_split_ = false;
+        offset = CopyLowKeyFrom(node, pos);
+      }
     }
 
-    // the last record has only a child page
-    meta_array_[record_count_++] = Metadata{offset, 0, kWordSize};
+    return offset;
+  }
 
-    // copy a highest key
-    CopyHighKeyFrom(consol_info.front(), offset);
+  /**
+   * @brief Copy a payload from a base node or a delta record.
+   *
+   * @param node an original node that has a target record.
+   * @param offset an offset to the bottom of free space.
+   * @param pos the position of a target record.
+   * @return an offset to the copied payload.
+   */
+  template <class T>
+  auto
+  CopyPayloadFrom(  //
+      const Node *node,
+      size_t offset,
+      const int64_t pos = kCopyLowKey)  //
+      -> size_t
+  {
+    if (!do_split_) {
+      // copy a record from the given node
+      const auto meta = (pos < 0) ? node->low_meta_ : node->meta_array_[pos];
+      offset -= sizeof(T);
+      memcpy(ShiftAddr(this, offset), node->GetPayloadAddr(meta), sizeof(T));
+    } else {
+      // calculate the skipped page size
+      offset += 2 * kWordSize;  // the length of metadata and a logical ID
+    }
+
+    return offset;
+  }
+
+  /**
+   * @brief Copy an index-entry from a delta record.
+   *
+   * @param rec_pair a pair of original delta record and its key.
+   * @param offset an offset to the bottom of free space.
+   * @return an offset to the copied payload.
+   */
+  auto
+  CopyIndexEntryFrom(  //
+      const Record &rec_pair,
+      size_t offset)  //
+      -> size_t
+  {
+    const auto *delta = reinterpret_cast<const Node *>(rec_pair.second);
+    if (delta->delta_type_ == kInsert) {
+      // copy a key to exchange a child page
+      offset = CopyKeyFrom(delta, offset);
+
+      // copy the next (split-right) child page
+      offset = CopyPayloadFrom<LogicalID *>(delta, offset);
+    }
+
+    return offset;
+  }
+
+  /**
+   * @brief Set metadata of the last record in an internal node.
+   *
+   * @param offset an offset to the bottom of free space.
+   */
+  void
+  SetLastRecordForInternal(const size_t offset)
+  {
+    meta_array_[record_count_++] = Metadata{offset, 0, kWordSize};
   }
 
  private:
@@ -691,10 +830,11 @@ class Node
   auto
   CopyLowKeyFrom(  //
       const Node *node,
-      const Metadata meta)  //
+      const int64_t pos = kCopyLowKey)  //
       -> size_t
   {
     // copy the lowest key
+    const auto meta = (pos < 0) ? node->low_meta_ : node->meta_array_[pos];
     const auto key_len = meta.GetKeyLength();
     auto offset = node_size_;
     if (key_len > 0) {
@@ -703,216 +843,6 @@ class Node
       low_meta_ = Metadata{offset, key_len, key_len};
     } else {
       low_meta_ = Metadata{0, 0, 0};
-    }
-
-    return offset;
-  }
-
-  /**
-   * @brief Copy a highest key from a given consolidated node.
-   *
-   * @param consol_info a consolidated node and a corresponding split-delta record.
-   * @param offset an offset to the bottom of free space.
-   */
-  void
-  CopyHighKeyFrom(  //
-      const ConsolidateInfo &consol_info,
-      size_t offset)
-  {
-    // prepare a node that has the highest key, and copy the next logical ID
-    const Node *node{};
-    Metadata meta{};
-    if (consol_info.split_d == nullptr) {
-      // an original or merged base node
-      node = reinterpret_cast<const Node *>(consol_info.node);
-      meta = node->high_meta_;
-      next_ = node->next_;
-    } else {
-      // a split-delta record
-      node = reinterpret_cast<const Node *>(consol_info.split_d);
-      meta = node->low_meta_;
-      next_ = node->template GetPayload<uintptr_t>(meta);
-    }
-
-    // copy the highest key
-    const auto key_len = meta.GetKeyLength();
-    if (key_len > 0) {
-      offset -= key_len;
-      memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
-      high_meta_ = Metadata{offset, key_len, key_len};
-    } else {
-      high_meta_ = Metadata{0, 0, 0};
-    }
-  }
-
-  /**
-   * @brief Copy a record from a base node in the leaf level.
-   *
-   * @param node an original base node.
-   * @param meta the corresponding metadata of a target record.
-   * @param offset an offset to the bottom of free space.
-   * @param do_split a flag for ignoring split-left records if needed.
-   * @return an offset to the copied record.
-   */
-  template <class T>
-  auto
-  CopyRecordFrom(  //
-      const Node *node,
-      const Metadata meta,
-      size_t offset,
-      bool &do_split)  //
-      -> size_t
-  {
-    const auto rec_len = meta.GetTotalLength();
-
-    if (do_split) {
-      // calculate the skipped page size
-      offset += rec_len + kWordSize;
-      if (offset > node_size_) {
-        // this record is the end one in a split-left node
-        do_split = false;
-        offset = CopyLowKeyFrom(node, meta);
-      }
-    } else {
-      // copy a record from the given node
-      offset -= rec_len;
-      memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), rec_len);
-      meta_array_[record_count_++] = meta.UpdateForLeaf(offset);
-    }
-
-    return offset;
-  }
-
-  /**
-   * @brief Copy a record from a delta record in the leaf level.
-   *
-   * @param rec_ptr an original delta record.
-   * @param offset an offset to the bottom of free space.
-   * @param do_split a flag for ignoring split-left records if needed.
-   * @return an offset to the copied record.
-   */
-  template <class T>
-  auto
-  CopyRecordFrom(  //
-      const void *rec_ptr,
-      size_t offset,
-      bool &do_split)  //
-      -> size_t
-  {
-    const auto *rec = reinterpret_cast<const Node *>(rec_ptr);
-    if (rec->delta_type_ != kDelete) {
-      // the target record is insert/modify delta
-      const auto meta = rec->low_meta_;
-      const auto rec_len = meta.GetTotalLength();
-
-      if (do_split) {
-        // calculate the skipped page size
-        offset += rec_len + kWordSize;
-        if (offset > node_size_) {
-          // this record is the end one in a split-left node
-          do_split = false;
-          offset = CopyLowKeyFrom(rec, meta);
-        }
-      } else {
-        // copy a record from the given node
-        offset -= rec_len;
-        memcpy(ShiftAddr(this, offset), rec->GetKeyAddr(meta), rec_len);
-        meta_array_[record_count_++] = meta.UpdateForLeaf(offset);
-      }
-    }
-
-    return offset;
-  }
-
-  /**
-   * @brief Copy a key from a base node.
-   *
-   * @param node an original node that has a target record.
-   * @param meta the corresponding metadata of a target record.
-   * @param offset an offset to the bottom of free space.
-   * @param do_split a flag for ignoring split-left records if needed.
-   * @return an offset to the copied key.
-   */
-  auto
-  CopyKeyFrom(  //
-      const Node *node,
-      const Metadata meta,
-      size_t offset,
-      bool &do_split)  //
-      -> size_t
-  {
-    const auto key_len = meta.GetKeyLength();
-
-    if (do_split) {
-      // calculate the skipped page size
-      offset += key_len;
-      if (offset > node_size_) {
-        // this record is the end one in a split-left node
-        do_split = false;
-        offset = CopyLowKeyFrom(node, meta);
-      }
-    } else {
-      // copy a record from the given node
-      offset -= key_len;
-      memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
-      meta_array_[record_count_++] = meta.UpdateForInternal(offset);
-    }
-
-    return offset;
-  }
-
-  /**
-   * @brief Copy a payload from a base node.
-   *
-   * @param node an original node that has a target record.
-   * @param meta the corresponding metadata of a target record.
-   * @param offset an offset to the bottom of free space.
-   * @param do_split a flag for ignoring split-left records if needed.
-   * @return an offset to the copied payload.
-   */
-  template <class T>
-  auto
-  CopyPayloadFrom(  //
-      const Node *node,
-      const Metadata meta,
-      size_t offset,
-      const bool do_split)  //
-      -> size_t
-  {
-    if (do_split) {
-      offset += 2 * kWordSize;  // the length of metadata and a logical ID
-    } else {
-      // copy a record from the given node
-      offset -= sizeof(T);
-      memcpy(ShiftAddr(this, offset), node->GetPayloadAddr(meta), sizeof(T));
-    }
-
-    return offset;
-  }
-
-  /**
-   * @brief Copy an index-entry from a delta record.
-   *
-   * @param delta_ptr an address of a target delta record.
-   * @param offset an offset to the bottom of free space.
-   * @param do_split a flag for ignoring split-left records if needed.
-   * @return an offset to the copied payload.
-   */
-  auto
-  CopyIndexEntryFrom(  //
-      const void *delta_ptr,
-      size_t offset,
-      bool &do_split)  //
-      -> size_t
-  {
-    const auto *delta = reinterpret_cast<const Node *>(delta_ptr);
-    if (delta->delta_type_ == kInsert) {
-      // copy a key to exchange a child page
-      const auto meta = delta->low_meta_;
-      offset = CopyKeyFrom(delta, meta, offset, do_split);
-
-      // copy the next (split-right) child page
-      offset = CopyPayloadFrom<LogicalID *>(delta, meta, offset, do_split);
     }
 
     return offset;
@@ -927,6 +857,9 @@ class Node
 
   /// a flag for indicating the types of delta records.
   uint16_t delta_type_ : 3;
+
+  /// a flag for performing a split operation in consolidation.
+  uint16_t do_split_ : 1;
 
   /// a blank block for alignment.
   uint16_t : 0;

@@ -49,6 +49,7 @@ class BwTree
   using DeltaType = component::DeltaType;
   using MappingTable_t = MappingTable<Node_t, Delta_t>;
   using DC = DeltaChain<Delta_t>;
+  using Record = typename Delta_t::Record;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t, Delta_t>;
 
   /*####################################################################################
@@ -1060,7 +1061,6 @@ class BwTree
       const bool is_scan = false)  //
       -> SMOsRC
   {
-    using Record = typename Delta_t::Record;
     constexpr auto kIsLeaf = !std::is_same_v<T, LogicalID *>;
 
     // sort delta records
@@ -1077,7 +1077,7 @@ class BwTree
       size = kHeaderLength + Node_t::PreConsolidate(consol_info, kIsLeaf) + diff;
     } else {
       const auto rec_num = Node_t::PreConsolidate(consol_info, kIsLeaf) + diff;
-      if constexpr (kIsLeaf) {
+      if (kIsLeaf) {
         size = kHeaderLength + rec_num * (sizeof(Key) + sizeof(T));
       } else {
         size = (kHeaderLength - sizeof(Key)) + rec_num * (sizeof(Key) + sizeof(T));
@@ -1103,16 +1103,135 @@ class BwTree
     }
 
     // consolidate a target node
-    consol_node = new (page) Node_t{kIsLeaf, size};
-    if constexpr (kIsLeaf) {
-      consol_node->template LeafConsolidate<T>(consol_info, records, do_split);
+    consol_node = new (page) Node_t{kIsLeaf, size, do_split};
+    if (kIsLeaf) {
+      LeafConsolidate<T>(consol_node, consol_info, records);
     } else {
-      consol_node->InternalConsolidate(consol_info, records, do_split);
+      InternalConsolidate(consol_node, consol_info, records);
     }
 
     if (do_split) return kTrySplit;
     if (size <= kMinNodeSize) return kTryMerge;
     return kConsolidate;
+  }
+
+  /**
+   * @brief Consolidate given leaf nodes into this.
+   *
+   * @tparam T a class of payloads.
+   * @param consol_info the set of consolidated nodes.
+   * @param records insert/modify/delete-delta records.
+   * @param do_split a flag for indicating this node is split.
+   */
+  template <class T>
+  void
+  LeafConsolidate(  //
+      Node_t *consol_node,
+      const std::vector<ConsolidateInfo> &consol_info,
+      const std::vector<Record> &records)
+  {
+    const auto new_rec_num = records.size();
+
+    // copy a lowest key for consolidation or set initial offset for splitting
+    auto offset = consol_node->CopyLowKeyOrSetInitialOffset(consol_info.back());
+
+    // perform merge-sort to consolidate a node
+    size_t j = 0;
+    for (int64_t k = consol_info.size() - 1; k >= 0; --k) {
+      const auto *node = reinterpret_cast<const Node_t *>(consol_info[k].node);
+      const auto base_rec_num = consol_info[k].rec_num;
+      for (size_t i = 0; i < base_rec_num; ++i) {
+        // copy new records
+        const auto &node_key = node->GetKey(i);
+        for (; j < new_rec_num && Node_t::LT(records[j], node_key); ++j) {
+          offset = consol_node->template CopyRecordFrom<T>(records[j], offset);
+        }
+
+        // check a new record is updated one
+        if (j < new_rec_num && Node_t::LE(records[j], node_key)) {
+          offset = consol_node->template CopyRecordFrom<T>(records[j], offset);
+          ++j;
+        } else {
+          offset = consol_node->template CopyRecordFrom<T>(node, i, offset);
+        }
+      }
+    }
+
+    // copy remaining new records
+    for (; j < new_rec_num; ++j) {
+      offset = consol_node->template CopyRecordFrom<T>(records[j], offset);
+    }
+
+    // copy a highest key
+    consol_node->CopyHighKeyFrom(consol_info.front(), offset);
+  }
+
+  /**
+   * @brief Consolidate given internal nodes into this.
+   *
+   * @param consol_info the set of consolidated nodes.
+   * @param records insert/modify/delete-delta records.
+   * @param do_split a flag for indicating this node is split.
+   */
+  void
+  InternalConsolidate(  //
+      Node_t *consol_node,
+      const std::vector<ConsolidateInfo> &consol_info,
+      const std::vector<Record> &records)
+  {
+    const auto new_rec_num = records.size();
+
+    // copy a lowest key for consolidation or set initial offset for splitting
+    auto offset = consol_node->CopyLowKeyOrSetInitialOffset(consol_info.back());
+
+    // perform merge-sort to consolidate a node
+    bool payload_is_embedded = false;
+    size_t j = 0;
+    for (int64_t k = consol_info.size() - 1; k >= 0; --k) {
+      const auto *node = reinterpret_cast<const Node_t *>(consol_info[k].node);
+      const int64_t end_pos = consol_info[k].rec_num - 1;
+      for (int64_t i = 0; i <= end_pos && i >= 0; ++i) {
+        // copy a payload of a base node in advance to swap that of a new index entry
+        if (!payload_is_embedded) {  // skip a deleted page
+          offset = consol_node->template CopyPayloadFrom<LogicalID *>(node, offset, i);
+        }
+
+        // get a current key in the base node
+        if (i == end_pos) {
+          if (k == 0) break;  // the last record does not need a key
+          // if nodes are merged, a current key is equivalent with the lowest one in the next node
+          node = reinterpret_cast<const Node_t *>(consol_info[k - 1].node);
+          i = kCopyLowKey;
+        }
+        const auto &node_key = (i < 0) ? *(node->GetLowKey()) : node->GetKey(i);
+
+        // insert new index entries
+        for (; j < new_rec_num && Node_t::LT(records[j], node_key); ++j) {
+          offset = consol_node->CopyIndexEntryFrom(records[j], offset);
+        }
+
+        // set a key for the current record
+        if (j < new_rec_num && Node_t::LE(records[j], node_key)) {
+          // a record is in a base node, but it may be deleted and inserted again
+          offset = consol_node->CopyIndexEntryFrom(records[j], offset);
+          payload_is_embedded = true;
+          ++j;
+        } else {
+          // copy a key in a base node
+          offset = consol_node->CopyKeyFrom(node, offset, i);
+          payload_is_embedded = false;
+        }
+      }
+    }
+
+    // copy remaining new records
+    for (; j < new_rec_num; ++j) {
+      offset = consol_node->CopyIndexEntryFrom(records[j], offset);
+    }
+    consol_node->SetLastRecordForInternal(offset);
+
+    // copy a highest key
+    consol_node->CopyHighKeyFrom(consol_info.front(), offset);
   }
 
   bool

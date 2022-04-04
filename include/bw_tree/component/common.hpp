@@ -87,6 +87,9 @@ constexpr bool kIsVarLen = true;
 /// the NULL value for uintptr_t
 constexpr uintptr_t kNullPtr = 0;
 
+/// a flag for indicating the next target is a lowest key.
+constexpr int64_t kCopyLowKey = -100;
+
 /// the capacity of each mapping table.
 constexpr size_t kMappingTableCapacity = (kPageSize - kWordSize) / kWordSize;
 
