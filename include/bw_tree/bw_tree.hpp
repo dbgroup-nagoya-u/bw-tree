@@ -120,7 +120,7 @@ class BwTreeVarLen
    *##################################################################################*/
 
   /**
-   * @brief Write (i.e., put) a given kay/payload pair.
+   * @brief Write (i.e., put) a given key/payload pair.
    *
    * If a given key does not exist in this tree, this function performs an insert
    * operation. If a given key has been already inserted, this function perfroms an
@@ -166,7 +166,7 @@ class BwTreeVarLen
   }
 
   /**
-   * @brief Update the record corresponding to a given kay with a given payload.
+   * @brief Update the record corresponding to a given key with a given payload.
    *
    * This function performs a uniqueness check in its processing. If there is a given
    * key in this tree, this function updates the corresponding record. If a given key
@@ -313,7 +313,7 @@ class BwTreeFixLen
    *##################################################################################*/
 
   /**
-   * @brief Write (i.e., put) a given kay/payload pair.
+   * @brief Write (i.e., put) a given key/payload pair.
    *
    * If a given key does not exist in this tree, this function performs an insert
    * operation. If a given key has been already inserted, this function perfroms an
@@ -355,7 +355,7 @@ class BwTreeFixLen
   }
 
   /**
-   * @brief Update the record corresponding to a given kay with a given payload.
+   * @brief Update the record corresponding to a given key with a given payload.
    *
    * This function performs a uniqueness check in its processing. If there is a given
    * key in this tree, this function updates the corresponding record. If a given key

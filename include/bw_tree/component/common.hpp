@@ -78,9 +78,6 @@ enum DeltaType : uint16_t
  * Internal constants
  *####################################################################################*/
 
-/// a flag for indicating closed intervals
-constexpr bool kClosed = true;
-
 /// a flag for indicating variable-length data
 constexpr bool kIsVarLen = true;
 

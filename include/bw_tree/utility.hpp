@@ -38,6 +38,12 @@ constexpr size_t kDefaultGCTime = 100000;
 /// the default number of worker threads for garbage collection.
 constexpr size_t kDefaultGCThreadNum = 1;
 
+/// a flag for indicating closed intervals
+constexpr bool kClosed = true;
+
+/// a flag for indicating closed intervals
+constexpr bool kOpen = false;
+
 /*######################################################################################
  * Utility enum and classes
  *####################################################################################*/
