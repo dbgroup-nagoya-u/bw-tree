@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#include "bw_tree/common/mapping_table.hpp"
+#include "bw_tree/component/mapping_table.hpp"
 
 #include <algorithm>
 #include <future>
 #include <memory>
 #include <thread>
 
-#include "bw_tree/varlen/delta_record.hpp"
-#include "bw_tree/varlen/node.hpp"
+#include "bw_tree/component/varlen/delta_record.hpp"
+#include "bw_tree/component/varlen/node.hpp"
 #include "common.hpp"
 #include "gtest/gtest.h"
 
@@ -33,6 +33,10 @@ namespace dbgroup::index::bw_tree::component::test
  *####################################################################################*/
 
 constexpr size_t kMultipleTableCapacity = kMappingTableCapacity * 10;
+
+/*######################################################################################
+ * Fixture class definition
+ *####################################################################################*/
 
 class MappingTableFixture : public testing::Test
 {

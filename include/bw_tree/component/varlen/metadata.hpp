@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_VARLEN_METADATA_HPP
-#define BW_TREE_VARLEN_METADATA_HPP
+#ifndef BW_TREE_COMPONENT_VARLEN_METADATA_HPP
+#define BW_TREE_COMPONENT_VARLEN_METADATA_HPP
 
-#include "bw_tree/common/common.hpp"
+#include "bw_tree/component/common.hpp"
 
 namespace dbgroup::index::bw_tree::component::varlen
 {
 /**
- * @brief A class to represent record metadata.
+ * @brief A class for representing record metadata.
  *
  */
 class Metadata
@@ -113,7 +113,12 @@ class Metadata
   }
 
   /**
+   * @brief Create a new metadata with a given offset value.
+   *
+   * Note that this function is prepared for leaf nodes' consolidation.
+   *
    * @param offset the offset to a corresponding record to be set.
+   * @return new metadata with updated offset.
    */
   [[nodiscard]] constexpr auto
   UpdateForLeaf(const size_t offset) const  //
@@ -123,7 +128,12 @@ class Metadata
   }
 
   /**
+   * @brief Create a new metadata with a given offset value.
+   *
+   * Note that this function is prepared for internal nodes' consolidation.
+   *
    * @param offset the offset to a corresponding record to be set.
+   * @return new metadata with updated offset.
    */
   [[nodiscard]] constexpr auto
   UpdateForInternal(const size_t offset) const  //
@@ -149,4 +159,4 @@ class Metadata
 
 }  // namespace dbgroup::index::bw_tree::component::varlen
 
-#endif  // BW_TREE_VARLEN_METADATA_HPP
+#endif  // BW_TREE_COMPONENT_VARLEN_METADATA_HPP

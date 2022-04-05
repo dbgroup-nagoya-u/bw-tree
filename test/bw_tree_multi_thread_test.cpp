@@ -21,8 +21,9 @@
 #include <thread>
 #include <vector>
 
-#include "bw_tree/bw_tree_varlen.hpp"
+#include "bw_tree/bw_tree.hpp"
 #include "common.hpp"
+#include "fix_var_switch.hpp"
 #include "gtest/gtest.h"
 
 namespace dbgroup::index::bw_tree::test
@@ -31,8 +32,9 @@ namespace dbgroup::index::bw_tree::test
  * Classes for templated testing
  *####################################################################################*/
 
-template <class KeyType, class PayloadType>
-struct KeyPayload {
+template <class BwTreeType, class KeyType, class PayloadType>
+struct Target {
+  using Tree = BwTreeType;
   using Key = KeyType;
   using Payload = PayloadType;
 };
@@ -44,6 +46,7 @@ struct KeyPayload {
 constexpr size_t kN = 1e5;
 constexpr size_t kKeyNumForTest = kN * kThreadNum / 2;
 constexpr size_t kGCTime = 100000;
+constexpr size_t kGCThreadNum = 1;
 constexpr bool kExpectSuccess = true;
 constexpr bool kExpectFailed = false;
 
@@ -51,7 +54,7 @@ constexpr bool kExpectFailed = false;
  * Fixture class definition
  *####################################################################################*/
 
-template <class KeyPayload>
+template <class Target>
 class BwTreeFixture : public testing::Test
 {
   /*####################################################################################
@@ -59,14 +62,15 @@ class BwTreeFixture : public testing::Test
    *##################################################################################*/
 
   // extract key-payload types
-  using Key = typename KeyPayload::Key::Data;
-  using Payload = typename KeyPayload::Payload::Data;
-  using KeyComp = typename KeyPayload::Key::Comp;
-  using PayloadComp = typename KeyPayload::Payload::Comp;
+  using Key = typename Target::Key::Data;
+  using Payload = typename Target::Payload::Data;
+  using KeyComp = typename Target::Key::Comp;
+  using PayComp = typename Target::Payload::Comp;
 
   // define type aliases for simplicity
-  using Metadata = component::varlen::Metadata;
-  using BwTree_t = BwTreeVarLen<Key, Payload, KeyComp>;
+  using Node_t = typename Target::Tree::template Node<Key, KeyComp>;
+  using Delta_t = typename Target::Tree::template Delta<Key, KeyComp>;
+  using BwTree_t = typename component::BwTree<Payload, Node_t, Delta_t, Target::Tree::kUseVarLen>;
 
  protected:
   /*####################################################################################
@@ -99,6 +103,7 @@ class BwTreeFixture : public testing::Test
    * Internal constants
    *##################################################################################*/
 
+  static constexpr bool kUseVarLen = Target::Tree::kUseVarLen;
   static constexpr size_t kKeyLen = GetDataLength<Key>();
   static constexpr size_t kPayLen = GetDataLength<Payload>();
 
@@ -112,7 +117,7 @@ class BwTreeFixture : public testing::Test
     PrepareTestData(keys_, kKeyNumForTest);
     PrepareTestData(payloads_, kKeyNumForTest);
 
-    index_ = std::make_unique<BwTree_t>(kGCTime);
+    index_ = std::make_unique<BwTree_t>(kGCTime, kGCThreadNum);
   }
 
   void
@@ -243,7 +248,7 @@ class BwTreeFixture : public testing::Test
 
       const auto &expected_val = payloads_[expected_id];
       const auto &actual_val = read_val.value();
-      EXPECT_TRUE(component::IsEqual<PayloadComp>(expected_val, actual_val));
+      EXPECT_TRUE(IsEqual<PayComp>(expected_val, actual_val));
     } else {
       EXPECT_FALSE(read_val);
     }
@@ -370,16 +375,22 @@ class BwTreeFixture : public testing::Test
  * Preparation for typed testing
  *####################################################################################*/
 
-using KeyPayloadPairs = ::testing::Types<  //
-    KeyPayload<UInt8, UInt8>,              // fixed-length keys
-    KeyPayload<UInt4, UInt8>,              // small keys
-    KeyPayload<UInt8, UInt4>,              // small payloads
-    KeyPayload<UInt4, UInt4>,              // small keys/payloads
-    KeyPayload<Var, UInt8>,                // variable-length keys
-    KeyPayload<Ptr, Ptr>,                  // pointer key/payload
-    KeyPayload<Original, Original>         // original type key/payload
+using TestTargets = ::testing::Types<    //
+    Target<VarLen, UInt8, UInt8>,        // fixed-length keys
+    Target<VarLen, UInt4, UInt8>,        // small keys
+    Target<VarLen, UInt8, UInt4>,        // small payloads
+    Target<VarLen, UInt4, UInt4>,        // small keys/payloads
+    Target<VarLen, Var, UInt8>,          // variable-length keys
+    Target<VarLen, Ptr, Ptr>,            // pointer key/payload
+    Target<VarLen, Original, Original>,  // original type key/payload
+    Target<FixLen, UInt8, UInt8>,        // fixed-length keys
+    Target<FixLen, UInt4, UInt8>,        // small keys
+    Target<FixLen, UInt8, UInt4>,        // small payloads
+    Target<FixLen, UInt4, UInt4>,        // small keys/payloads
+    Target<FixLen, Ptr, Ptr>,            // pointer key/payload
+    Target<FixLen, Original, Original>   // original type key/payload
     >;
-TYPED_TEST_SUITE(BwTreeFixture, KeyPayloadPairs);
+TYPED_TEST_SUITE(BwTreeFixture, TestTargets);
 
 /*######################################################################################
  * Unit test definitions

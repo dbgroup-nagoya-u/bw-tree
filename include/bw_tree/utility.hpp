@@ -21,9 +21,29 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 
 namespace dbgroup::index::bw_tree
 {
+/*######################################################################################
+ * Global constants
+ *####################################################################################*/
+
+/// Assumes that one word is represented by 8 bytes.
+constexpr size_t kWordSize = sizeof(uintptr_t);
+
+/// the default time interval for garbage collection [us].
+constexpr size_t kDefaultGCTime = 100000;
+
+/// the default number of worker threads for garbage collection.
+constexpr size_t kDefaultGCThreadNum = 1;
+
+/// a flag for indicating closed intervals
+constexpr bool kClosed = true;
+
+/// a flag for indicating closed intervals
+constexpr bool kOpen = false;
+
 /*######################################################################################
  * Utility enum and classes
  *####################################################################################*/
@@ -40,12 +60,17 @@ enum ReturnCode
 };
 
 /**
- * @brief Comp binary keys as CString. The end of every key must be '\\0'.
+ * @brief Compare binary keys as CString.
+ *
+ * NOTE: the end of every key must be '\\0'.
  *
  */
 struct CompareAsCString {
-  constexpr bool
-  operator()(const void *a, const void *b) const noexcept
+  constexpr auto
+  operator()(  //
+      const void *a,
+      const void *b) const noexcept  //
+      -> bool
   {
     if (a == nullptr) return false;
     if (b == nullptr) return true;
@@ -56,60 +81,47 @@ struct CompareAsCString {
 /**
  * @tparam T a target class.
  * @retval true if a target class is variable-length data.
- * @retval false if a target class is static-length data.
+ * @retval false otherwise.
  */
 template <class T>
-constexpr bool
-IsVariableLengthData()
+constexpr auto
+IsVariableLengthData()  //
+    -> bool
 {
-  static_assert(std::is_trivially_copyable_v<T>);
   return false;
+}
+
+/**
+ * @param val a target value.
+ * @return the binary logarithm of a given value.
+ */
+constexpr auto
+Log2(const size_t val)  //
+    -> size_t
+{
+  if (val == 0) return 0;
+  return (val == 1) ? 0 : Log2(val >> 1UL) + 1;
 }
 
 /*######################################################################################
  * Tuning parameters for Bw-tree
  *####################################################################################*/
 
-/// Assumes that one word is represented by 8 bytes
-constexpr size_t kWordSize = sizeof(uintptr_t);
-
-/// Assumes that one word is represented by 8 bytes
-constexpr size_t kCacheLineSize = 64;
-
-#ifdef BW_TREE_PAGE_SIZE
-/// The page size of each node
+/// The default page size of each node
 constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
-#else
-/// The page size of each node
-constexpr size_t kPageSize = 8192;
-#endif
 
-#ifdef BW_TREE_MAX_DELTA_NODE_NUM
-/// The page size of each node
-constexpr size_t kMaxDeltaNodeNum = BW_TREE_MAX_DELTA_NODE_NUM;
-#else
-/// The page size of each node
-constexpr size_t kMaxDeltaNodeNum = 32;
-#endif
+/// The number of delta records for invoking consolidation
+constexpr size_t kMaxDeltaNodeNum = BW_TREE_MAX_DELTA_RECORD_NUM;
 
-#ifdef BW_TREE_MAX_VARIABLE_DATA_SIZE
-/// the maximun size of variable-length data
-constexpr size_t kMaxVariableSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
-#else
-/// the maximun size of variable-length data
-constexpr size_t kMaxVariableSize = 128;
-#endif
+/// The maximun size of variable-length data
+constexpr size_t kMaxVarDataSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
 
-#ifdef BW_TREE_MIN_NODE_SIZE
-/// the maximun size of variable-length data
+/// The minimum size of nodes for invoking merging
 constexpr size_t kMinNodeSize = BW_TREE_MIN_NODE_SIZE;
-#else
-/// the maximun size of variable-length data
-constexpr size_t kMinNodeSize = 1024;
-#endif
 
-/// check whether the specified page size is valid
+// Check whether the specified page size is valid
 static_assert(kPageSize % kWordSize == 0);
+static_assert(kMaxVarDataSize * 2 < kPageSize);
 
 }  // namespace dbgroup::index::bw_tree
 
