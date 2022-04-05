@@ -423,19 +423,20 @@ class BwTree
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
-    Delta_t *insert_d{};
+    Delta_t *write_d{};
     if constexpr (kIsVarLen) {
-      insert_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload};
+      write_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload};
     } else {
-      insert_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, payload};
+      write_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, payload};
     }
     while (true) {
       // check whether the target node includes incomplete SMOs
-      const auto *head = GetHead(key, kClosed, stack);
+      const auto [head, rc] = GetHeadWithKeyCheck(key, stack);
 
       // try to insert the delta record
-      insert_d->SetNext(head);
-      if (stack.back()->CASWeak(head, insert_d)) break;
+      write_d->SetDeltaType((rc == kKeyExist) ? kModify : kInsert);
+      write_d->SetNext(head);
+      if (stack.back()->CASWeak(head, write_d)) break;
     }
 
     if (consol_page_ != nullptr) {

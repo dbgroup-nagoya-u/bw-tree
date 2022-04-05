@@ -307,6 +307,17 @@ class DeltaRecord
   }
 
   /**
+   * @brief Update the delta-modification type of this record with a given one.
+   *
+   * @param type a modification type to be updated.
+   */
+  void
+  SetDeltaType(const DeltaType type)
+  {
+    delta_type_ = type;
+  }
+
+  /**
    * @brief Set a given pointer as the next one.
    *
    * @param next a pointer to be set as the next one.
