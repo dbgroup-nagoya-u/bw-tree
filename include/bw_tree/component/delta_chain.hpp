@@ -70,7 +70,7 @@ class DeltaChain
 
     const auto &low_key = delta->GetLowKey();
     if (!low_key) return false;
-    return IsEqual<Comp>(*low_key, key);
+    return !Comp{}(*low_key, key) && !Comp{}(key, *low_key);
   }
 
   /**

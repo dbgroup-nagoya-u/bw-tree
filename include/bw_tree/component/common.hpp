@@ -98,24 +98,6 @@ constexpr size_t kMappingTableCapacity = (kPageSize - kWordSize) / kWordSize;
  *####################################################################################*/
 
 /**
- * @tparam Compare a comparator class.
- * @tparam T a target class.
- * @param obj_1 an object to be compared.
- * @param obj_2 another object to be compared.
- * @retval true if given objects are equivalent.
- * @retval false otherwise.
- */
-template <class Compare, class T>
-constexpr auto
-IsEqual(  //
-    const T &obj_1,
-    const T &obj_2)  //
-    -> bool
-{
-  return !Compare{}(obj_1, obj_2) && !Compare{}(obj_2, obj_1);
-}
-
-/**
  * @brief Shift a memory address by byte offsets.
  *
  * @param addr an original address.

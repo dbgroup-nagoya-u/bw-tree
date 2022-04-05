@@ -14,23 +14,25 @@
  * limitations under the License.
  */
 
-#include "bw_tree/varlen/metadata.hpp"
+#include "bw_tree/component/logical_id.hpp"
 
 #include "common.hpp"
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::bw_tree::component::varlen::test
+namespace dbgroup::index::bw_tree::component::test
 {
+
 /*######################################################################################
  * Global constants
  *####################################################################################*/
 
-constexpr size_t kExpectedOffset = 256;
-constexpr size_t kExpectedKeyLength = 8;
-constexpr size_t kExpectedTotalLength = 16;
-constexpr size_t kExpectedPayloadLength = kExpectedTotalLength - kExpectedKeyLength;
+constexpr uintptr_t kDummyPtr = 128;
 
-class MetadataFixture : public testing::Test
+/*######################################################################################
+ * Fixture class definition
+ *####################################################################################*/
+
+class LogicalIDFixture : public testing::Test
 {
  protected:
   /*####################################################################################
@@ -51,7 +53,7 @@ class MetadataFixture : public testing::Test
    * Internal member variables
    *##################################################################################*/
 
-  Metadata meta_{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
+  LogicalID lid_{};
 };
 
 /*######################################################################################
@@ -62,16 +64,48 @@ class MetadataFixture : public testing::Test
  * Constructor tests
  *------------------------------------------------------------------------------------*/
 
-TEST_F(MetadataFixture, ConstructWithArgumentsCreateExpectedMetadata)
-{
-  EXPECT_EQ(kExpectedOffset, meta_.GetOffset());
-  EXPECT_EQ(kExpectedKeyLength, meta_.GetKeyLength());
-  EXPECT_EQ(kExpectedPayloadLength, meta_.GetPayloadLength());
-  EXPECT_EQ(kExpectedTotalLength, meta_.GetTotalLength());
+TEST_F(LogicalIDFixture, InitialLogicalIDHasNULL)
+{  //
+  EXPECT_EQ(kNullPtr, lid_.Load<uintptr_t>());
 }
 
 /*--------------------------------------------------------------------------------------
- * Getter/setter tests
+ * Utility tests
  *------------------------------------------------------------------------------------*/
 
-}  // namespace dbgroup::index::bw_tree::component::varlen::test
+TEST_F(LogicalIDFixture, LoadStoredValue)
+{
+  lid_.Store(kDummyPtr);
+  EXPECT_EQ(kDummyPtr, lid_.Load<uintptr_t>());
+}
+
+TEST_F(LogicalIDFixture, ClearRemoveStoredValue)
+{
+  lid_.Store(kDummyPtr);
+  lid_.Clear();
+  EXPECT_EQ(kNullPtr, lid_.Load<uintptr_t>());
+}
+
+TEST_F(LogicalIDFixture, CASWeakStoreDesiredValueIfExpectedOneStored)
+{
+  EXPECT_TRUE(lid_.CASWeak(kNullPtr, kDummyPtr));
+  EXPECT_EQ(kDummyPtr, lid_.Load<uintptr_t>());
+}
+
+TEST_F(LogicalIDFixture, CASWeakFailIfUnexpectedValueStored)
+{
+  EXPECT_FALSE(lid_.CASWeak(kDummyPtr, kNullPtr));
+}
+
+TEST_F(LogicalIDFixture, CASStrongStoreDesiredValueIfExpectedOneStored)
+{
+  EXPECT_TRUE(lid_.CASStrong(kNullPtr, kDummyPtr));
+  EXPECT_EQ(kDummyPtr, lid_.Load<uintptr_t>());
+}
+
+TEST_F(LogicalIDFixture, CASStrongFailIfUnexpectedValueStored)
+{
+  EXPECT_FALSE(lid_.CASStrong(kDummyPtr, kNullPtr));
+}
+
+}  // namespace dbgroup::index::bw_tree::component::test

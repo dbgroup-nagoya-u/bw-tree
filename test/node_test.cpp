@@ -14,22 +14,24 @@
  * limitations under the License.
  */
 
-#include "bw_tree/varlen/delta_record.hpp"
+#include "bw_tree/component/varlen/node.hpp"
 
 #include <memory>
 #include <vector>
 
 #include "common.hpp"
+#include "fix_var_switch.hpp"
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::bw_tree::component::varlen::test
+namespace dbgroup::index::bw_tree::component::test
 {
 /*######################################################################################
  * Classes for templated testing
  *####################################################################################*/
 
-template <class KeyType, class PayloadType>
-struct KeyPayload {
+template <class BwTreeType, class KeyType, class PayloadType>
+struct Target {
+  using Tree = BwTreeType;
   using Key = KeyType;
   using Payload = PayloadType;
 };
@@ -38,32 +40,28 @@ struct KeyPayload {
  * Fixture class definition
  *####################################################################################*/
 
-template <class KeyPayload>
-class DeltaRecordFixture : public testing::Test
+template <class Target>
+class NodeFixture : public testing::Test
 {
   /*####################################################################################
    * Type aliases
    *##################################################################################*/
 
   // extract key-payload types
-  using Key = typename KeyPayload::Key::Data;
-  using Payload = typename KeyPayload::Payload::Data;
-  using KeyComp = typename KeyPayload::Key::Comp;
-  using PayComp = typename KeyPayload::Payload::Comp;
+  using Key = typename Target::Key::Data;
+  using Payload = typename Target::Payload::Data;
+  using KeyComp = typename Target::Key::Comp;
+  using PayComp = typename Target::Payload::Comp;
 
   // define type aliases for simplicity
-  using DeltaRecord_t = DeltaRecord<Key, std::less<>>;
+  using Node_t = typename Target::Tree::template Node<Key, KeyComp>;
 
  protected:
   /*####################################################################################
    * Internal constants
    *##################################################################################*/
 
-  static constexpr size_t kKeyLen = GetDataLength<Key>();
-  static constexpr size_t kPayLen = GetDataLength<Payload>();
-  static constexpr size_t kRecLen = kKeyLen + kPayLen;
-  static constexpr size_t kMaxRecNum = (kPageSize - kHeaderLength) / (kRecLen + sizeof(Metadata));
-  static constexpr size_t kKeyNumForTest = kMaxRecNum;
+  static constexpr size_t kKeyNumForTest = 64;
 
   /*####################################################################################
    * Setup/Teardown
@@ -91,29 +89,7 @@ class DeltaRecordFixture : public testing::Test
   GetPage()  //
       -> void *
   {
-    return ::operator new(GetMaxDeltaSize<Key, Payload>());
-  }
-
-  auto
-  CreateLeafRecord(  //
-      const DeltaType type,
-      const Key &key,
-      const Payload &payload)  //
-      -> std::unique_ptr<DeltaRecord_t>
-  {
-    auto *raw_p = new (GetPage()) DeltaRecord_t{type, key, kKeyLen, payload};
-    return std::unique_ptr<DeltaRecord_t>{raw_p};
-  }
-
-  auto
-  CreateSplitRecord(  //
-      const DeltaType type,
-      const Key &key,
-      const Payload &payload)  //
-      -> std::unique_ptr<DeltaRecord_t>
-  {
-    auto *raw_p = new (GetPage()) DeltaRecord_t{type, key, kKeyLen, payload};
-    return std::unique_ptr<DeltaRecord_t>{raw_p};
+    return ::operator new(kPageSize);
   }
 
   /*####################################################################################
@@ -121,17 +97,28 @@ class DeltaRecordFixture : public testing::Test
    *##################################################################################*/
 
   void
-  VerifyLeafConstructor(const DeltaType type)
+  VerifyInitialRootConstructor()
   {
-    const auto &key = keys_[0];
-    const auto &payload = payloads_[0];
-    const auto &delta = CreateLeafRecord(type, key, payload);
+    auto *raw_p = new (GetPage()) Node_t{};
+    std::unique_ptr<Node_t> node{raw_p};
 
-    EXPECT_TRUE(delta->IsLeaf());
-    EXPECT_FALSE(delta->IsBaseNode());
-    EXPECT_EQ(nullptr, delta->GetNext());
-    EXPECT_TRUE(IsEqual<KeyComp>(key, delta->GetKey()));
-    EXPECT_TRUE(IsEqual<PayComp>(payload, delta->template GetPayload<Payload>()));
+    EXPECT_TRUE(node->IsLeaf());
+    EXPECT_EQ(0, node->GetRecordCount());
+    EXPECT_EQ(nullptr, node->GetNext());
+    EXPECT_FALSE(node->GetLowKey());
+  }
+
+  void
+  VerifyNewNodeConstructor()
+  {
+    constexpr bool kDummyFlag = false;
+    auto *raw_p = new (GetPage()) Node_t{kLeaf, kPageSize, kDummyFlag};
+    std::unique_ptr<Node_t> node{raw_p};
+
+    EXPECT_TRUE(node->IsLeaf());
+    EXPECT_EQ(0, node->GetRecordCount());
+    EXPECT_EQ(nullptr, node->GetNext());
+    EXPECT_FALSE(node->GetLowKey());
   }
 
   /*####################################################################################
@@ -147,15 +134,22 @@ class DeltaRecordFixture : public testing::Test
  * Preparation for typed testing
  *####################################################################################*/
 
-using KeyPayloadPairs = ::testing::Types<  //
-    KeyPayload<UInt8, UInt8>,              // both fixed
-    KeyPayload<Var, UInt8>,                // variable-fixed
-    KeyPayload<UInt8, Var>,                // fixed-variable
-    KeyPayload<Var, Var>,                  // both variable
-    KeyPayload<Ptr, Ptr>,                  // pointer key/payload
-    KeyPayload<Original, Original>         // original key/payload
+using TestTargets = ::testing::Types<    //
+    Target<VarLen, UInt8, UInt8>,        // fixed-length keys
+    Target<VarLen, UInt4, UInt8>,        // small keys
+    Target<VarLen, UInt8, UInt4>,        // small payloads
+    Target<VarLen, UInt4, UInt4>,        // small keys/payloads
+    Target<VarLen, Var, UInt8>,          // variable-length keys
+    Target<VarLen, Ptr, Ptr>,            // pointer key/payload
+    Target<VarLen, Original, Original>,  // original type key/payload
+    Target<FixLen, UInt8, UInt8>,        // fixed-length keys
+    Target<FixLen, UInt4, UInt8>,        // small keys
+    Target<FixLen, UInt8, UInt4>,        // small payloads
+    Target<FixLen, UInt4, UInt4>,        // small keys/payloads
+    Target<FixLen, Ptr, Ptr>,            // pointer key/payload
+    Target<FixLen, Original, Original>   // original type key/payload
     >;
-TYPED_TEST_SUITE(DeltaRecordFixture, KeyPayloadPairs);
+TYPED_TEST_SUITE(NodeFixture, TestTargets);
 
 /*######################################################################################
  * Unit test definitions
@@ -165,11 +159,14 @@ TYPED_TEST_SUITE(DeltaRecordFixture, KeyPayloadPairs);
  * Constructor tests
  *------------------------------------------------------------------------------------*/
 
-TYPED_TEST(DeltaRecordFixture, ConstructLeafDeltas)
-{
-  TestFixture::VerifyLeafConstructor(DeltaType::kInsert);
-  TestFixture::VerifyLeafConstructor(DeltaType::kModify);
-  TestFixture::VerifyLeafConstructor(DeltaType::kDelete);
+TYPED_TEST(NodeFixture, ConstructedInitialRootHasExpectedValues)
+{  //
+  TestFixture::VerifyInitialRootConstructor();
 }
 
-}  // namespace dbgroup::index::bw_tree::component::varlen::test
+TYPED_TEST(NodeFixture, ConstructedNewNodeHasExpectedValues)
+{  //
+  TestFixture::VerifyNewNodeConstructor();
+}
+
+}  // namespace dbgroup::index::bw_tree::component::test

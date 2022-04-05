@@ -79,6 +79,24 @@ constexpr size_t kRandomSeed = 10;
 namespace dbgroup::index::bw_tree
 {
 /**
+ * @tparam Compare a comparator class.
+ * @tparam T a target class.
+ * @param obj_1 an object to be compared.
+ * @param obj_2 another object to be compared.
+ * @retval true if given objects are equivalent.
+ * @retval false otherwise.
+ */
+template <class Compare, class T>
+constexpr auto
+IsEqual(  //
+    const T &obj_1,
+    const T &obj_2)  //
+    -> bool
+{
+  return !Compare{}(obj_1, obj_2) && !Compare{}(obj_2, obj_1);
+}
+
+/**
  * @brief Use CString as variable-length data in tests.
  *
  */

@@ -342,7 +342,8 @@ class DeltaRecord
   GetMaxDeltaSize()  //
       -> size_t
   {
-    return kHeaderLength + sizeof(Payload);
+    constexpr auto kPayLen = (sizeof(Payload) > kWordSize) ? sizeof(Payload) : kWordSize;
+    return kHeaderLength + kPayLen;
   }
 
   /**
