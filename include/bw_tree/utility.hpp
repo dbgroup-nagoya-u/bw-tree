@@ -113,11 +113,11 @@ constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
 /// The number of delta records for invoking consolidation
 constexpr size_t kMaxDeltaNodeNum = BW_TREE_MAX_DELTA_RECORD_NUM;
 
-/// The maximun size of variable-length data
-constexpr size_t kMaxVarDataSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
-
 /// The minimum size of nodes for invoking merging
 constexpr size_t kMinNodeSize = BW_TREE_MIN_NODE_SIZE;
+
+/// The maximun size of variable-length data
+constexpr size_t kMaxVarDataSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
 
 // Check whether the specified page size is valid
 static_assert(kPageSize % kWordSize == 0);
