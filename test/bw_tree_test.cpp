@@ -403,7 +403,7 @@ TYPED_TEST_SUITE(BwTreeFixture, TestTargets);
 
 TYPED_TEST(BwTreeFixture, WriteWithoutSMOsReadWrittenValues)
 {
-  const size_t rec_num = kMaxDeltaNodeNum;
+  const size_t rec_num = kMaxDeltaRecordNum;
   TestFixture::VerifyWritesWith(!kWriteTwice, !kShuffled, rec_num);
 }
 
