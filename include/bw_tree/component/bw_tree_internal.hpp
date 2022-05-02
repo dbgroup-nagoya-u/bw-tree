@@ -307,7 +307,7 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // check whether the leaf node has a target key
-    consol_page_ = nullptr;
+    consol_page_ = std::make_pair(nullptr, 0);
     auto &&stack = SearchLeafNode(key, kClosed);
 
     ReturnCode rc{};
@@ -347,10 +347,12 @@ class BwTree
         }
       }
 
-      if (delta_num >= kMaxDeltaNodeNum) {
-        TryConsolidation(stack.back(), key, kClosed, stack);
-      } else if (consol_page_ != nullptr) {
-        TryConsolidation(consol_page_, key, kClosed, stack);
+      if (delta_num >= kMaxDeltaRecordNum) {
+        consol_page_ = std::make_pair(stack.back(), delta_num);
+      }
+
+      if (consol_page_.first != nullptr) {
+        TryConsolidation(key, kClosed, stack);
       }
 
       if (rc == kKeyNotExist) return std::nullopt;
@@ -419,7 +421,7 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    consol_page_ = nullptr;
+    consol_page_ = std::make_pair(nullptr, 0);
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
@@ -439,8 +441,8 @@ class BwTree
       if (stack.back()->CASWeak(head, write_d)) break;
     }
 
-    if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, key, kClosed, stack);
+    if (consol_page_.first != nullptr) {
+      TryConsolidation(key, kClosed, stack);
     }
 
     return kSuccess;
@@ -464,7 +466,7 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    consol_page_ = nullptr;
+    consol_page_ = std::make_pair(nullptr, 0);
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
@@ -490,8 +492,8 @@ class BwTree
       if (stack.back()->CASWeak(head, insert_d)) break;
     }
 
-    if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, key, kClosed, stack);
+    if (consol_page_.first != nullptr) {
+      TryConsolidation(key, kClosed, stack);
     }
 
     return rc;
@@ -515,7 +517,7 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    consol_page_ = nullptr;
+    consol_page_ = std::make_pair(nullptr, 0);
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
@@ -541,8 +543,8 @@ class BwTree
       if (stack.back()->CASWeak(head, modify_d)) break;
     }
 
-    if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, key, kClosed, stack);
+    if (consol_page_.first != nullptr) {
+      TryConsolidation(key, kClosed, stack);
     }
 
     return rc;
@@ -565,7 +567,7 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    consol_page_ = nullptr;
+    consol_page_ = std::make_pair(nullptr, 0);
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
@@ -591,8 +593,8 @@ class BwTree
       if (stack.back()->CASWeak(head, delete_d)) break;
     }
 
-    if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, key, kClosed, stack);
+    if (consol_page_.first != nullptr) {
+      TryConsolidation(key, kClosed, stack);
     }
 
     return rc;
@@ -739,8 +741,8 @@ class BwTree
 
         case DeltaRC::kReachBaseNode:
         default: {
-          if (delta_num >= kMaxDeltaNodeNum) {
-            consol_page_ = stack.back();
+          if (delta_num >= kMaxDeltaRecordNum) {
+            consol_page_ = std::make_pair(stack.back(), delta_num);
           }
 
           // search a child node in a base node
@@ -918,8 +920,8 @@ class BwTree
           break;  // do nothing
       }
 
-      if (delta_num >= kMaxDeltaNodeNum) {
-        consol_page_ = stack.back();
+      if (delta_num >= kMaxDeltaRecordNum) {
+        consol_page_ = std::make_pair(stack.back(), delta_num);
       }
 
       return head;
@@ -974,8 +976,8 @@ class BwTree
           rc = reinterpret_cast<Node_t *>(out_ptr)->SearchRecord(key).first;
       }
 
-      if (delta_num >= kMaxDeltaNodeNum) {
-        consol_page_ = stack.back();
+      if (delta_num >= kMaxDeltaRecordNum) {
+        consol_page_ = std::make_pair(stack.back(), delta_num);
       }
 
       return {head, rc};
@@ -1059,20 +1061,22 @@ class BwTree
    */
   void
   TryConsolidation(  //
-      LogicalID *target_lid,
       const Key &key,
       const bool closed,
       std::vector<LogicalID *> &stack)
   {
+    // copy a target LID and the number of delta records
+    auto [target_lid, delta_rec_num] = consol_page_;
+
     while (true) {
       // remove child nodes from a node stack
       while (!stack.empty() && stack.back() != target_lid) stack.pop_back();
       if (stack.empty()) return;
 
       // check whether the target node is valid (containing a target key and no incomplete SMOs)
-      consol_page_ = nullptr;
+      consol_page_ = std::make_pair(nullptr, 0);
       const auto *head = GetHead(key, closed, stack);
-      if (consol_page_ != target_lid) return;
+      if (consol_page_.first != target_lid) return;
 
       // prepare a consolidated node
       Node_t *new_node = nullptr;
@@ -1111,9 +1115,12 @@ class BwTree
         AddToGC(head);
         return;
       }
-      // if consolidation fails, no retry
+
+      // if consolidation is failed, release the consolidated node
       AddToGC(new_node);
-      return;
+
+      // no retry if the number of delta records is sufficiently small
+      if (delta_rec_num < 2 * kMaxDeltaRecordNum) return;
     }
   }
 
@@ -1139,8 +1146,8 @@ class BwTree
     // sort delta records
     std::vector<Record> records{};
     std::vector<ConsolidateInfo> consol_info{};
-    records.reserve(kMaxDeltaNodeNum * 4);
-    consol_info.reserve(kMaxDeltaNodeNum);
+    records.reserve(kMaxDeltaRecordNum * 4);
+    consol_info.reserve(kMaxDeltaRecordNum);
     const auto [consolidated, diff] = DC::template Sort<T>(head, records, consol_info);
     if (consolidated) return kAlreadyConsolidated;
 
@@ -1339,12 +1346,12 @@ class BwTree
     }
 
     // execute parent update
-    consol_page_ = nullptr;
+    consol_page_ = std::make_pair(nullptr, 0);
     CompleteSplit(split_d, stack);
 
     // execute parent consolidation/split if needed
-    if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, split_node->GetKey(), kClosed, stack);
+    if (consol_page_.first != nullptr) {
+      TryConsolidation(split_node->GetKey(), kClosed, stack);
     }
 
     return true;
@@ -1495,12 +1502,12 @@ class BwTree
       if (stack.back()->CASWeak(sib_head, merge_d)) break;
     }
 
-    consol_page_ = nullptr;
+    consol_page_ = std::make_pair(nullptr, 0);
     CompleteMerge(merge_d, stack);
 
     // execute parent consolidation/split if needed
-    if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, low_key, kClosed, stack);
+    if (consol_page_.first != nullptr) {
+      TryConsolidation(low_key, kClosed, stack);
     }
 
     return true;
@@ -1629,7 +1636,7 @@ class BwTree
   NodeGC_t gc_{};
 
   /// the logical ID of a node to be consolidated.
-  inline static thread_local LogicalID *consol_page_{};  // NOLINT
+  inline static thread_local std::pair<LogicalID *, size_t> consol_page_{};  // NOLINT
 };
 
 }  // namespace dbgroup::index::bw_tree::component
