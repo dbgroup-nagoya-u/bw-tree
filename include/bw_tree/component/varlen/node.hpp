@@ -130,6 +130,16 @@ class Node
   }
 
   /**
+   * @return the byte length of this node.
+   */
+  [[nodiscard]] constexpr auto
+  GetNodeSize() const  //
+      -> size_t
+  {
+    return node_size_;
+  }
+
+  /**
    * @return the number of records in this node.
    */
   [[nodiscard]] constexpr auto
@@ -541,6 +551,7 @@ class Node
       } else {
         // this record is the end one in a split-left node
         do_split_ = false;
+        node_size_ = kPageSize;
         offset = CopyLowKeyFrom(node, pos);
       }
     }
@@ -580,6 +591,7 @@ class Node
         } else {
           // this record is the end one in a split-left node
           do_split_ = false;
+          node_size_ = kPageSize;
           offset = CopyLowKeyFrom(rec);
         }
       }
@@ -618,6 +630,7 @@ class Node
       } else {
         // this record is the end one in a split-left node
         do_split_ = false;
+        node_size_ = kPageSize;
         offset = CopyLowKeyFrom(node, pos);
       }
     }

@@ -1169,7 +1169,7 @@ class BwTree
     if (is_scan) {
       // use dynamic page sizes for scanning
       size = (size / kPageSize + 1) * kPageSize;
-      if (size > kPageSize) {
+      if (size > consol_node->GetNodeSize()) {
         delete consol_node;
         page = ::operator new(size);
       }
