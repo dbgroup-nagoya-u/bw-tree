@@ -1165,21 +1165,27 @@ class BwTree
     }
 
     // check whether splitting is needed
+    void *page = consol_node;
     bool do_split = false;
-    if (!is_scan && size > kPageSize) {
-      do_split = true;
-      size = size / 2 + (kHeaderLength / 2);
-    }
-
-    // prepare a page for a new node
-    void *page{};
-    if (consol_node == nullptr) {
-      page = GetNodePage(size);
-    } else if (size > kPageSize) {
-      page = GetNodePage(size);
-      AddToGC(consol_node);
+    if (is_scan) {
+      // use dynamic page sizes for scanning
+      size = (size / kPageSize + 1) * kPageSize;
+      if (consol_node == nullptr || size > kPageSize) {
+        delete consol_node;
+        page = GetNodePage(size);
+      } else {
+        page = GetNodePage(kPageSize);
+      }
     } else {
-      page = consol_node;
+      // use a static page size for constructing trees
+      page = GetNodePage(kPageSize);
+      if (size > kPageSize) {
+        do_split = true;
+        size = size / 2 + (kHeaderLength / 2);
+        if (size > kPageSize) {
+          size += size - kPageSize;
+        }
+      }
     }
 
     // consolidate a target node
