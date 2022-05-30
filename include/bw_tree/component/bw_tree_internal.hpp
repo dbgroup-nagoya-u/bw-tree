@@ -267,7 +267,7 @@ class BwTree
       : gc_{gc_interval_microsec, gc_thread_num, true}
   {
     // create an empty Bw-tree
-    auto *root_node = new (GetNodePage(kPageSize)) Node_t{};
+    auto *root_node = new (GetNodePage()) Node_t{};
     auto *root_lid = mapping_table_.GetNewLogicalID();
     root_lid->Store(root_node);
     root_.store(root_lid, std::memory_order_relaxed);
@@ -375,7 +375,7 @@ class BwTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    Node_t *node = nullptr;
+    auto *node = reinterpret_cast<Node_t *>(GetNodePage());
     size_t begin_pos{};
     if (begin_key) {
       // traverse to a leaf node and sort records for scanning
@@ -637,10 +637,10 @@ class BwTree
    * @returns the reserved memory page.
    */
   [[nodiscard]] auto
-  GetNodePage(const size_t size)  //
+  GetNodePage()  //
       -> void *
   {
-    if (size > kPageSize) return ::operator new(size);
+    if (tls_node_page_) return tls_node_page_.release();
 
     auto *page = gc_.template GetPageIfPossible<Node_t>();
     return (page == nullptr) ? (::operator new(kPageSize)) : page;
@@ -1078,7 +1078,7 @@ class BwTree
       if (consol_page_.first != target_lid) return;
 
       // prepare a consolidated node
-      auto *new_node = tls_node_page_.release();
+      auto *new_node = reinterpret_cast<Node_t *>(GetNodePage());
       const auto rc = (head->IsLeaf()) ? Consolidate<Payload>(head, new_node)
                                        : Consolidate<LogicalID *>(head, new_node);
       switch (rc) {
@@ -1116,9 +1116,7 @@ class BwTree
       }
 
       // if consolidation is failed, keep the allocated page to reuse
-      if (!tls_node_page_) {
-        tls_node_page_.reset(new_node);
-      }
+      tls_node_page_.reset(new_node);
 
       // no retry if the number of delta records is sufficiently small
       if (delta_rec_num < 2 * kMaxDeltaRecordNum) return;
@@ -1166,27 +1164,25 @@ class BwTree
     }
 
     // check whether splitting is needed
-    void *page{};
+    void *page = consol_node;
     bool do_split = false;
     if (is_scan) {
       // use dynamic page sizes for scanning
       size = (size / kPageSize + 1) * kPageSize;
-      if (consol_node == nullptr || size > kPageSize) {
+      if (size > kPageSize) {
         delete consol_node;
-        page = GetNodePage(size);
-      } else {
-        page = GetNodePage(kPageSize);
+        page = ::operator new(size);
+      }
+    } else if (size > kPageSize) {
+      // perform splitting
+      do_split = true;
+      size = size / 2 + (kHeaderLength / 2);
+      if (size > kPageSize) {
+        size += size - kPageSize;
       }
     } else {
-      // use a static page size for constructing trees
-      page = (consol_node == nullptr) ? GetNodePage(kPageSize) : consol_node;
-      if (size > kPageSize) {
-        do_split = true;
-        size = size / 2 + (kHeaderLength / 2);
-        if (size > kPageSize) {
-          size += size - kPageSize;
-        }
-      }
+      // perform consolidation
+      size = kPageSize;
     }
 
     // consolidate a target node
@@ -1418,7 +1414,7 @@ class BwTree
     // create a new root node
     auto *child_lid = stack.back();
     stack.pop_back();  // remove the current root to push a new one
-    const auto *new_root = new (GetNodePage(kPageSize)) Node_t{split_d, child_lid};
+    auto *new_root = new (GetNodePage()) Node_t{split_d, child_lid};
 
     // prepare a new logical ID for the new root
     auto *new_lid = mapping_table_.GetNewLogicalID();
@@ -1430,7 +1426,7 @@ class BwTree
     if (!success) {
       // another thread has already inserted a new root
       new_lid->Clear();
-      AddToGC(new_root);
+      tls_node_page_.reset(new_root);
     } else {
       cur_lid = new_lid;
     }
