@@ -1079,7 +1079,7 @@ class BwTree
       if (consol_page_.first != target_lid) return;
 
       // prepare a consolidated node
-      Node_t *new_node = nullptr;
+      auto *new_node = tls_node_page_.release();
       const auto rc = (head->IsLeaf()) ? Consolidate<Payload>(head, new_node)
                                        : Consolidate<LogicalID *>(head, new_node);
       switch (rc) {
@@ -1116,8 +1116,10 @@ class BwTree
         return;
       }
 
-      // if consolidation is failed, release the consolidated node
-      AddToGC(new_node);
+      // if consolidation is failed, keep the allocated page to reuse
+      if (!tls_node_page_) {
+        tls_node_page_.reset(new_node);
+      }
 
       // no retry if the number of delta records is sufficiently small
       if (delta_rec_num < 2 * kMaxDeltaRecordNum) return;
@@ -1165,7 +1167,7 @@ class BwTree
     }
 
     // check whether splitting is needed
-    void *page = consol_node;
+    void *page{};
     bool do_split = false;
     if (is_scan) {
       // use dynamic page sizes for scanning
@@ -1178,7 +1180,7 @@ class BwTree
       }
     } else {
       // use a static page size for constructing trees
-      page = GetNodePage(kPageSize);
+      page = (consol_node == nullptr) ? GetNodePage(kPageSize) : consol_node;
       if (size > kPageSize) {
         do_split = true;
         size = size / 2 + (kHeaderLength / 2);
@@ -1333,7 +1335,7 @@ class BwTree
   bool
   TrySplit(  //
       const Delta_t *head,
-      const Delta_t *split_node,
+      Delta_t *split_node,
       std::vector<LogicalID *> &stack)
   {
     // create a split-delta record
@@ -1347,7 +1349,7 @@ class BwTree
       split_d->Abort();
       sib_lid->Clear();
       AddToGC(split_d);
-      AddToGC(split_node);
+      tls_node_page_.reset(reinterpret_cast<Node_t *>(split_node));
       return false;
     }
 
@@ -1481,17 +1483,19 @@ class BwTree
   auto
   TryMerge(  //
       const Delta_t *head,
-      const Delta_t *removed_node,
+      Delta_t *removed_node,
       std::vector<LogicalID *> &stack)  //
       -> bool
   {
     auto *removed_lid = stack.back();
 
     // insert a remove-node delta to prevent other threads from modifying this node
-    const auto *remove_d = new (GetRecPage()) Delta_t{DeltaType::kRemoveNode, removed_node};
+    auto *remove_d = new (GetRecPage()) Delta_t{DeltaType::kRemoveNode, removed_node};
     if (!removed_lid->CASStrong(head, remove_d)) {
       // retry from consolidation
+      remove_d->Abort();
       AddToGC(remove_d);
+      tls_node_page_.reset(reinterpret_cast<Node_t *>(removed_node));
       return false;
     }
 
@@ -1643,6 +1647,9 @@ class BwTree
 
   /// the logical ID of a node to be consolidated.
   inline static thread_local std::pair<LogicalID *, size_t> consol_page_{};  // NOLINT
+
+  /// a thread-local page to reuse in SMOs
+  inline static thread_local std::unique_ptr<Node_t> tls_node_page_{nullptr};  // NOLINT
 };
 
 }  // namespace dbgroup::index::bw_tree::component
