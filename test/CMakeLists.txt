@@ -30,8 +30,10 @@ add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/googletest-src
 # Configurations for testing
 #--------------------------------------------------------------------------------------#
 
-set(BW_TREE_TEST_THREAD_NUM "8" CACHE STRING "The number of worker threads for testing.")
 set(BW_TREE_TEST_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(BW_TREE_TEST_THREAD_NUM "8" CACHE STRING "The number of worker threads for testing.")
+set(BW_TREE_TEST_RANDOM_SEED "10" CACHE STRING "A random seed for unit testing.")
+set(BW_TREE_TEST_EXEC_NUM "1E5" CACHE STRING "The number of operations for testing.")
 
 #--------------------------------------------------------------------------------------#
 # Build Unit Tests
@@ -54,6 +56,10 @@ function(ADD_BW_TREE_TEST BW_TREE_TEST_TARGET)
   )
   target_compile_definitions(${BW_TREE_TEST_TARGET} PRIVATE
     BW_TREE_TEST_THREAD_NUM=${BW_TREE_TEST_THREAD_NUM}
+    BW_TREE_TEST_RANDOM_SEED=${BW_TREE_TEST_RANDOM_SEED}
+    INDEX_FIXTURE_THREAD_NUM=${BW_TREE_TEST_THREAD_NUM}
+    INDEX_FIXTURE_RANDOM_SEED=${BW_TREE_TEST_RANDOM_SEED}
+    INDEX_FIXTURE_EXEC_NUM_PER_THREAD=${BW_TREE_TEST_EXEC_NUM}
   )
   target_include_directories(${BW_TREE_TEST_TARGET} PRIVATE
     ${BW_TREE_TEST_SOURCE_DIR}

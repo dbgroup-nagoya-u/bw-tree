@@ -21,10 +21,12 @@
 #include <memory>
 #include <thread>
 
+// external libraries
+#include "gtest/gtest.h"
+
+// local sources
 #include "bw_tree/component/varlen/delta_record.hpp"
 #include "bw_tree/component/varlen/node.hpp"
-#include "common.hpp"
-#include "gtest/gtest.h"
 
 namespace dbgroup::index::bw_tree::component::test
 {
@@ -33,6 +35,7 @@ namespace dbgroup::index::bw_tree::component::test
  *####################################################################################*/
 
 constexpr size_t kMultipleTableCapacity = kMappingTableCapacity * 10;
+constexpr size_t kThreadNum = BW_TREE_TEST_THREAD_NUM;
 
 /*######################################################################################
  * Fixture class definition

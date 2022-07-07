@@ -14,14 +14,34 @@
  * limitations under the License.
  */
 
-#include "bw_tree/component/varlen/node.hpp"
-
 #include <memory>
 #include <vector>
 
-#include "common.hpp"
-#include "fix_var_switch.hpp"
+// external libraries
 #include "gtest/gtest.h"
+
+// our libraries
+#include "external/index-fixtures/common.hpp"
+
+// local sources
+#include "bw_tree/component/fixlen/node.hpp"
+#include "bw_tree/component/varlen/node.hpp"
+
+namespace dbgroup::index::bw_tree
+{
+/**
+ * @brief Use CString as variable-length data in tests.
+ *
+ */
+template <>
+constexpr auto
+IsVariableLengthData<char *>()  //
+    -> bool
+{
+  return true;
+}
+
+}  // namespace dbgroup::index::bw_tree
 
 namespace dbgroup::index::bw_tree::component::test
 {
@@ -29,11 +49,11 @@ namespace dbgroup::index::bw_tree::component::test
  * Classes for templated testing
  *####################################################################################*/
 
-template <class BwTreeType, class KeyType, class PayloadType>
+template <template <class K, class C> class NodeType, class KeyType, class PayloadType>
 struct Target {
-  using Tree = BwTreeType;
   using Key = KeyType;
   using Payload = PayloadType;
+  using Node = NodeType<typename Key::Data, typename Key::Comp>;
 };
 
 /*######################################################################################
@@ -47,22 +67,10 @@ class NodeFixture : public testing::Test
    * Type aliases
    *##################################################################################*/
 
-  // extract key-payload types
-  using Key = typename Target::Key::Data;
-  using Payload = typename Target::Payload::Data;
-  using KeyComp = typename Target::Key::Comp;
-  using PayComp = typename Target::Payload::Comp;
-
   // define type aliases for simplicity
-  using Node_t = typename Target::Tree::template Node<Key, KeyComp>;
+  using Node_t = typename Target::Node;
 
  protected:
-  /*####################################################################################
-   * Internal constants
-   *##################################################################################*/
-
-  static constexpr size_t kKeyNumForTest = 64;
-
   /*####################################################################################
    * Setup/Teardown
    *##################################################################################*/
@@ -70,15 +78,11 @@ class NodeFixture : public testing::Test
   void
   SetUp() override
   {
-    PrepareTestData(keys_, kKeyNumForTest);
-    PrepareTestData(payloads_, kKeyNumForTest);
   }
 
   void
   TearDown() override
   {
-    ReleaseTestData(keys_, kKeyNumForTest);
-    ReleaseTestData(payloads_, kKeyNumForTest);
   }
 
   /*####################################################################################
@@ -124,30 +128,39 @@ class NodeFixture : public testing::Test
   /*####################################################################################
    * Internal member variables
    *##################################################################################*/
-
-  // actual keys and payloads
-  Key keys_[kKeyNumForTest]{};
-  Payload payloads_[kKeyNumForTest]{};
 };
 
 /*######################################################################################
  * Preparation for typed testing
  *####################################################################################*/
 
-using TestTargets = ::testing::Types<    //
-    Target<VarLen, UInt8, UInt8>,        // fixed-length keys
-    Target<VarLen, UInt4, UInt8>,        // small keys
-    Target<VarLen, UInt8, UInt4>,        // small payloads
-    Target<VarLen, UInt4, UInt4>,        // small keys/payloads
-    Target<VarLen, Var, UInt8>,          // variable-length keys
-    Target<VarLen, Ptr, Ptr>,            // pointer key/payload
-    Target<VarLen, Original, Original>,  // original type key/payload
-    Target<FixLen, UInt8, UInt8>,        // fixed-length keys
-    Target<FixLen, UInt4, UInt8>,        // small keys
-    Target<FixLen, UInt8, UInt4>,        // small payloads
-    Target<FixLen, UInt4, UInt4>,        // small keys/payloads
-    Target<FixLen, Ptr, Ptr>,            // pointer key/payload
-    Target<FixLen, Original, Original>   // original type key/payload
+using UInt8 = ::dbgroup::index::test::UInt8;
+using UInt4 = ::dbgroup::index::test::UInt4;
+using Int8 = ::dbgroup::index::test::Int8;
+using Var = ::dbgroup::index::test::Var;
+using Ptr = ::dbgroup::index::test::Ptr;
+using Original = ::dbgroup::index::test::Original;
+
+template <class K, class C>
+using VarLenNode = varlen::Node<K, C>;
+
+template <class K, class C>
+using FixLenNode = fixlen::Node<K, C>;
+
+using TestTargets = ::testing::Types<        //
+    Target<VarLenNode, UInt8, UInt8>,        // fixed-length keys
+    Target<VarLenNode, UInt4, UInt8>,        // small keys
+    Target<VarLenNode, UInt8, UInt4>,        // small payloads
+    Target<VarLenNode, UInt4, UInt4>,        // small keys/payloads
+    Target<VarLenNode, Var, UInt8>,          // variable-length keys
+    Target<VarLenNode, Ptr, Ptr>,            // pointer key/payload
+    Target<VarLenNode, Original, Original>,  // original type key/payload
+    Target<FixLenNode, UInt8, UInt8>,        // fixed-length keys
+    Target<FixLenNode, UInt4, UInt8>,        // small keys
+    Target<FixLenNode, UInt8, UInt4>,        // small payloads
+    Target<FixLenNode, UInt4, UInt4>,        // small keys/payloads
+    Target<FixLenNode, Ptr, Ptr>,            // pointer key/payload
+    Target<FixLenNode, Original, Original>   // original type key/payload
     >;
 TYPED_TEST_SUITE(NodeFixture, TestTargets);
 
