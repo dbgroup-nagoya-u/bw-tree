@@ -310,24 +310,30 @@ class BwTree
     consol_page_ = std::make_pair(nullptr, 0);
     auto &&stack = SearchLeafNode(key, kClosed);
 
-    ReturnCode rc{};
     for (Payload payload{}; true;) {
       // check whether the node is active and has a target key
       const auto *head = LoadValidHead(key, kClosed, stack);
+
+      uintptr_t out_ptr{};
       size_t delta_num = 0;
-      switch (uintptr_t out_ptr{}; DC::SearchRecord(head, key, out_ptr, delta_num)) {
+      size_t shift_num = 0;
+      auto rc = DC::SearchRecord(head, key, out_ptr, delta_num);
+      switch (rc) {
         case DeltaRC::kRecordFound:
-          rc = kKeyExist;
           payload = reinterpret_cast<Delta_t *>(out_ptr)->template GetPayload<Payload>();
           break;
 
         case DeltaRC::kRecordDeleted:
-          rc = kKeyNotExist;
           break;
 
         case DeltaRC::kKeyIsInSibling:
-          // swap a current node in a stack and retry
-          *stack.rbegin() = reinterpret_cast<LogicalID *>(out_ptr);
+          if (++shift_num > kMaxSiblingShiftNum) {
+            // retry from a root node
+            stack = SearchLeafNode(key, kClosed);
+          } else {
+            // swap a current node in a stack and retry
+            *stack.rbegin() = reinterpret_cast<LogicalID *>(out_ptr);
+          }
           continue;
 
         case DeltaRC::kNodeRemoved:
@@ -341,9 +347,10 @@ class BwTree
           // search a target key in the base node
           const auto *node = reinterpret_cast<Node_t *>(out_ptr);
           std::tie(rc, out_ptr) = node->SearchRecord(key);
-          if (rc == kKeyExist) {
+          if (rc == kRecordFound) {
             payload = node->template GetPayload<Payload>(out_ptr);
           }
+          break;
         }
       }
 
@@ -355,7 +362,7 @@ class BwTree
         TryConsolidation(key, kClosed, stack);
       }
 
-      if (rc == kKeyNotExist) return std::nullopt;
+      if (rc == kRecordDeleted) return std::nullopt;
       return payload;
     }
   }
@@ -433,10 +440,14 @@ class BwTree
     }
     while (true) {
       // check whether the target node includes incomplete SMOs
-      const auto [head, rc] = GetHeadWithKeyCheck(key, stack);
+      const auto [head, rc] = GetHeadWithKeyCheck(key, stack, kAbortWithManyShift);
+      if (rc == kKeyIsInSibling) {
+        stack = SearchLeafNode(key, kClosed);
+        continue;
+      }
 
       // try to insert the delta record
-      write_d->SetDeltaType((rc == kKeyExist) ? kModify : kInsert);
+      write_d->SetDeltaType((rc == kRecordFound) ? kModify : kInsert);
       write_d->SetNext(head);
       if (stack.back()->CASWeak(head, write_d)) break;
     }
@@ -479,8 +490,12 @@ class BwTree
     auto rc = kSuccess;
     while (true) {
       // check target record's existence and get a head pointer
-      const auto [head, existence] = GetHeadWithKeyCheck(key, stack);
-      if (existence == kKeyExist) {
+      const auto [head, existence] = GetHeadWithKeyCheck(key, stack, kAbortWithManyShift);
+      if (existence == kKeyIsInSibling) {
+        stack = SearchLeafNode(key, kClosed);
+        continue;
+      }
+      if (existence == kRecordFound) {
         rc = kKeyExist;
         tls_delta_page_.reset(insert_d);
         break;
@@ -529,8 +544,12 @@ class BwTree
     auto rc = kSuccess;
     while (true) {
       // check target record's existence and get a head pointer
-      const auto [head, existence] = GetHeadWithKeyCheck(key, stack);
-      if (existence == kKeyNotExist) {
+      const auto [head, existence] = GetHeadWithKeyCheck(key, stack, kAbortWithManyShift);
+      if (existence == kKeyIsInSibling) {
+        stack = SearchLeafNode(key, kClosed);
+        continue;
+      }
+      if (existence == kRecordDeleted) {
         rc = kKeyNotExist;
         tls_delta_page_.reset(modify_d);
         break;
@@ -578,8 +597,12 @@ class BwTree
     auto rc = kSuccess;
     while (true) {
       // check target record's existence and get a head pointer
-      auto [head, existence] = GetHeadWithKeyCheck(key, stack);
-      if (existence == kKeyNotExist) {
+      auto [head, existence] = GetHeadWithKeyCheck(key, stack, kAbortWithManyShift);
+      if (existence == kKeyIsInSibling) {
+        stack = SearchLeafNode(key, kClosed);
+        continue;
+      }
+      if (existence == kRecordDeleted) {
         rc = kKeyNotExist;
         tls_delta_page_.reset(delete_d);
         break;
@@ -616,6 +639,9 @@ class BwTree
 
   /// a flag for performing multi-thread chasing for consistent SMOs.
   static constexpr bool kChaseSMOs = true;
+
+  /// a flag for performing multi-thread chasing for consistent SMOs.
+  static constexpr bool kAbortWithManyShift = true;
 
   /**
    * @brief An internal enum for distinguishing a partial SMO status.
@@ -951,27 +977,26 @@ class BwTree
   auto
   GetHeadWithKeyCheck(  //
       const Key &key,
-      std::vector<LogicalID *> &stack)  //
-      -> std::pair<const Delta_t *, ReturnCode>
+      std::vector<LogicalID *> &stack,
+      const bool abort_with_many_shift = false)  //
+      -> std::pair<const Delta_t *, DeltaRC>
   {
-    ReturnCode rc{};
+    size_t shift_count = 0;
     for (uintptr_t out_ptr{}; true;) {
       // check whether the node has partial SMOs
       const auto *head = LoadValidHead(key, kClosed, stack);
 
       // check whether the node is active and has a target key
       size_t delta_num = 0;
-      switch (DC::SearchRecord(head, key, out_ptr, delta_num)) {
+      auto rc = DC::SearchRecord(head, key, out_ptr, delta_num);
+      switch (rc) {
         case DeltaRC::kRecordFound:
-          rc = kKeyExist;
-          break;
-
         case DeltaRC::kRecordDeleted:
-          rc = kKeyNotExist;
           break;
 
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
+          if (abort_with_many_shift && ++shift_count > kMaxSiblingShiftNum) break;
           *stack.rbegin() = reinterpret_cast<LogicalID *>(out_ptr);
           continue;
 
@@ -985,6 +1010,7 @@ class BwTree
         default:
           // search a target key in the base node
           rc = reinterpret_cast<Node_t *>(out_ptr)->SearchRecord(key).first;
+          break;
       }
 
       if (delta_num >= kMaxDeltaRecordNum) {
@@ -1025,7 +1051,7 @@ class BwTree
     // check the begin position for scanning
     const auto [rc, pos] = node->SearchRecord(begin_key);
 
-    return (rc == kKeyNotExist || closed) ? pos : pos + 1;
+    return (rc == kRecordDeleted || closed) ? pos : pos + 1;
   }
 
   /**
@@ -1395,7 +1421,7 @@ class BwTree
     while (true) {
       // check whether another thread has already completed this splitting
       const auto [head, rc] = GetHeadWithKeyCheck(sep_key, stack);
-      if (rc == kKeyExist) {
+      if (rc == kRecordFound) {
         tls_delta_page_.reset(entry_d);
         break;
       }
@@ -1543,7 +1569,7 @@ class BwTree
     while (true) {
       // check whether another thread has already completed this merging
       auto [head, rc] = GetHeadWithKeyCheck(del_key, stack);
-      if (rc == kKeyNotExist) {
+      if (rc == kRecordDeleted) {
         // another thread has already deleted the merged node
         tls_delta_page_.reset(delete_d);
         break;

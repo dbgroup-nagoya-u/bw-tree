@@ -52,11 +52,10 @@ constexpr bool kOpen = false;
  * @brief Return codes for APIs of a Bw-tree.
  *
  */
-enum ReturnCode
-{
+enum ReturnCode {
   kKeyNotExist = -2,
   kKeyExist,
-  kSuccess = 0
+  kSuccess = 0,
 };
 
 /**
@@ -115,6 +114,9 @@ constexpr size_t kMaxDeltaRecordNum = BW_TREE_MAX_DELTA_RECORD_NUM;
 
 /// The minimum size of nodes for invoking merging
 constexpr size_t kMinNodeSize = BW_TREE_MIN_NODE_SIZE;
+
+/// The maximum number of sibling shifting over leaf nodes.
+constexpr size_t kMaxSiblingShiftNum = BW_TREE_MAX_SIBLING_SHIFT_NUM;
 
 /// The maximun size of variable-length data
 constexpr size_t kMaxVarDataSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;

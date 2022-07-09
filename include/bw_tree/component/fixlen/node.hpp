@@ -275,7 +275,7 @@ class Node
    */
   [[nodiscard]] auto
   SearchRecord(const Key &key) const  //
-      -> std::pair<ReturnCode, size_t>
+      -> std::pair<DeltaRC, size_t>
   {
     int64_t end_pos{};
     if (is_leaf_ == kLeaf) {
@@ -283,7 +283,7 @@ class Node
     } else if (!has_high_key_ || Comp{}(key, high_key_)) {
       end_pos = record_count_ - 2;
     } else {
-      return {kKeyExist, record_count_ - 1};
+      return {kRecordFound, record_count_ - 1};
     }
 
     int64_t begin_pos = 0;
@@ -296,11 +296,11 @@ class Node
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
       } else {  // find an equivalent key
-        return {kKeyExist, pos};
+        return {kRecordFound, pos};
       }
     }
 
-    return {kKeyNotExist, begin_pos};
+    return {kRecordDeleted, begin_pos};
   }
 
   /**
@@ -355,7 +355,7 @@ class Node
     if (is_end && end_key) {
       const auto &[e_key, e_closed] = *end_key;
       const auto [rc, pos] = SearchRecord(e_key);
-      end_pos = (rc == kKeyExist && e_closed) ? pos + 1 : pos;
+      end_pos = (rc == kRecordFound && e_closed) ? pos + 1 : pos;
     } else {
       end_pos = record_count_;
     }
@@ -428,7 +428,7 @@ class Node
         rec_num = node->record_count_;
       } else {
         const auto [rc, pos] = node->SearchRecord(split_d->low_key_);
-        rec_num = (!is_leaf || rc == kKeyExist) ? pos + 1 : pos;
+        rec_num = (!is_leaf || rc == kRecordFound) ? pos + 1 : pos;
       }
 
       total_rec_num += rec_num;

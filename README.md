@@ -19,9 +19,10 @@ sudo apt update && sudo apt install -y build-essential cmake
 #### Tuning Parameters
 
 - `BW_TREE_PAGE_SIZE`: Page size in bytes (default `1024`).
-- `BW_TREE_MAX_DELTA_RECORD_NUM`: invoking consolidation if the number of delta records exceeds this threshold (default `4`).
-- `BW_TREE_MIN_NODE_SIZE`: invoking a merge-operation if the size of a node becomes lower than this threshold (default `${BW_TREE_PAGE_SIZE} / 16`).
-- `BW_TREE_MAX_VARIABLE_DATA_SIZE`: the expected maximum size of a variable-length data (default `128`).
+- `BW_TREE_MAX_DELTA_RECORD_NUM`: Invoking consolidation if the number of delta records exceeds this threshold (default `4`).
+- `BW_TREE_MIN_NODE_SIZE`: Invoking a merge-operation if the size of a node becomes lower than this threshold (default `${BW_TREE_PAGE_SIZE} / 16`).
+- `BW_TREE_MAX_SIBLING_SHIFT_NUM`: The maximum number of sibling shifting over leaf nodes (default `2`).
+- `BW_TREE_MAX_VARIABLE_DATA_SIZE`: The expected maximum size of a variable-length data (default `128`).
 
 #### Build Options for Unit Testing
 
