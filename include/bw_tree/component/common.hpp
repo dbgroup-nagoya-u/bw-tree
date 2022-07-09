@@ -29,49 +29,35 @@ namespace dbgroup::index::bw_tree::component
  * @brief Internal return codes for representing results of delta-chain traversal.
  *
  */
-enum DeltaRC
-{
+enum DeltaRC {
   kReachBaseNode = 0,
   kRecordFound,
   kRecordDeleted,
   kNodeRemoved,
-  kKeyIsInSibling
-};
-
-/**
- * @brief Internal recurn codes for representing a status of SMOs.
- *
- */
-enum SMOStatus
-{
-  kNoPartialSMOs = 0,
-  kSplitMayIncomplete,
-  kMergeMayIncomplete
+  kKeyIsInSibling,
 };
 
 /**
  * @brief A flag for distinguishing leaf/internal nodes.
  *
  */
-enum NodeType : uint16_t
-{
+enum NodeType : uint16_t {
   kInternal = 0,
-  kLeaf
+  kLeaf,
 };
 
 /**
  * @brief A flag for representing the types of delta records.
  *
  */
-enum DeltaType : uint16_t
-{
+enum DeltaType : uint16_t {
   kNotDelta = 0,
   kInsert,
   kModify,
   kDelete,
   kSplit,
   kRemoveNode,
-  kMerge
+  kMerge,
 };
 
 /*######################################################################################

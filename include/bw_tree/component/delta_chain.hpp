@@ -74,28 +74,6 @@ class DeltaChain
   }
 
   /**
-   * @param delta the head record in a delta-chain.
-   * @retval kSplitMayIncomplete if this delta-chain may includes a partial splitting.
-   * @retval kMergeMayIncomplete if this delta-chain may includes a partial merging.
-   * @retval kNoPartialSMOs otherwise.
-   */
-  [[nodiscard]] static auto
-  GetSMOStatus(const DeltaRecord *delta)  //
-      -> SMOStatus
-  {
-    switch (delta->GetDeltaType()) {
-      case kSplit:
-        return kSplitMayIncomplete;
-
-      case kMerge:
-        return kMergeMayIncomplete;
-
-      default:
-        return kNoPartialSMOs;
-    }
-  }
-
-  /**
    * @brief Traverse a delta-chain to search a child node with a given key.
    *
    * @param delta the head record in a delta-chain.
@@ -281,7 +259,7 @@ class DeltaChain
    * @param delta the head record in a delta-chain.
    * @param key a target key to be searched.
    * @param closed a flag for indicating closed/open-interval.
-   * @param out_sib_lid the logical ID of a sibling node.
+   * @param out_ptr an output pointer if needed.
    * @param out_delta_num the number of records in this delta-chain.
    * @retval kReachBaseNode if this node is valid for the given key.
    * @retval kKeyIsInSibling if the target key is not in this node due to other SMOs.
@@ -292,7 +270,7 @@ class DeltaChain
       const DeltaRecord *delta,
       const Key &key,
       const bool closed,
-      LogicalID *&out_sib_lid,
+      uintptr_t &out_ptr,
       size_t &out_delta_num)  //
       -> DeltaRC
   {
@@ -304,11 +282,14 @@ class DeltaChain
         case kSplit: {
           // check whether the right-sibling node contains a target key
           if (delta->LowKeyIsLT(key, closed)) {
-            out_sib_lid = delta->template GetPayload<LogicalID *>();
+            out_ptr = delta->template GetPayload<uintptr_t>();
             return kKeyIsInSibling;
           }
 
-          has_smo = true;
+          if (!has_smo) {
+            has_smo = true;
+            out_ptr = reinterpret_cast<uintptr_t>(delta);
+          }
           break;
         }
 
@@ -319,8 +300,9 @@ class DeltaChain
           // check whether the merged node contains a target key
           if (delta->LowKeyIsLT(key, closed)) {
             // check whether the merging is aborted and the sibling node includes a target key
-            out_sib_lid = delta->template GetPayload<LogicalID *>();
-            const auto *remove_d = out_sib_lid->template Load<DeltaRecord *>();
+            out_ptr = delta->template GetPayload<uintptr_t>();
+            const auto *merged_lid = reinterpret_cast<LogicalID *>(out_ptr);
+            const auto *remove_d = merged_lid->template Load<DeltaRecord *>();
             if (remove_d == nullptr) return kNodeRemoved;  // the node is consolidated
             if (remove_d->GetDeltaType() != kRemoveNode) {
               // merging was aborted, so check the sibling node
@@ -328,13 +310,14 @@ class DeltaChain
             }
           }
 
+          out_ptr = reinterpret_cast<uintptr_t>(delta);
           return kReachBaseNode;
         }
 
         case kNotDelta: {
           // check whether the node contains a target key
           if (!has_smo && !delta->HighKeyIsGE(key, closed)) {
-            out_sib_lid = delta->template GetNext<LogicalID *>();
+            out_ptr = delta->template GetNext<uintptr_t>();
             return kKeyIsInSibling;
           }
 

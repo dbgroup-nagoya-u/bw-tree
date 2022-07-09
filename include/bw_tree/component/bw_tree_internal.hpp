@@ -614,16 +614,18 @@ class BwTree
   /// a flag for preventing a consolidate-operation from splitting a node.
   static constexpr bool kIsScan = true;
 
+  /// a flag for performing multi-thread chasing for consistent SMOs.
+  static constexpr bool kChaseSMOs = true;
+
   /**
    * @brief An internal enum for distinguishing a partial SMO status.
    *
    */
-  enum SMOsRC
-  {
+  enum SMOsRC {
     kConsolidate,
     kTrySplit,
     kTryMerge,
-    kAlreadyConsolidated
+    kAlreadyConsolidated,
   };
 
   /*####################################################################################
@@ -784,6 +786,37 @@ class BwTree
   }
 
   /**
+   * @brief Search a target node to trace a current node path.
+   *
+   * @param stack a stack of traversed nodes.
+   * @param key a search key.
+   * @param target_lid the logical ID of a target node.
+   * @retval true if a target node is found.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  SearchTargetNode(  //
+      std::vector<LogicalID *> &stack,
+      const Key &key,
+      const LogicalID *target_lid) const  //
+      -> bool
+  {
+    while (true) {
+      SearchChildNode(key, kClosed, stack);
+      const auto *cur_lid = stack.back();
+      const auto *cur_node = cur_lid->template Load<Node_t *>();
+      if (cur_node == nullptr) {
+        // the found node is removed, so retry
+        stack.pop_back();
+        continue;
+      }
+
+      if (cur_lid == target_lid) return true;
+      if (cur_node->IsLeaf()) return false;
+    }
+  }
+
+  /**
    * @brief Search a leftmost leaf node in this tree.
    *
    * @return a stack of traversed nodes.
@@ -849,40 +882,12 @@ class BwTree
   }
 
   /**
-   * @brief Complete a partial structure modification operation if exist.
-   *
-   * @param head the current head pointer of a target logical node.
-   * @param stack a stack of traversed nodes.
-   */
-  void
-  CompletePartialSMOsIfExist(  //
-      const Delta_t *head,
-      std::vector<LogicalID *> &stack)
-  {
-    switch (DC::GetSMOStatus(head)) {
-      case SMOStatus::kSplitMayIncomplete:
-        // complete splitting and traverse to a sibling node
-        CompleteSplit(head, stack);
-        break;
-
-      case SMOStatus::kMergeMayIncomplete:
-        // complete merging
-        CompleteMerge(head, stack);
-        break;
-
-      case SMOStatus::kNoPartialSMOs:
-      default:
-        break;  // do nothing
-    }
-  }
-
-  /**
    * @brief Get the head pointer of a logical node.
    *
    * @param key a search key.
    * @param closed a flag for indicating closed/open-interval.
    * @param stack a stack of traversed nodes.
-   * @param read_only a flag for preventing this function from completing partial SMOs.
+   * @param chase_smo a flag for trying to complete partial SMOs.
    * @return the head of this logical node.
    */
   auto
@@ -890,22 +895,20 @@ class BwTree
       const Key &key,
       const bool closed,
       std::vector<LogicalID *> &stack,
-      const bool read_only = false)  //
+      const bool chase_smo = false)  //
       -> const Delta_t *
   {
-    for (LogicalID *sib_lid{}; true;) {
+    while (true) {
       // check whether the node has partial SMOs
       const auto *head = LoadValidHead(key, closed, stack);
-      if (!read_only) {
-        CompletePartialSMOsIfExist(head, stack);
-      }
 
       // check whether the node is active and can include a target key
+      uintptr_t out_ptr = 0;
       size_t delta_num = 0;
-      switch (DC::Validate(head, key, closed, sib_lid, delta_num)) {
+      switch (DC::Validate(head, key, closed, out_ptr, delta_num)) {
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
-          *stack.rbegin() = sib_lid;
+          *stack.rbegin() = reinterpret_cast<LogicalID *>(out_ptr);
           continue;
 
         case DeltaRC::kNodeRemoved:
@@ -916,7 +919,17 @@ class BwTree
 
         case DeltaRC::kReachBaseNode:
         default:
-          break;  // do nothing
+          if (chase_smo && out_ptr != 0) {
+            // the SMO in this node may not be reflected in its parent node
+            const auto *smo_d = reinterpret_cast<Delta_t *>(out_ptr);
+            auto copied_stack = stack;  // create a copy because a stack is modifed in SMO chasing
+            if (smo_d->GetDeltaType() == kSplit) {
+              CompleteSplit(smo_d, copied_stack);
+            } else {
+              CompleteMerge(smo_d, copied_stack);
+            }
+          }
+          break;
       }
 
       if (delta_num >= kMaxDeltaRecordNum) {
@@ -945,7 +958,6 @@ class BwTree
     for (uintptr_t out_ptr{}; true;) {
       // check whether the node has partial SMOs
       const auto *head = LoadValidHead(key, kClosed, stack);
-      CompletePartialSMOsIfExist(head, stack);
 
       // check whether the node is active and has a target key
       size_t delta_num = 0;
@@ -1005,7 +1017,7 @@ class BwTree
       -> size_t
   {
     while (true) {
-      const auto *head = GetHead(begin_key, closed, stack, kIsScan);
+      const auto *head = GetHead(begin_key, closed, stack);
       if (Consolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
       // concurrent consolidations may block scanning
     }
@@ -1074,7 +1086,7 @@ class BwTree
 
       // check whether the target node is valid (containing a target key and no incomplete SMOs)
       consol_page_ = std::make_pair(nullptr, 0);
-      const auto *head = GetHead(key, closed, stack);
+      const auto *head = GetHead(key, closed, stack, kChaseSMOs);
       if (consol_page_.first != target_lid) return;
 
       // prepare a consolidated node
@@ -1412,30 +1424,22 @@ class BwTree
       -> bool
   {
     // create a new root node
-    auto *child_lid = stack.back();
+    auto *old_lid = stack.back();
     stack.pop_back();  // remove the current root to push a new one
-    auto *new_root = new (GetNodePage()) Node_t{split_d, child_lid};
+    auto *new_root = new (GetNodePage()) Node_t{split_d, old_lid};
 
     // prepare a new logical ID for the new root
     auto *new_lid = mapping_table_.GetNewLogicalID();
     new_lid->Store(new_root);
 
     // install a new root page
-    auto *cur_lid = child_lid;  // copy a current root LID to prevent CAS from modifing it
-    const auto success = root_.compare_exchange_strong(cur_lid, new_lid, std::memory_order_relaxed);
-    if (!success) {
-      // another thread has already inserted a new root
-      new_lid->Clear();
-      tls_node_page_.reset(new_root);
-    } else {
-      cur_lid = new_lid;
-    }
+    auto *cur_lid = old_lid;  // copy a current root LID to prevent CAS from modifing it
+    if (root_.compare_exchange_strong(cur_lid, new_lid, std::memory_order_relaxed)) return true;
 
-    // prepare a new node stack
-    stack.emplace_back(cur_lid);
-    stack.emplace_back(child_lid);
-
-    return success;
+    // another thread has already inserted a new root
+    new_lid->Clear();
+    tls_node_page_.reset(new_root);
+    return !SearchTargetNode(stack, reinterpret_cast<const Delta_t *>(split_d)->GetKey(), old_lid);
   }
 
   /**
