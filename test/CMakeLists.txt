@@ -34,10 +34,15 @@ set(BW_TREE_TEST_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(BW_TREE_TEST_THREAD_NUM "8" CACHE STRING "The number of worker threads for testing.")
 set(BW_TREE_TEST_RANDOM_SEED "10" CACHE STRING "A random seed for unit testing.")
 set(BW_TREE_TEST_EXEC_NUM "1E5" CACHE STRING "The number of operations for testing.")
+option(BW_TREE_TEST_OVERRIDE_MIMALLOC "Override entire memory allocation with mimalloc" OFF)
 
 #--------------------------------------------------------------------------------------#
 # Build Unit Tests
 #--------------------------------------------------------------------------------------#
+
+if(${BW_TREE_TEST_OVERRIDE_MIMALLOC})
+  find_package(mimalloc 1.7 REQUIRED)
+endif()
 
 # define function to add unit tests in the same format
 function(ADD_BW_TREE_TEST BW_TREE_TEST_TARGET)
@@ -67,6 +72,7 @@ function(ADD_BW_TREE_TEST BW_TREE_TEST_TARGET)
   target_link_libraries(${BW_TREE_TEST_TARGET} PRIVATE
     bw_tree
     gtest_main
+    $<$<BOOL:${BW_TREE_TEST_OVERRIDE_MIMALLOC}>:mimalloc-static>
   )
 
   add_test(
