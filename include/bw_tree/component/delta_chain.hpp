@@ -58,19 +58,14 @@ class DeltaChain
    * @retval false otherwise.
    */
   [[nodiscard]] static auto
-  HasSameLowKeyWith(  //
-      const DeltaRecord *delta,
-      const Key &key)  //
-      -> bool
+  TraverseToGetLowKey(const DeltaRecord *delta)  //
+      -> std::optional<Key>
   {
     // traverse to a base node
     while (delta->GetDeltaType() != kNotDelta) {
       delta = delta->GetNext();
     }
-
-    const auto &low_key = delta->GetLowKey();
-    if (!low_key) return false;
-    return !Comp{}(*low_key, key) && !Comp{}(key, *low_key);
+    return delta->GetLowKey();
   }
 
   /**
@@ -257,6 +252,63 @@ class DeltaChain
    * @brief Traverse a delta-chain to check this node is valid for modifying this tree.
    *
    * @param delta the head record in a delta-chain.
+   * @param out_ptr an output pointer if needed.
+   * @param out_delta_num the number of records in this delta-chain.
+   * @retval kReachBaseNode if this node does not have partial SMOs.
+   * @retval kNodeRemoved if this node is removed by other SMOs.
+   * @retval kPartialSplitMayExist if this node may be in splitting.
+   * @retval kPartialMergeMayExist if this node may be in merging.
+   */
+  static auto
+  CheckPartialSMOs(  //
+      const DeltaRecord *delta,
+      uintptr_t &out_ptr,
+      size_t &out_delta_num)  //
+      -> DeltaRC
+  {
+    auto rc = kReachBaseNode;
+
+    // traverse a delta chain
+    for (; true; delta = delta->GetNext(), ++out_delta_num) {
+      switch (delta->GetDeltaType()) {
+        case kSplit:
+          if (rc == kReachBaseNode) {
+            rc = kPartialSplitMayExist;
+            out_ptr = reinterpret_cast<uintptr_t>(delta);
+          }
+          break;
+
+        case kRemoveNode:
+          return kNodeRemoved;
+
+        case kMerge: {
+          // check whether this merging is in processing
+          auto tmp_ptr = delta->template GetPayload<uintptr_t>();
+          const auto *merged_lid = reinterpret_cast<LogicalID *>(tmp_ptr);
+          const auto *remove_d = merged_lid->template Load<DeltaRecord *>();
+          if (remove_d == nullptr) return kNodeRemoved;        // the node is consolidated
+          if (remove_d->GetDeltaType() != kRemoveNode) break;  // merging was aborted
+
+          if (rc == kReachBaseNode) {
+            rc = kPartialMergeMayExist;
+            out_ptr = reinterpret_cast<uintptr_t>(delta);
+          }
+          break;
+        }
+
+        case kNotDelta:
+          return rc;
+
+        default:
+          break;  // do nothing
+      }
+    }
+  }
+
+  /**
+   * @brief Traverse a delta-chain to check this node is valid for modifying this tree.
+   *
+   * @param delta the head record in a delta-chain.
    * @param key a target key to be searched.
    * @param closed a flag for indicating closed/open-interval.
    * @param out_ptr an output pointer if needed.
@@ -286,10 +338,7 @@ class DeltaChain
             return kKeyIsInSibling;
           }
 
-          if (!has_smo) {
-            has_smo = true;
-            out_ptr = reinterpret_cast<uintptr_t>(delta);
-          }
+          has_smo = true;
           break;
         }
 
@@ -310,7 +359,6 @@ class DeltaChain
             }
           }
 
-          out_ptr = reinterpret_cast<uintptr_t>(delta);
           return kReachBaseNode;
         }
 

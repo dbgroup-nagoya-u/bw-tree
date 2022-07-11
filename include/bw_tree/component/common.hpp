@@ -35,6 +35,8 @@ enum DeltaRC {
   kRecordDeleted,
   kNodeRemoved,
   kKeyIsInSibling,
+  kPartialSplitMayExist,
+  kPartialMergeMayExist,
 };
 
 /**
