@@ -32,8 +32,8 @@ add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/googletest-src
 
 set(BW_TREE_TEST_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(BW_TREE_TEST_THREAD_NUM "8" CACHE STRING "The number of worker threads for testing.")
-set(BW_TREE_TEST_RANDOM_SEED "10" CACHE STRING "A random seed for unit testing.")
-set(BW_TREE_TEST_EXEC_NUM "1E5" CACHE STRING "The number of operations for testing.")
+set(BW_TREE_TEST_RANDOM_SEED "0" CACHE STRING "A fixed seed value to reproduce unit tests.")
+set(BW_TREE_TEST_EXEC_NUM "1E5" CACHE STRING "TThe number of executions per a thread.")
 option(BW_TREE_TEST_OVERRIDE_MIMALLOC "Override entire memory allocation with mimalloc" OFF)
 
 #--------------------------------------------------------------------------------------#
