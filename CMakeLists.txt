@@ -21,10 +21,10 @@ set(MEMORY_MANAGER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/memory-manag
 # Bw-tree's configurations
 #--------------------------------------------------------------------------------------#
 
-set(BW_TREE_PAGE_SIZE "1024" CACHE STRING "Page size in bytes.")
-set(BW_TREE_MAX_DELTA_RECORD_NUM "(2 * Log2(kPageSize / 256))" CACHE STRING "Invoking consolidation if the number of delta records exceeds this threshold.")
-set(BW_TREE_MIN_NODE_SIZE "(kPageSize / 16)" CACHE STRING "Invoking a merge-operation if the size of a node becomes lower than this threshold.")
-set(BW_TREE_MAX_VARIABLE_DATA_SIZE "128" CACHE STRING "The expected maximum size of a variable-length data.")
+set(BW_TREE_PAGE_SIZE "1024" CACHE STRING " Page size in bytes.")
+set(BW_TREE_MAX_DELTA_RECORD_NUM "(2 * Log2(kPageSize / 256))" CACHE STRING " Invoking consolidation if the number of delta records exceeds this threshold.")
+set(BW_TREE_MIN_NODE_SIZE "(kPageSize / 16)" CACHE STRING " Invoking a merge-operation if the size of a node becomes lower than this threshold.")
+set(BW_TREE_MAX_VARIABLE_DATA_SIZE "128" CACHE STRING " The expected maximum size of a variable-length data.")
 
 #--------------------------------------------------------------------------------------#
 # Configure external libraries
@@ -46,8 +46,8 @@ if(NOT TARGET bw_tree::bw_tree)
   target_compile_definitions(bw_tree INTERFACE
     BW_TREE_PAGE_SIZE=${BW_TREE_PAGE_SIZE}
     BW_TREE_MAX_DELTA_RECORD_NUM=${BW_TREE_MAX_DELTA_RECORD_NUM}
-    BW_TREE_MAX_VARIABLE_DATA_SIZE=${BW_TREE_MAX_VARIABLE_DATA_SIZE}
     BW_TREE_MIN_NODE_SIZE=${BW_TREE_MIN_NODE_SIZE}
+    BW_TREE_MAX_VARIABLE_DATA_SIZE=${BW_TREE_MAX_VARIABLE_DATA_SIZE}
   )
   target_include_directories(bw_tree INTERFACE
     ${BW_TREE_SOURCE_DIR}/include

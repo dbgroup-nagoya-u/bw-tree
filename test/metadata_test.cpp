@@ -16,7 +16,7 @@
 
 #include "bw_tree/component/varlen/metadata.hpp"
 
-#include "common.hpp"
+// external libraries
 #include "gtest/gtest.h"
 
 namespace dbgroup::index::bw_tree::component::varlen::test

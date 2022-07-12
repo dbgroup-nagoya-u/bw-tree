@@ -52,11 +52,10 @@ constexpr bool kOpen = false;
  * @brief Return codes for APIs of a Bw-tree.
  *
  */
-enum ReturnCode
-{
+enum ReturnCode {
   kKeyNotExist = -2,
   kKeyExist,
-  kSuccess = 0
+  kSuccess = 0,
 };
 
 /**

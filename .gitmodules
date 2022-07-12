@@ -1,3 +1,6 @@
 [submodule "external/memory-manager"]
 	path = external/memory-manager
 	url = https://github.com/dbgroup-nagoya-u/memory-manager.git
+[submodule "test/external/index-fixtures"]
+	path = test/external/index-fixtures
+	url = https://github.com/dbgroup-nagoya-u/index-fixtures.git

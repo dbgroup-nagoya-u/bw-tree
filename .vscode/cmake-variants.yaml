@@ -8,21 +8,33 @@ buildType:
       buildType: Debug
       settings:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
+        BW_TREE_PAGE_SIZE: 1024
         BW_TREE_BUILD_TESTS: ON
         BW_TREE_TEST_THREAD_NUM: 8
+        BW_TREE_TEST_RANDOM_SEED: 10
+        BW_TREE_TEST_EXEC_NUM: 1E6
+        BW_TREE_TEST_OVERRIDE_MIMALLOC: OFF
     relWithDebInfo:
       short: RelWithDebInfo
       long: Perform optimizations and include debugging informatin
       buildType: RelWithDebInfo
       settings:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
+        BW_TREE_PAGE_SIZE: 1024
         BW_TREE_BUILD_TESTS: ON
         BW_TREE_TEST_THREAD_NUM: 8
+        BW_TREE_TEST_RANDOM_SEED: 10
+        BW_TREE_TEST_EXEC_NUM: 1E6
+        BW_TREE_TEST_OVERRIDE_MIMALLOC: OFF
     release:
       short: Release
       long: Perform optimizations and omit debugging informatin
       buildType: Release
       settings:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
+        BW_TREE_PAGE_SIZE: 1024
         BW_TREE_BUILD_TESTS: ON
         BW_TREE_TEST_THREAD_NUM: 8
+        BW_TREE_TEST_RANDOM_SEED: 10
+        BW_TREE_TEST_EXEC_NUM: 1E6
+        BW_TREE_TEST_OVERRIDE_MIMALLOC: OFF

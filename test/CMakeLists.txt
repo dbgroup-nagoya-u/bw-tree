@@ -30,12 +30,19 @@ add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/googletest-src
 # Configurations for testing
 #--------------------------------------------------------------------------------------#
 
-set(BW_TREE_TEST_THREAD_NUM "8" CACHE STRING "The number of worker threads for testing.")
 set(BW_TREE_TEST_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(BW_TREE_TEST_THREAD_NUM "8" CACHE STRING "The number of worker threads for testing.")
+set(BW_TREE_TEST_RANDOM_SEED "0" CACHE STRING "A fixed seed value to reproduce unit tests.")
+set(BW_TREE_TEST_EXEC_NUM "1E5" CACHE STRING "TThe number of executions per a thread.")
+option(BW_TREE_TEST_OVERRIDE_MIMALLOC "Override entire memory allocation with mimalloc" OFF)
 
 #--------------------------------------------------------------------------------------#
 # Build Unit Tests
 #--------------------------------------------------------------------------------------#
+
+if(${BW_TREE_TEST_OVERRIDE_MIMALLOC})
+  find_package(mimalloc 1.7 REQUIRED)
+endif()
 
 # define function to add unit tests in the same format
 function(ADD_BW_TREE_TEST BW_TREE_TEST_TARGET)
@@ -54,6 +61,10 @@ function(ADD_BW_TREE_TEST BW_TREE_TEST_TARGET)
   )
   target_compile_definitions(${BW_TREE_TEST_TARGET} PRIVATE
     BW_TREE_TEST_THREAD_NUM=${BW_TREE_TEST_THREAD_NUM}
+    BW_TREE_TEST_RANDOM_SEED=${BW_TREE_TEST_RANDOM_SEED}
+    INDEX_FIXTURE_THREAD_NUM=${BW_TREE_TEST_THREAD_NUM}
+    INDEX_FIXTURE_RANDOM_SEED=${BW_TREE_TEST_RANDOM_SEED}
+    INDEX_FIXTURE_EXEC_NUM_PER_THREAD=${BW_TREE_TEST_EXEC_NUM}
   )
   target_include_directories(${BW_TREE_TEST_TARGET} PRIVATE
     ${BW_TREE_TEST_SOURCE_DIR}
@@ -61,6 +72,7 @@ function(ADD_BW_TREE_TEST BW_TREE_TEST_TARGET)
   target_link_libraries(${BW_TREE_TEST_TARGET} PRIVATE
     bw_tree
     gtest_main
+    $<$<BOOL:${BW_TREE_TEST_OVERRIDE_MIMALLOC}>:mimalloc-static>
   )
 
   add_test(
