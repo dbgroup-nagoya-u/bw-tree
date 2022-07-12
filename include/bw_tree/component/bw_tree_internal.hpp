@@ -74,7 +74,6 @@ class BwTree
      * @brief Construct a new object as an initial iterator.
      *
      * @param bw_tree a pointer to an index.
-     * @param gc a garbage collector for useless nodes.
      * @param node a copied node for scanning results.
      * @param begin_pos the begin position of a current node.
      * @param end_pos the end position of a current node.
@@ -83,14 +82,12 @@ class BwTree
      */
     RecordIterator(  //
         BwTree *bw_tree,
-        NodeGC_t *gc,
         Node_t *node,
         size_t begin_pos,
         size_t end_pos,
         const std::optional<std::pair<const Key &, bool>> end_key,
         const bool is_end)
         : bw_tree_{bw_tree},
-          gc_{gc},
           node_{node},
           record_count_{end_pos},
           current_pos_{begin_pos},
@@ -142,12 +139,7 @@ class BwTree
      * @brief Destroy the iterator and a retained node if exist.
      *
      */
-    ~RecordIterator()
-    {
-      if (node_ != nullptr) {
-        gc_->AddGarbage(node_);
-      }
-    }
+    ~RecordIterator() { ::operator delete(node_); }
 
     /*##################################################################################
      * Public operators for iterators
@@ -232,9 +224,6 @@ class BwTree
 
     /// a pointer to a BwTree for sibling scanning.
     BwTree *bw_tree_{nullptr};
-
-    /// garbage collector.
-    NodeGC_t *gc_{nullptr};
 
     /// the pointer to a node that includes partial scan results.
     Node_t *node_{nullptr};
@@ -377,7 +366,7 @@ class BwTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto *node = reinterpret_cast<Node_t *>(GetNodePage());
+    auto *node = new (GetNodePage()) Node_t{};
     size_t begin_pos{};
     if (begin_key) {
       // traverse to a leaf node and sort records for scanning
@@ -398,7 +387,7 @@ class BwTree
     // check the end position of scanning
     const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
 
-    return RecordIterator{this, &gc_, node, begin_pos, end_pos, end_key, is_end};
+    return RecordIterator{this, node, begin_pos, end_pos, end_key, is_end};
   }
 
   /*####################################################################################
@@ -1233,7 +1222,7 @@ class BwTree
       // use dynamic page sizes for scanning
       size = (size / kPageSize + 1) * kPageSize;
       if (size > consol_node->GetNodeSize()) {
-        delete consol_node;
+        ::operator delete(page);
         page = ::operator new(size);
       }
     } else if (size > kPageSize) {
