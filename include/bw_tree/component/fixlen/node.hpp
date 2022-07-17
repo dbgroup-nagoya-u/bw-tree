@@ -42,6 +42,8 @@ class Node
    *##################################################################################*/
 
   using Record = const void *;
+  template <class Entry>
+  using BulkIter = typename std::vector<Entry>::const_iterator;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -51,8 +53,12 @@ class Node
    * @brief Construct an initial root node.
    *
    */
-  constexpr Node()
-      : is_leaf_{kLeaf}, delta_type_{kNotDelta}, has_low_key_{0}, has_high_key_{0}, do_split_{0}
+  constexpr explicit Node(const bool is_leaf = true)
+      : is_leaf_{static_cast<NodeType>(is_leaf)},
+        delta_type_{kNotDelta},
+        has_low_key_{0},
+        has_high_key_{0},
+        do_split_{0}
   {
   }
 
@@ -654,6 +660,138 @@ class Node
     ++record_count_;
   }
 
+  /*####################################################################################
+   * Public bulkload API
+   *##################################################################################*/
+
+  /**
+   * @brief Create a leaf node with the maximum number of records for bulkloading.
+   *
+   * @tparam Payload a target payload class.
+   * @tparam Entry a container of a key/payload pair.
+   * @param iter the begin position of target records.
+   * @param iter_end the end position of target records.
+   * @param prev_node a left sibling node.
+   * @param this_lid the logical ID of a this node.
+   * @param is_rightmost a flag for indicating a rightmost node to be created.
+   */
+  template <class Payload, class Entry>
+  void
+  Bulkload(  //
+      BulkIter<Entry> &iter,
+      const BulkIter<Entry> &iter_end,
+      Node *prev_node,
+      const LogicalID *this_lid,
+      const bool is_rightmost)
+  {
+    constexpr auto kKeyLen = sizeof(Key);
+    constexpr auto kRecLen = kKeyLen + sizeof(Payload);
+
+    // set a lowest key and link sibling nodes if exist
+    if (prev_node != nullptr) {
+      prev_node->LinkNext(this_lid);
+    }
+
+    // extract and insert entries into this node
+    auto offset = kPageSize;
+    auto node_size = kHeaderLength;
+    for (; iter < iter_end; ++iter) {
+      // check whether the node has sufficent space
+      node_size += kRecLen;
+      if (node_size > kPageSize) break;
+
+      // insert an entry into this node
+      const auto &[key, payload] = *iter;
+      offset = SetPayload(offset, payload);
+      keys_[record_count_++] = key;
+    }
+
+    // set a highest key if needed
+    if (iter < iter_end || !is_rightmost) {
+      high_key_ = keys_[record_count_ - 1];
+      has_high_key_ = 1;
+    }
+  }
+
+  /**
+   * @brief Create an internal node with the maximum number of records for bulkloading.
+   *
+   * @param iter the begin position of child nodes.
+   * @param iter_end the end position of child nodes.
+   * @param prev_node a left sibling node.
+   * @param this_lid the logical ID of a this node.
+   */
+  void
+  Bulkload(  //
+      BulkIter<LogicalID *> &iter,
+      const BulkIter<LogicalID *> &iter_end,
+      Node *prev_node,
+      const LogicalID *this_lid)
+  {
+    constexpr auto kKeyLen = sizeof(Key);
+    constexpr auto kPayLen = sizeof(Node *);
+    constexpr auto kRecLen = kKeyLen + kPayLen;
+
+    // set a lowest key and link sibling nodes if exist
+    if (prev_node != nullptr) {
+      prev_node->LinkNext(this_lid);
+    }
+
+    // extract and insert child nodes
+    auto offset = kPageSize;
+    auto node_size = kHeaderLength;
+    auto is_rightmost = false;
+    for (; iter < iter_end; ++iter) {
+      const auto *child_lid = *iter;
+      const auto *child_node = child_lid->Load<Node *>();
+
+      if (!child_node->has_high_key_) {  // the rightmost node
+        node_size += kPayLen;
+        if (node_size > kPageSize) break;
+
+        offset = SetPayload(offset, child_lid);
+        ++record_count_;
+        is_rightmost = true;
+      } else {  // the other internal nodes
+        node_size += kRecLen;
+        if (node_size > kPageSize) break;
+
+        offset = SetPayload(offset, child_lid);
+        keys_[record_count_++] = child_node->high_key_;
+      }
+    }
+
+    // set a highest key
+    if (!is_rightmost) {
+      high_key_ = keys_[record_count_ - 1];
+      has_high_key_ = 1;
+    }
+  }
+
+  /**
+   * @brief Link border nodes between partial trees.
+   *
+   * @param left_lid the logical ID of a highest border node in a left tree.
+   * @param right_lid the logical ID of a highest border node in a right tree.
+   */
+  static void
+  LinkVerticalBorderNodes(  //
+      const LogicalID *left_lid,
+      const LogicalID *right_lid)
+  {
+    while (true) {
+      auto *left_node = left_lid->Load<Node *>();
+      left_node->LinkNext(right_lid);
+
+      if (left_node->is_leaf_) return;  // all the border nodes are linked
+
+      // go down to the lower level
+      left_lid = left_node->template GetPayload<LogicalID *>(left_node->record_count_ - 1);
+      const auto *right_node = right_lid->Load<Node *>();
+      right_lid = right_node->template GetPayload<LogicalID *>(0);
+    }
+  }
+
  private:
   /*####################################################################################
    * Internal constants
@@ -738,6 +876,23 @@ class Node
     }
 
     return node_size_;
+  }
+
+  /**
+   * @brief Link this node to a right sibling node.
+   *
+   * @param right_lid the logical ID of a right sibling node.
+   * @return an offset to a lowest key in a right sibling node.
+   */
+  void
+  LinkNext(const LogicalID *right_lid)
+  {
+    // set a sibling link in a left node
+    next_ = reinterpret_cast<uintptr_t>(right_lid);
+
+    // copy a highest key in a left node as a lowest key in a right node
+    auto *right_node = right_lid->Load<Node *>();
+    right_node->low_key_ = high_key_;
   }
 
   /*####################################################################################
