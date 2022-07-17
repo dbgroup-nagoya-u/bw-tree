@@ -209,6 +209,32 @@ class BwTreeVarLen
     return bw_tree_.Delete(key, key_len);
   }
 
+  /*####################################################################################
+   * Public bulkload API
+   *##################################################################################*/
+
+  /**
+   * @brief Bulkload specified kay/payload pairs.
+   *
+   * This function bulkloads given entries into this index. The entries are assumed to
+   * be given as a vector of pairs of Key and Payload (or key/payload/key-length for
+   * variable-length keys). Note that keys in records are assumed to be unique and
+   * sorted.
+   *
+   * @param entries vector of entries to be bulkloaded.
+   * @param thread_num the number of threads to perform bulkloading.
+   * @return kSuccess.
+   */
+  template <class Entry>
+  auto
+  Bulkload(  //
+      const std::vector<Entry> &entries,
+      const size_t thread_num = 1)  //
+      -> ReturnCode
+  {
+    return bw_tree_.Bulkload(entries, thread_num);
+  }
+
  private:
   /*####################################################################################
    * Internal member variables
@@ -392,6 +418,30 @@ class BwTreeFixLen
       -> ReturnCode
   {
     return bw_tree_.Delete(key);
+  }
+
+  /*####################################################################################
+   * Public bulkload API
+   *##################################################################################*/
+
+  /**
+   * @brief Bulkload specified kay/payload pairs.
+   *
+   * This function bulkloads given entries into this index. The entries are assumed to
+   * be given as a vector of pairs of Key and Payload. Note that keys in records are
+   * assumed to be unique and sorted.
+   *
+   * @param entries vector of entries to be bulkloaded.
+   * @param thread_num the number of threads to perform bulkloading.
+   * @return kSuccess.
+   */
+  auto
+  Bulkload(  //
+      const std::vector<std::pair<Key, Payload>> &entries,
+      const size_t thread_num = 1)  //
+      -> ReturnCode
+  {
+    return bw_tree_.Bulkload(entries, thread_num);
   }
 
  private:
