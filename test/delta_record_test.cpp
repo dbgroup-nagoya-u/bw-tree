@@ -88,7 +88,6 @@ class DeltaRecordFixture : public testing::Test
    *##################################################################################*/
 
   static constexpr bool kUseVarLen = Target::kUseVarLen;
-  static constexpr size_t kKeyLen = ::dbgroup::index::test::GetDataLength<Key>();
   static constexpr size_t kKeyNumForTest = 64;
   static constexpr size_t kRandomSeed = BW_TREE_TEST_RANDOM_SEED;
 
@@ -130,7 +129,7 @@ class DeltaRecordFixture : public testing::Test
   {
     Delta_t *raw_p{};
     if constexpr (kUseVarLen) {
-      raw_p = new (GetPage()) Delta_t{type, key, kKeyLen, payload};
+      raw_p = new (GetPage()) Delta_t{type, key, ::dbgroup::index::test::GetLength(key), payload};
     } else {
       raw_p = new (GetPage()) Delta_t{type, key, payload};
     }
@@ -143,7 +142,7 @@ class DeltaRecordFixture : public testing::Test
   {
     Delta_t *raw_p{};
     if constexpr (kUseVarLen) {
-      raw_p = new (GetPage()) Delta_t{key, kKeyLen};
+      raw_p = new (GetPage()) Delta_t{key, ::dbgroup::index::test::GetLength(key)};
     } else {
       raw_p = new (GetPage()) Delta_t{key};
     }
