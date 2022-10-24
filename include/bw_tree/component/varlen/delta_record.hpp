@@ -285,7 +285,7 @@ class DeltaRecord
   GetKey() const  //
       -> Key
   {
-    if constexpr (IsVariableLengthData<Key>()) {
+    if constexpr (IsVarLenData<Key>()) {
       return reinterpret_cast<Key>(GetKeyAddr(meta_));
     } else {
       Key key{};
@@ -315,7 +315,7 @@ class DeltaRecord
     const auto key_len = high_key_meta_.GetKeyLength();
     if (key_len == 0) return std::nullopt;
 
-    if constexpr (IsVariableLengthData<Key>()) {
+    if constexpr (IsVarLenData<Key>()) {
       return reinterpret_cast<Key>(GetKeyAddr(high_key_meta_));
     } else {
       Key key{};
@@ -385,7 +385,7 @@ class DeltaRecord
   GetMaxDeltaSize()  //
       -> size_t
   {
-    constexpr auto kKeyLen = (IsVariableLengthData<Key>()) ? kMaxVarDataSize : sizeof(Key);
+    constexpr auto kKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
     constexpr auto kPayLen = (sizeof(Payload) > kWordSize) ? sizeof(Payload) : kWordSize;
     return kHeaderLength + 2 * kKeyLen + kPayLen;
   }
@@ -478,7 +478,7 @@ class DeltaRecord
       [[maybe_unused]] const size_t key_len)  //
       -> size_t
   {
-    if constexpr (IsVariableLengthData<Key>()) {
+    if constexpr (IsVarLenData<Key>()) {
       memcpy(ShiftAddr(this, offset), key, key_len);
       offset += key_len;
     } else {
