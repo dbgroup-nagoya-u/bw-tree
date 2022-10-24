@@ -50,6 +50,7 @@ class BwTree
 
   using Key = typename Delta_t::Key;
   using Comp = typename Delta_t::Comp;
+  using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using DeltaType = component::DeltaType;
   using MappingTable_t = MappingTable<Node_t, Delta_t>;
   using DC = DeltaChain<Delta_t>;
@@ -91,7 +92,7 @@ class BwTree
         Node_t *node,
         size_t begin_pos,
         size_t end_pos,
-        const std::optional<std::pair<const Key &, bool>> end_key,
+        const ScanKey end_key,
         const bool is_end)
         : bw_tree_{bw_tree},
           node_{node},
@@ -152,6 +153,12 @@ class BwTree
      *################################################################################*/
 
     /**
+     * @retval true if this iterator indicates a live record.
+     * @retval false otherwise.
+     */
+    explicit operator bool() { return HasRecord(); }
+
+    /**
      * @return a current key and payload pair.
      */
     auto
@@ -184,7 +191,7 @@ class BwTree
      * @retval false otherwise.
      */
     [[nodiscard]] auto
-    HasNext()  //
+    HasRecord()  //
         -> bool
     {
       while (true) {
@@ -241,7 +248,7 @@ class BwTree
     size_t current_pos_{0};
 
     /// the end key given from a user.
-    std::optional<std::pair<const Key &, bool>> end_key_{};
+    ScanKey end_key_{};
 
     /// a flag for indicating a current node is rightmost in scan-range.
     bool is_end_{true};
@@ -366,8 +373,8 @@ class BwTree
    */
   auto
   Scan(  //
-      const std::optional<std::pair<const Key &, bool>> &begin_key = std::nullopt,
-      const std::optional<std::pair<const Key &, bool>> &end_key = std::nullopt)  //
+      const ScanKey &begin_key = std::nullopt,
+      const ScanKey &end_key = std::nullopt)  //
       -> RecordIterator
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
@@ -376,7 +383,7 @@ class BwTree
     size_t begin_pos{};
     if (begin_key) {
       // traverse to a leaf node and sort records for scanning
-      const auto &[b_key, b_closed] = *begin_key;
+      const auto &[b_key, b_key_len, b_closed] = *begin_key;
       auto &&stack = SearchLeafNode(b_key, b_closed);
       begin_pos = ConsolidateForScan(node, b_key, b_closed, stack);
     } else {
@@ -1208,7 +1215,7 @@ class BwTree
       LogicalID *sib_lid,
       Node_t *node,
       const Key &begin_key,
-      const std::optional<std::pair<const Key &, bool>> &end_key)  //
+      const ScanKey &end_key)  //
       -> RecordIterator
   {
     // consolidate a sibling node

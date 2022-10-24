@@ -47,6 +47,7 @@ class BwTreeVarLen
   using Delta_t = component::varlen::DeltaRecord<Key, Comp>;
   using BwTree_t = component::BwTree<Payload, Node_t, Delta_t, component::kIsVarLen>;
   using Iterator_t = typename BwTree_t::RecordIterator;
+  using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -93,7 +94,9 @@ class BwTreeVarLen
    * @retval std::nullopt otherwise.
    */
   auto
-  Read(const Key &key)  //
+  Read(  //
+      const Key &key,
+      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> std::optional<Payload>
   {
     return bw_tree_.Read(key);
@@ -108,8 +111,8 @@ class BwTreeVarLen
    */
   auto
   Scan(  //
-      const std::optional<std::pair<const Key &, bool>> &begin_key = std::nullopt,
-      const std::optional<std::pair<const Key &, bool>> &end_key = std::nullopt)  //
+      const ScanKey &begin_key = std::nullopt,
+      const ScanKey &end_key = std::nullopt)  //
       -> Iterator_t
   {
     return bw_tree_.Scan(begin_key, end_key);
@@ -266,6 +269,7 @@ class BwTreeFixLen
   using Delta_t = component::fixlen::DeltaRecord<Key, Comp>;
   using BwTree_t = component::BwTree<Payload, Node_t, Delta_t, !component::kIsVarLen>;
   using Iterator_t = typename BwTree_t::RecordIterator;
+  using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -312,7 +316,9 @@ class BwTreeFixLen
    * @retval std::nullopt otherwise.
    */
   auto
-  Read(const Key &key)  //
+  Read(  //
+      const Key &key,
+      [[maybe_unused]] const size_t key_len)  //
       -> std::optional<Payload>
   {
     return bw_tree_.Read(key);
@@ -327,8 +333,8 @@ class BwTreeFixLen
    */
   auto
   Scan(  //
-      const std::optional<std::pair<const Key &, bool>> &begin_key = std::nullopt,
-      const std::optional<std::pair<const Key &, bool>> &end_key = std::nullopt)  //
+      const ScanKey &begin_key = std::nullopt,
+      const ScanKey &end_key = std::nullopt)  //
       -> Iterator_t
   {
     return bw_tree_.Scan(begin_key, end_key);
@@ -352,7 +358,8 @@ class BwTreeFixLen
   auto
   Write(  //
       const Key &key,
-      const Payload &payload)  //
+      const Payload &payload,
+      [[maybe_unused]] const size_t key_len)  //
       -> ReturnCode
   {
     return bw_tree_.Write(key, payload);
@@ -374,7 +381,8 @@ class BwTreeFixLen
   auto
   Insert(  //
       const Key &key,
-      const Payload &payload)  //
+      const Payload &payload,
+      [[maybe_unused]] const size_t key_len)  //
       -> ReturnCode
   {
     return bw_tree_.Insert(key, payload);
@@ -396,7 +404,8 @@ class BwTreeFixLen
   auto
   Update(  //
       const Key &key,
-      const Payload &payload)  //
+      const Payload &payload,
+      [[maybe_unused]] const size_t key_len)  //
       -> ReturnCode
   {
     return bw_tree_.Update(key, payload);
@@ -414,7 +423,9 @@ class BwTreeFixLen
    * @retval kKeyNotExist otherwise.
    */
   auto
-  Delete(const Key &key)  //
+  Delete(  //
+      const Key &key,
+      [[maybe_unused]] const size_t key_len)  //
       -> ReturnCode
   {
     return bw_tree_.Delete(key);
