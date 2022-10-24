@@ -125,10 +125,6 @@ constexpr size_t kMaxVarDataSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
 /// a flag for indicating optimized page layouts for fixed-length data.
 constexpr bool kOptimizeForFixLenData = false;
 
-// Check whether the specified page size is valid
-static_assert(kPageSize % kWordSize == 0);
-static_assert(kMaxVarDataSize * 2 < kPageSize);
-
 }  // namespace dbgroup::index::bw_tree
 
 #endif  // BW_TREE_UTILITY_HPP

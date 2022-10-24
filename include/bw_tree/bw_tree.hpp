@@ -736,6 +736,15 @@ class BwTree
   /// an expected maximum height of a tree.
   static constexpr size_t kExpectedTreeHeight = 8;
 
+  /// the maximum length of keys.
+  static constexpr size_t kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
+
+  /// the length of payloads.
+  static constexpr size_t kPayLen = sizeof(Payload);
+
+  /// the length of record metadata.
+  static constexpr size_t kMetaLen = (kIsVarLen) ? sizeof(component::varlen::Metadata) : 0;
+
   /// Header length in bytes.
   static constexpr size_t kHeaderLength = sizeof(Node_t);
 
@@ -746,18 +755,18 @@ class BwTree
   static constexpr size_t kBulkKeyLen = (kIsVarLen) ? kWordSize : sizeof(Key);
 
   /// the expected length of records in leaf nodes for bulkloading.
-  static constexpr size_t kLeafRecLen = kBulkKeyLen + sizeof(Payload);
+  static constexpr size_t kLeafRecLen = kBulkKeyLen + kPayLen;
 
   /// the expected capacity of leaf nodes for bulkloading.
   static constexpr size_t kLeafNodeCap =
-      (kPageSize - kHeaderLength - kBulkKeyLen) / (kLeafRecLen + ((kIsVarLen) ? kWordSize : 0));
+      (kPageSize - kHeaderLength - kBulkKeyLen) / (kLeafRecLen + kMetaLen);
 
   /// the expected length of records in internal nodes for bulkloading.
   static constexpr size_t kInnerRecLen = kBulkKeyLen + sizeof(LogicalID *);
 
   /// the expected capacity of internal nodes for bulkloading.
   static constexpr size_t kInnerNodeCap =
-      (kPageSize - kHeaderLength - kBulkKeyLen) / (kInnerRecLen + ((kIsVarLen) ? kWordSize : 0));
+      (kPageSize - kHeaderLength - kBulkKeyLen) / (kInnerRecLen + kMetaLen);
 
   /// a flag for indicating leaf nodes.
   static constexpr bool kIsLeaf = true;
@@ -1892,6 +1901,39 @@ class BwTree
     child_nodes = std::move(nodes);
     return child_nodes.size() > kInnerNodeCap;
   }
+
+  /*####################################################################################
+   * Static assertions
+   *##################################################################################*/
+
+  /**
+   * @retval true if a target key class is trivially copyable.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] static constexpr auto
+  KeyIsTriviallyCopyable()  //
+      -> bool
+  {
+    if constexpr (IsVarLenData<Key>()) {
+      // check a base type is trivially copyable
+      return std::is_trivially_copyable_v<std::remove_pointer_t<Key>>;
+    } else {
+      // check a given key type is trivially copyable
+      return std::is_trivially_copyable_v<Key>;
+    }
+  }
+
+  // cannot use optimized page layouts with variable-length data
+  static_assert(kIsVarLen || !IsVarLenData<Key>());
+
+  // target keys must be trivially copyable.
+  static_assert(KeyIsTriviallyCopyable());
+
+  // target payloads must be trivially copyable.
+  static_assert(std::is_trivially_copyable_v<Payload>);
+
+  // node pages have sufficient capacity for records.
+  static_assert(kMaxKeyLen + kPayLen <= kPageSize / 4);
 
   /*####################################################################################
    * Internal member variables
