@@ -55,12 +55,14 @@ class DeltaRecord
    * @tparam T a target payload class.
    * @param delta_type an insert or modify delta.
    * @param key a key to be inserted.
+   * @param key_len the length of a target key.
    * @param payload a payload to be inserted.
    */
   template <class T>
   DeltaRecord(  //
       const DeltaType delta_type,
       const Key &key,
+      [[maybe_unused]] const size_t key_len,
       const T &payload)
       : is_leaf_{kLeaf}, delta_type_{delta_type}, has_low_key_{1}, has_high_key_{0}, key_{key}
   {
@@ -71,8 +73,11 @@ class DeltaRecord
    * @brief Construct a new delta record for deleting a record.
    *
    * @param key a key to be deleted.
+   * @param key_len the length of a target key.
    */
-  explicit DeltaRecord(const Key &key)
+  explicit DeltaRecord(  //
+      const Key &key,
+      [[maybe_unused]] const size_t key_len)
       : is_leaf_{kLeaf}, delta_type_{kDelete}, has_low_key_{1}, has_high_key_{0}, key_{key}
   {
   }

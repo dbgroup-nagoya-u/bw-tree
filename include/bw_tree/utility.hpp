@@ -84,7 +84,7 @@ struct CompareAsCString {
  */
 template <class T>
 constexpr auto
-IsVariableLengthData()  //
+IsVarLenData()  //
     -> bool
 {
   if constexpr (std::is_same_v<T, char *> || std::is_same_v<T, std::byte *>) {
@@ -122,9 +122,8 @@ constexpr size_t kMinNodeSize = BW_TREE_MIN_NODE_SIZE;
 /// The maximun size of variable-length data
 constexpr size_t kMaxVarDataSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
 
-// Check whether the specified page size is valid
-static_assert(kPageSize % kWordSize == 0);
-static_assert(kMaxVarDataSize * 2 < kPageSize);
+/// a flag for indicating optimized page layouts for fixed-length data.
+constexpr bool kOptimizeForFixLenData = false;
 
 }  // namespace dbgroup::index::bw_tree
 

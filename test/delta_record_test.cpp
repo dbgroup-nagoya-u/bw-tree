@@ -37,7 +37,7 @@ namespace dbgroup::index::bw_tree
  */
 template <>
 constexpr auto
-IsVariableLengthData<char *>()  //
+IsVarLenData<char *>()  //
     -> bool
 {
   return true;
@@ -127,12 +127,8 @@ class DeltaRecordFixture : public testing::Test
       const Payload &payload)  //
       -> std::unique_ptr<Delta_t>
   {
-    Delta_t *raw_p{};
-    if constexpr (kUseVarLen) {
-      raw_p = new (GetPage()) Delta_t{type, key, ::dbgroup::index::test::GetLength(key), payload};
-    } else {
-      raw_p = new (GetPage()) Delta_t{type, key, payload};
-    }
+    const auto key_len = ::dbgroup::index::test::GetLength(key);
+    auto *raw_p = new (GetPage()) Delta_t{type, key, key_len, payload};
     return std::unique_ptr<Delta_t>{raw_p};
   }
 
@@ -140,12 +136,8 @@ class DeltaRecordFixture : public testing::Test
   CreateLeafDeleteDelta(const Key &key)  //
       -> std::unique_ptr<Delta_t>
   {
-    Delta_t *raw_p{};
-    if constexpr (kUseVarLen) {
-      raw_p = new (GetPage()) Delta_t{key, ::dbgroup::index::test::GetLength(key)};
-    } else {
-      raw_p = new (GetPage()) Delta_t{key};
-    }
+    const auto key_len = ::dbgroup::index::test::GetLength(key);
+    auto *raw_p = new (GetPage()) Delta_t{key, key_len};
 
     return std::unique_ptr<Delta_t>{raw_p};
   }

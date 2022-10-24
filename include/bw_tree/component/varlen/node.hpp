@@ -202,7 +202,7 @@ class Node
     const auto key_len = high_meta_.GetKeyLength();
 
     Key high_key{};
-    if constexpr (IsVariableLengthData<Key>()) {
+    if constexpr (IsVarLenData<Key>()) {
       high_key = reinterpret_cast<Key>(::operator new(key_len));
       memcpy(high_key, GetKeyAddr(high_meta_), key_len);
     } else {
@@ -733,7 +733,7 @@ class Node
       const LogicalID *this_lid,
       const bool is_rightmost)
   {
-    constexpr auto kMaxKeyLen = (IsVariableLengthData<Key>()) ? kMaxVarDataSize : sizeof(Key);
+    constexpr auto kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
 
     // set a lowest key and link sibling nodes if exist
     auto offset = (prev_node != nullptr) ? prev_node->LinkNext(this_lid) : kPageSize - kMaxKeyLen;
@@ -777,7 +777,7 @@ class Node
       Node *prev_node,
       const LogicalID *this_lid)
   {
-    constexpr auto kMaxKeyLen = (IsVariableLengthData<Key>()) ? kMaxVarDataSize : sizeof(Key);
+    constexpr auto kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
     constexpr auto kPayLen = sizeof(Node *);
 
     // set a lowest key and link sibling nodes if exist
@@ -887,7 +887,7 @@ class Node
   GetKey(const Metadata meta) const  //
       -> Key
   {
-    if constexpr (IsVariableLengthData<Key>()) {
+    if constexpr (IsVarLenData<Key>()) {
       return reinterpret_cast<Key>(GetKeyAddr(meta));
     } else {
       Key key{};
@@ -940,7 +940,7 @@ class Node
       -> size_t
   {
     offset -= key_len;
-    if constexpr (IsVariableLengthData<T>()) {
+    if constexpr (IsVarLenData<T>()) {
       memcpy(ShiftAddr(this, offset), key, key_len);
     } else {
       memcpy(ShiftAddr(this, offset), &key, key_len);
@@ -1015,7 +1015,7 @@ class Node
   ParseEntry(const Entry &entry)  //
       -> std::tuple<Key, Payload, size_t>
   {
-    if constexpr (IsVariableLengthData<Key>()) {
+    if constexpr (IsVarLenData<Key>()) {
       return entry;
     } else {
       const auto &[key, payload] = entry;

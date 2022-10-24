@@ -35,7 +35,7 @@ namespace dbgroup::index::bw_tree
  */
 template <>
 constexpr auto
-IsVariableLengthData<char *>()  //
+IsVarLenData<char *>()  //
     -> bool
 {
   return true;
