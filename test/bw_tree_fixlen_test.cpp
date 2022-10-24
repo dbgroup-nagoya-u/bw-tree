@@ -19,22 +19,6 @@
 // our libraries
 #include "external/index-fixtures/index_fixture.hpp"
 
-namespace dbgroup::index::bw_tree
-{
-/**
- * @brief Use CString as variable-length data in tests.
- *
- */
-template <>
-constexpr auto
-IsVariableLengthData<char *>()  //
-    -> bool
-{
-  return true;
-}
-
-}  // namespace dbgroup::index::bw_tree
-
 namespace dbgroup::index::test
 {
 /*######################################################################################
@@ -42,25 +26,15 @@ namespace dbgroup::index::test
  *####################################################################################*/
 
 template <class K, class V, class C>
-using BwTreeVarLen = ::dbgroup::index::bw_tree::BwTreeVarLen<K, V, C>;
-
-template <class K, class V, class C>
 using BwTreeFixLen = ::dbgroup::index::bw_tree::BwTreeFixLen<K, V, C>;
 
-using TestTargets = ::testing::Types<             //
-    IndexInfo<BwTreeVarLen, UInt8, UInt8>,        // fixed-length keys
-    IndexInfo<BwTreeVarLen, UInt4, UInt8>,        // small keys
-    IndexInfo<BwTreeVarLen, UInt8, UInt4>,        // small payloads
-    IndexInfo<BwTreeVarLen, UInt4, UInt4>,        // small keys/payloads
-    IndexInfo<BwTreeVarLen, Var, UInt8>,          // variable-length keys
-    IndexInfo<BwTreeVarLen, Ptr, Ptr>,            // pointer keys/payloads
-    IndexInfo<BwTreeVarLen, Original, Original>,  // original class keys/payloads
-    IndexInfo<BwTreeFixLen, UInt8, UInt8>,        // fixed-length keys
-    IndexInfo<BwTreeFixLen, UInt4, UInt8>,        // small keys
-    IndexInfo<BwTreeFixLen, UInt8, UInt4>,        // small payloads
-    IndexInfo<BwTreeFixLen, UInt4, UInt4>,        // small keys/payloads
-    IndexInfo<BwTreeFixLen, Ptr, Ptr>,            // pointer keys/payloads
-    IndexInfo<BwTreeFixLen, Original, Original>   // original class keys/payloads
+using TestTargets = ::testing::Types<            //
+    IndexInfo<BwTreeFixLen, UInt8, UInt8>,       // fixed-length keys
+    IndexInfo<BwTreeFixLen, UInt4, UInt8>,       // small keys
+    IndexInfo<BwTreeFixLen, UInt8, UInt4>,       // small payloads
+    IndexInfo<BwTreeFixLen, UInt4, UInt4>,       // small keys/payloads
+    IndexInfo<BwTreeFixLen, Ptr, Ptr>,           // pointer keys/payloads
+    IndexInfo<BwTreeFixLen, Original, Original>  // original class keys/payloads
     >;
 TYPED_TEST_SUITE(IndexFixture, TestTargets);
 

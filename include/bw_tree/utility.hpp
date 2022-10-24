@@ -87,7 +87,11 @@ constexpr auto
 IsVariableLengthData()  //
     -> bool
 {
-  return false;
+  if constexpr (std::is_same_v<T, char *> || std::is_same_v<T, std::byte *>) {
+    return true;
+  } else {
+    return false;
+  }
 }
 
 /**
