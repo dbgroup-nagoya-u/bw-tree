@@ -73,7 +73,6 @@ class DeltaChain
    *
    * @param delta the head record in a delta-chain.
    * @param key a target key to be searched.
-   * @param closed a flag for indicating closed/open-interval.
    * @param out_ptr an output pointer if needed.
    * @param out_delta_num the number of records in this delta-chain.
    * @retval kRecordFound if a delta record (in out_ptr) has a corresponding child.
@@ -85,7 +84,6 @@ class DeltaChain
   SearchChildNode(  //
       const DeltaRecord *delta,
       const Key &key,
-      const bool closed,
       uintptr_t &out_ptr,
       size_t &out_delta_num)  //
       -> DeltaRC
@@ -97,7 +95,7 @@ class DeltaChain
       switch (delta->GetDeltaType()) {
         case kInsert:
         case kDelete: {
-          if (delta->LowKeyIsLT(key, closed) && delta->HighKeyIsGE(key, closed)) {
+          if (delta->LowKeyIsLE(key) && delta->HighKeyIsGT(key)) {
             // this index-entry delta directly indicates a child node
             out_ptr = delta->template GetPayload<uintptr_t>();
             return kRecordFound;
@@ -106,7 +104,7 @@ class DeltaChain
         }
 
         case kSplit: {
-          if (delta->LowKeyIsLT(key, closed)) {
+          if (delta->LowKeyIsLE(key)) {
             // a sibling node includes a target key
             out_ptr = delta->template GetPayload<uintptr_t>();
             return kKeyIsInSibling;
@@ -121,7 +119,7 @@ class DeltaChain
 
         case kMerge: {
           // check whether the merged node contains a target key
-          if (delta->LowKeyIsLT(key, closed)) {
+          if (delta->LowKeyIsLE(key)) {
             // check whether the merging is aborted
             const auto *sib_lid = delta->template GetPayload<LogicalID *>();
             const auto *remove_d = sib_lid->template Load<DeltaRecord *>();
@@ -142,7 +140,7 @@ class DeltaChain
 
         case kNotDelta:
         default: {
-          if (!has_smo && !delta->HighKeyIsGE(key, closed)) {
+          if (!has_smo && !delta->HighKeyIsGT(key)) {
             // a sibling node includes a target key
             out_ptr = delta->template GetNext<uintptr_t>();
             return kKeyIsInSibling;
@@ -199,7 +197,7 @@ class DeltaChain
 
         case kSplit: {
           // check whether the right-sibling node contains a target key
-          if (delta->LowKeyIsLT(key)) {
+          if (delta->LowKeyIsLE(key)) {
             out_ptr = delta->template GetPayload<uintptr_t>();
             return kKeyIsInSibling;
           }
@@ -213,7 +211,7 @@ class DeltaChain
 
         case kMerge: {
           // check whether the merged node contains a target key
-          if (delta->LowKeyIsLT(key)) {
+          if (delta->LowKeyIsLE(key)) {
             // check whether the merging is aborted
             const auto *sib_lid = delta->template GetPayload<LogicalID *>();
             const auto *remove_d = sib_lid->template Load<DeltaRecord *>();
@@ -235,7 +233,7 @@ class DeltaChain
         case kNotDelta:
         default: {
           // check whether the node contains a target key
-          if (!has_smo && !delta->HighKeyIsGE(key)) {
+          if (!has_smo && !delta->HighKeyIsGT(key)) {
             out_ptr = delta->template GetNext<uintptr_t>();
             return kKeyIsInSibling;
           }
@@ -310,7 +308,6 @@ class DeltaChain
    *
    * @param delta the head record in a delta-chain.
    * @param key a target key to be searched.
-   * @param closed a flag for indicating closed/open-interval.
    * @param out_ptr an output pointer if needed.
    * @param out_delta_num the number of records in this delta-chain.
    * @retval kReachBaseNode if this node is valid for the given key.
@@ -321,7 +318,6 @@ class DeltaChain
   Validate(  //
       const DeltaRecord *delta,
       const Key &key,
-      const bool closed,
       uintptr_t &out_ptr,
       size_t &out_delta_num)  //
       -> DeltaRC
@@ -333,7 +329,7 @@ class DeltaChain
       switch (delta->GetDeltaType()) {
         case kSplit: {
           // check whether the right-sibling node contains a target key
-          if (delta->LowKeyIsLT(key, closed)) {
+          if (delta->LowKeyIsLE(key)) {
             out_ptr = delta->template GetPayload<uintptr_t>();
             return kKeyIsInSibling;
           }
@@ -347,7 +343,7 @@ class DeltaChain
 
         case kMerge: {
           // check whether the merged node contains a target key
-          if (delta->LowKeyIsLT(key, closed)) {
+          if (delta->LowKeyIsLE(key)) {
             // check whether the merging is aborted and the sibling node includes a target key
             out_ptr = delta->template GetPayload<uintptr_t>();
             const auto *merged_lid = reinterpret_cast<LogicalID *>(out_ptr);
@@ -364,7 +360,7 @@ class DeltaChain
 
         case kNotDelta: {
           // check whether the node contains a target key
-          if (!has_smo && !delta->HighKeyIsGE(key, closed)) {
+          if (!has_smo && !delta->HighKeyIsGT(key)) {
             out_ptr = delta->template GetNext<uintptr_t>();
             return kKeyIsInSibling;
           }
