@@ -75,7 +75,8 @@ class BwTree
 
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
-  using BulkResult = std::pair<size_t, std::vector<LogicalID *>>;
+  using NodeEntry = std::tuple<Key, LogicalID *, size_t>;
+  using BulkResult = std::pair<size_t, std::vector<NodeEntry>>;
   using BulkPromise = std::promise<BulkResult>;
   using BulkFuture = std::future<BulkResult>;
 
@@ -653,16 +654,14 @@ class BwTree
       const size_t thread_num = 1)  //
       -> ReturnCode
   {
-    assert(thread_num > 0);
-    assert(entries.size() >= thread_num);
-
     if (entries.empty()) return ReturnCode::kSuccess;
 
-    std::vector<LogicalID *> nodes{};
+    std::vector<NodeEntry> nodes{};
     auto &&iter = entries.cbegin();
-    if (thread_num == 1) {
+    const auto rec_num = entries.size();
+    if (thread_num <= 1 || rec_num < thread_num) {
       // bulkloading with a single thread
-      nodes = BulkloadWithSingleThread<Entry>(iter, entries.size()).second;
+      nodes = BulkloadWithSingleThread<Entry>(iter, rec_num).second;
     } else {
       // bulkloading with multi-threads
       std::vector<BulkFuture> futures{};
@@ -674,7 +673,6 @@ class BwTree
       };
 
       // create threads to construct partial BzTrees
-      const auto rec_num = entries.size();
       for (size_t i = 0; i < thread_num; ++i) {
         // create a partial BzTree
         BulkPromise p{};
@@ -701,25 +699,27 @@ class BwTree
       const LogicalID *prev_lid = nullptr;
       for (auto &&[p_height, p_nodes] : partial_trees) {
         while (p_height < height) {  // NOLINT
-          ConstructUpperLayer(p_nodes);
+          p_nodes = ConstructSingleLayer<NodeEntry>(p_nodes.cbegin(), p_nodes.size());
           ++p_height;
         }
         nodes.insert(nodes.end(), p_nodes.begin(), p_nodes.end());
 
         // link partial trees
-        Node_t::LinkVerticalBorderNodes(prev_lid, p_nodes.front());
-        prev_lid = p_nodes.back();
+        Node_t::LinkVerticalBorderNodes(prev_lid, std::get<1>(p_nodes.front()));
+        prev_lid = std::get<1>(p_nodes.back());
       }
     }
 
     // create upper layers until a root node is created
     while (nodes.size() > 1) {
-      ConstructUpperLayer(nodes);
+      nodes = ConstructSingleLayer<NodeEntry>(nodes.cbegin(), nodes.size());
     }
+    auto *new_root = std::get<1>(nodes.front());
+    Node_t::RemoveLeftmostKeys(new_root);
 
     // set a new root
-    auto *old_root = root_.exchange(nodes.front(), std::memory_order_release);
-    gc_.AddGarbage(old_root->Load<Delta_t *>());
+    auto *old_root = root_.exchange(new_root, std::memory_order_release);
+    gc_.AddGarbage(old_root->template Load<Delta_t *>());
     old_root->Clear();
 
     return ReturnCode::kSuccess;
@@ -749,7 +749,7 @@ class BwTree
   static constexpr size_t kDeltaRecSize = Delta_t::template GetMaxDeltaSize<Payload>();
 
   /// the expected length of keys for bulkloading.
-  static constexpr size_t kBulkKeyLen = (kIsVarLen) ? kWordSize : sizeof(Key);
+  static constexpr size_t kBulkKeyLen = (IsVarLenData<Key>()) ? kWordSize : sizeof(Key);
 
   /// the expected length of records in leaf nodes for bulkloading.
   static constexpr size_t kLeafRecLen = kBulkKeyLen + kPayLen;
@@ -1758,68 +1758,55 @@ class BwTree
   template <class Entry>
   auto
   BulkloadWithSingleThread(  //
-      BulkIter<Entry> &iter,
+      BulkIter<Entry> iter,
       const size_t n)  //
       -> BulkResult
   {
-    // reserve space for nodes in the leaf layer
-    std::vector<LogicalID *> nodes{};
-    nodes.reserve((n / kLeafNodeCap) + 1);
+    // construct a data layer (leaf nodes)
+    auto &&nodes = ConstructSingleLayer<Entry>(iter, n);
 
-    // load records into leaf nodes
-    const auto &iter_end = iter + n;
-    Node_t *prev_node = nullptr;
-    while (iter < iter_end) {
-      auto *node = new (GetNodePage()) Node_t{kIsLeaf};
-      auto *lid = mapping_table_.GetNewLogicalID();
-      lid->Store(node);
-      node->template Bulkload<Payload, Entry>(iter, iter_end, prev_node, lid);
-      nodes.emplace_back(lid);
-      prev_node = node;
-    }
-
-    // construct index layers
+    // construct index layers (inner nodes)
     size_t height = 1;
-    if (nodes.size() > 1) {
-      // continue until the number of internal nodes is sufficiently small
-      do {
-        ++height;
-      } while (ConstructUpperLayer(nodes));
+    for (auto n = nodes.size(); n > kInnerNodeCap; n = nodes.size(), ++height) {
+      // continue until the number of inner nodes is sufficiently small
+      nodes = ConstructSingleLayer<NodeEntry>(nodes.cbegin(), n);
     }
 
     return {height, std::move(nodes)};
   }
 
   /**
-   * @brief Construct internal nodes based on given child nodes.
+   * @brief Construct nodes based on given entries.
    *
-   * @param child_nodes child nodes in a lower layer.
-   * @retval true if constructed nodes cannot be contained in a single node.
-   * @retval false otherwise.
+   * @param iter the begin position of target records.
+   * @param n the number of entries to be bulkloaded.
+   * @return constructed nodes.
    */
+  template <class Entry>
   auto
-  ConstructUpperLayer(std::vector<LogicalID *> &child_nodes)  //
-      -> bool
+  ConstructSingleLayer(  //
+      BulkIter<Entry> iter,
+      const size_t n)  //
+      -> std::vector<NodeEntry>
   {
+    using T = std::tuple_element_t<1, Entry>;
+    constexpr auto kIsLeaf = std::is_same_v<T, Payload>;
+
     // reserve space for nodes in the upper layer
-    std::vector<LogicalID *> nodes{};
-    nodes.reserve((child_nodes.size() / kInnerNodeCap) + 1);
+    std::vector<NodeEntry> nodes{};
+    nodes.reserve((n / (kIsLeaf ? kLeafNodeCap : kInnerNodeCap)) + 1);
 
     // load child nodes into parent nodes
-    auto &&iter = child_nodes.cbegin();
-    const auto &iter_end = child_nodes.cend();
-    Node_t *prev_node = nullptr;
-    while (iter < iter_end) {
-      auto *node = new (GetNodePage()) Node_t{!kIsLeaf};
+    const auto &iter_end = iter + n;
+    for (Node_t *prev_node = nullptr; iter < iter_end;) {
+      auto *node = new (GetNodePage()) Node_t{kIsLeaf};
       auto *lid = mapping_table_.GetNewLogicalID();
       lid->Store(node);
-      node->Bulkload(iter, iter_end, prev_node, lid);
-      nodes.emplace_back(lid);
+      node->template Bulkload<Entry>(iter, iter_end, prev_node, lid, nodes);
       prev_node = node;
     }
 
-    child_nodes = std::move(nodes);
-    return child_nodes.size() > kInnerNodeCap;
+    return nodes;
   }
 
   /*####################################################################################

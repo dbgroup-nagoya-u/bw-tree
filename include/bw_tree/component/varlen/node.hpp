@@ -45,6 +45,7 @@ class Node
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
+  using NodeEntry = std::tuple<Key, LogicalID *, size_t>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -631,31 +632,33 @@ class Node
    *##################################################################################*/
 
   /**
-   * @brief Create a leaf node with the maximum number of records for bulkloading.
+   * @brief Create a node with the maximum number of records for bulkloading.
    *
-   * @tparam Payload a target payload class.
    * @tparam Entry a container of a key/payload pair.
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
    * @param prev_node a left sibling node.
    * @param this_lid the logical ID of a this node.
-   * @param is_rightmost a flag for indicating a rightmost node to be created.
+   * @param nodes the container of construcred nodes.
    */
-  template <class Payload, class Entry>
+  template <class Entry>
   void
   Bulkload(  //
       BulkIter<Entry> &iter,
       const BulkIter<Entry> &iter_end,
       Node *prev_node,
-      const LogicalID *this_lid)
+      LogicalID *this_lid,
+      std::vector<NodeEntry> &nodes)
   {
+    using Payload = std::tuple_element_t<1, Entry>;
+
     constexpr auto kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
 
     // extract and insert entries into this node
     auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
     auto node_size = kHeaderLength + kMaxKeyLen;
     for (; iter < iter_end; ++iter) {
-      const auto &[key, payload, key_len] = ParseEntry<Payload>(*iter);
+      const auto &[key, payload, key_len] = ParseEntry(*iter);
       const auto rec_len = key_len + sizeof(Payload);
 
       // check whether the node has sufficent space
@@ -677,53 +680,8 @@ class Node
     if (prev_node != nullptr) {
       prev_node->LinkNext(this_lid);
     }
-  }
 
-  /**
-   * @brief Create an internal node with the maximum number of records for bulkloading.
-   *
-   * @param iter the begin position of child nodes.
-   * @param iter_end the end position of child nodes.
-   * @param prev_node a left sibling node.
-   * @param this_lid the logical ID of a this node.
-   */
-  void
-  Bulkload(  //
-      BulkIter<LogicalID *> &iter,
-      const BulkIter<LogicalID *> &iter_end,
-      Node *prev_node,
-      const LogicalID *this_lid)
-  {
-    constexpr auto kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
-    constexpr auto kPayLen = sizeof(Node *);
-
-    // extract and insert child nodes
-    auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
-    auto node_size = kHeaderLength + kMaxKeyLen;
-    for (; iter < iter_end; ++iter) {
-      const auto *child_lid = *iter;
-      const auto *child_node = child_lid->Load<Node *>();
-      const auto sep_meta = child_node->low_meta_;
-      const auto key_len = sep_meta.GetKeyLength();
-      const auto rec_len = key_len + kPayLen;
-
-      node_size += rec_len + sizeof(Metadata);
-      if (node_size > kPageSize) break;
-
-      offset = SetPayload(offset, child_lid) - key_len;
-      memcpy(ShiftAddr(this, offset), child_node->GetKeyAddr(sep_meta), key_len);
-      meta_array_[record_count_++] = Metadata{offset, key_len, rec_len};
-    }
-
-    // set a lowest key
-    const auto low_meta = meta_array_[0];
-    const auto low_key_len = low_meta.GetKeyLength();
-    low_meta_ = Metadata{low_meta.GetOffset(), low_key_len, low_key_len};
-
-    // link the sibling nodes if exist
-    if (prev_node != nullptr) {
-      prev_node->LinkNext(this_lid);
-    }
+    nodes.emplace_back(*GetLowKey(), this_lid, low_key_len);
   }
 
   /**
@@ -737,29 +695,43 @@ class Node
       const LogicalID *left_lid,
       const LogicalID *right_lid)
   {
+    if (left_lid == nullptr) return;
+
     while (true) {
-      auto *right_node = right_lid->Load<Node *>();
-
-      if (left_lid == nullptr) {
-        // this partial tree is leftmost, so set infinity keys
-        right_node->low_meta_ = Metadata{kPageSize, 0, 0};
-        if (right_node->is_inner_) {
-          const auto meta = right_node->meta_array_[0];
-          const auto offset = meta.GetOffset();
-          const auto key_len = meta.GetKeyLength();
-          const auto rec_len = meta.GetTotalLength();
-          right_node->meta_array_[0] = Metadata{offset + key_len, 0, rec_len - key_len};
-        }
-      } else {
-        auto *left_node = left_lid->Load<Node *>();
-        left_node->LinkNext(right_lid);
-        left_lid = left_node->template GetPayload<LogicalID *>(left_node->record_count_ - 1);
-      }
-
-      if (right_node->is_inner_ == 0) return;  // all the border nodes are linked
+      auto *left_node = left_lid->Load<Node *>();
+      left_node->LinkNext(right_lid);
+      if (left_node->is_inner_ == 0) return;  // all the border nodes are linked
 
       // go down to the lower level
+      auto *right_node = right_lid->Load<Node *>();
       right_lid = right_node->template GetPayload<LogicalID *>(0);
+      left_lid = left_node->template GetPayload<LogicalID *>(left_node->record_count_ - 1);
+    }
+  }
+
+  /**
+   * @brief Remove the leftmost keys from the leftmost nodes.
+   *
+   * @param lid the logical ID of a root node.
+   */
+  static void
+  RemoveLeftmostKeys(const LogicalID *lid)
+  {
+    while (true) {
+      // remove the lowest key
+      auto *node = lid->Load<Node *>();
+      node->low_meta_ = Metadata{kPageSize, 0, 0};
+      if (node->is_inner_ == 0) return;
+
+      // remove the leftmost key in a record region of an inner node
+      const auto meta = node->meta_array_[0];
+      const auto offset = meta.GetOffset();
+      const auto key_len = meta.GetKeyLength();
+      const auto rec_len = meta.GetTotalLength();
+      node->meta_array_[0] = Metadata{offset + key_len, 0, rec_len - key_len};
+
+      // go down to the lower level
+      lid = node->template GetPayload<LogicalID *>(0);
     }
   }
 
@@ -906,12 +878,15 @@ class Node
    * @retval 2nd: a target payload.
    * @retval 3rd: the length of a target key.
    */
-  template <class Payload, class Entry>
+  template <class Entry>
   constexpr auto
   ParseEntry(const Entry &entry)  //
-      -> std::tuple<Key, Payload, size_t>
+      -> std::tuple<Key, std::tuple_element_t<1, Entry>, size_t>
   {
-    if constexpr (IsVarLenData<Key>()) {
+    constexpr auto kTupleSize = std::tuple_size_v<Entry>;
+    static_assert(2 <= kTupleSize && kTupleSize <= 3);
+
+    if constexpr (kTupleSize == 3) {
       return entry;
     } else {
       const auto &[key, payload] = entry;
