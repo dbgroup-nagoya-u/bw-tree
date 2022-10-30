@@ -64,7 +64,7 @@ class DeltaRecord
       const Key &key,
       [[maybe_unused]] const size_t key_len,
       const T &payload)
-      : is_leaf_{kLeaf}, delta_type_{delta_type}, has_low_key_{1}, has_high_key_{0}, key_{key}
+      : is_inner_{kLeaf}, delta_type_{delta_type}, has_low_key_{1}, has_high_key_{0}, key_{key}
   {
     SetPayload(payload);
   }
@@ -78,7 +78,7 @@ class DeltaRecord
   explicit DeltaRecord(  //
       const Key &key,
       [[maybe_unused]] const size_t key_len)
-      : is_leaf_{kLeaf}, delta_type_{kDelete}, has_low_key_{1}, has_high_key_{0}, key_{key}
+      : is_inner_{kLeaf}, delta_type_{kDelete}, has_low_key_{1}, has_high_key_{0}, key_{key}
   {
   }
 
@@ -92,7 +92,7 @@ class DeltaRecord
    * @param split_d a child split-delta record.
    */
   explicit DeltaRecord(const DeltaRecord *split_d)
-      : is_leaf_{kInternal},
+      : is_inner_{kInternal},
         delta_type_{kInsert},
         has_low_key_{1},
         has_high_key_{split_d->has_high_key_},
@@ -112,7 +112,7 @@ class DeltaRecord
   DeltaRecord(  //
       const DeltaRecord *merge_d,
       const LogicalID *left_lid)
-      : is_leaf_{kInternal},
+      : is_inner_{kInternal},
         delta_type_{kDelete},
         has_low_key_{1},
         has_high_key_{merge_d->has_high_key_},
@@ -139,7 +139,7 @@ class DeltaRecord
       const DeltaRecord *right_node,
       const LogicalID *right_lid,
       const DeltaRecord *next = nullptr)
-      : is_leaf_{right_node->is_leaf_},
+      : is_inner_{right_node->is_inner_},
         delta_type_{delta_type},
         has_low_key_{1},
         has_high_key_{right_node->has_high_key_},
@@ -160,7 +160,7 @@ class DeltaRecord
   DeltaRecord(  //
       [[maybe_unused]] const DeltaType dummy,
       const DeltaRecord *removed_node)
-      : is_leaf_{removed_node->is_leaf_},
+      : is_inner_{removed_node->is_inner_},
         delta_type_{kRemoveNode},
         has_low_key_{0},
         has_high_key_{0},
@@ -196,7 +196,7 @@ class DeltaRecord
   IsLeaf() const  //
       -> bool
   {
-    return is_leaf_ == kLeaf;
+    return is_inner_ == kLeaf;
   }
 
   /**
@@ -213,32 +213,26 @@ class DeltaRecord
 
   /**
    * @param key a target key to be compared.
-   * @param closed a flag for indicating closed/open-interval.
-   * @retval true if the lowest key is less than a given key.
+   * @retval true if the lowest key is less than or equal to a given key.
    * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
-  LowKeyIsLT(  //
-      const Key &key,
-      const bool closed = kClosed) const  //
+  LowKeyIsLE(const Key &key) const  //
       -> bool
   {
-    return Comp{}(key_, key) || (!closed && !Comp{}(key, key_));
+    return Comp{}(key_, key) || !Comp{}(key, key_);
   }
 
   /**
    * @param key a target key to be compared.
-   * @param closed a flag for indicating closed/open-interval.
-   * @retval true if the highest key is greater than or equal to a given key.
+   * @retval true if the highest key is greater than a given key.
    * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
-  HighKeyIsGE(  //
-      const Key &key,
-      const bool closed = kClosed) const  //
+  HighKeyIsGT(const Key &key) const  //
       -> bool
   {
-    return !has_high_key_ || Comp{}(key, high_key_) || (closed && !Comp{}(high_key_, key));
+    return !has_high_key_ || Comp{}(key, high_key_);
   }
 
   /**
@@ -378,8 +372,7 @@ class DeltaRecord
       -> int64_t
   {
     // check whether this record is in a target node
-    if (!sep_key || Comp{}(key_, *sep_key)
-        || (!Comp{}(*sep_key, key_) && (is_leaf_ || delta_type_ != kInsert))) {
+    if (!sep_key || Comp{}(key_, *sep_key)) {
       // check uniqueness
       auto it = records.cbegin();
       const auto it_end = records.cend();
@@ -434,7 +427,7 @@ class DeltaRecord
    *##################################################################################*/
 
   /// a flag for indicating whether this node is a leaf or internal node.
-  uint16_t is_leaf_ : 1;
+  uint16_t is_inner_ : 1;
 
   /// a flag for indicating the types of a delta record.
   uint16_t delta_type_ : 3;

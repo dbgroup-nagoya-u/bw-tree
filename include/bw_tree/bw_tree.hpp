@@ -75,7 +75,8 @@ class BwTree
 
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
-  using BulkResult = std::pair<size_t, std::vector<LogicalID *>>;
+  using NodeEntry = std::tuple<Key, LogicalID *, size_t>;
+  using BulkResult = std::pair<size_t, std::vector<NodeEntry>>;
   using BulkPromise = std::promise<BulkResult>;
   using BulkFuture = std::future<BulkResult>;
 
@@ -375,7 +376,7 @@ class BwTree
       }
 
       if (consol_page_ != nullptr) {
-        TryConsolidation(consol_page_, stack);
+        TrySMOs(consol_page_, stack);
       }
 
       if (rc == DeltaRC::kRecordDeleted) return std::nullopt;
@@ -410,7 +411,7 @@ class BwTree
       auto &&stack = SearchLeftmostLeaf();
       while (true) {
         const auto *head = stack.back()->template Load<Delta_t *>();
-        if (Consolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
+        if (TryConsolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
         // concurrent consolidations may block scanning
       }
       begin_pos = 0;
@@ -465,7 +466,7 @@ class BwTree
     }
 
     if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, stack);
+      TrySMOs(consol_page_, stack);
     }
 
     return kSuccess;
@@ -519,7 +520,7 @@ class BwTree
     }
 
     if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, stack);
+      TrySMOs(consol_page_, stack);
     }
 
     return rc;
@@ -573,7 +574,7 @@ class BwTree
     }
 
     if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, stack);
+      TrySMOs(consol_page_, stack);
     }
 
     return rc;
@@ -624,7 +625,7 @@ class BwTree
     }
 
     if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, stack);
+      TrySMOs(consol_page_, stack);
     }
 
     return rc;
@@ -653,35 +654,31 @@ class BwTree
       const size_t thread_num = 1)  //
       -> ReturnCode
   {
-    assert(thread_num > 0);
-    assert(entries.size() >= thread_num);
-
     if (entries.empty()) return ReturnCode::kSuccess;
 
-    std::vector<LogicalID *> nodes{};
+    std::vector<NodeEntry> nodes{};
     auto &&iter = entries.cbegin();
-    if (thread_num == 1) {
+    const auto rec_num = entries.size();
+    if (thread_num <= 1 || rec_num < thread_num) {
       // bulkloading with a single thread
-      nodes = BulkloadWithSingleThread<Entry>(iter, entries.size()).second;
+      nodes = BulkloadWithSingleThread<Entry>(iter, rec_num).second;
     } else {
       // bulkloading with multi-threads
       std::vector<BulkFuture> futures{};
       futures.reserve(thread_num);
 
       // a lambda function for bulkloading with multi-threads
-      auto loader = [&](BulkPromise p, BulkIter<Entry> iter, size_t n, bool is_rightmost) {
-        p.set_value(BulkloadWithSingleThread<Entry>(iter, n, is_rightmost));
+      auto loader = [&](BulkPromise p, BulkIter<Entry> iter, size_t n) {
+        p.set_value(BulkloadWithSingleThread<Entry>(iter, n));
       };
 
       // create threads to construct partial BzTrees
-      const auto rec_num = entries.size();
-      const auto rightmost_id = thread_num - 1;
       for (size_t i = 0; i < thread_num; ++i) {
         // create a partial BzTree
         BulkPromise p{};
         futures.emplace_back(p.get_future());
         const size_t n = (rec_num + i) / thread_num;
-        std::thread{loader, std::move(p), iter, n, i == rightmost_id}.detach();
+        std::thread{loader, std::move(p), iter, n}.detach();
 
         // forward the iterator to the next begin position
         iter += n;
@@ -702,27 +699,27 @@ class BwTree
       const LogicalID *prev_lid = nullptr;
       for (auto &&[p_height, p_nodes] : partial_trees) {
         while (p_height < height) {  // NOLINT
-          ConstructUpperLayer(p_nodes);
+          p_nodes = ConstructSingleLayer<NodeEntry>(p_nodes.cbegin(), p_nodes.size());
           ++p_height;
         }
         nodes.insert(nodes.end(), p_nodes.begin(), p_nodes.end());
 
         // link partial trees
-        if (prev_lid != nullptr) {
-          Node_t::LinkVerticalBorderNodes(prev_lid, p_nodes.front());
-        }
-        prev_lid = p_nodes.back();
+        Node_t::LinkVerticalBorderNodes(prev_lid, std::get<1>(p_nodes.front()));
+        prev_lid = std::get<1>(p_nodes.back());
       }
     }
 
     // create upper layers until a root node is created
     while (nodes.size() > 1) {
-      ConstructUpperLayer(nodes);
+      nodes = ConstructSingleLayer<NodeEntry>(nodes.cbegin(), nodes.size());
     }
+    auto *new_root = std::get<1>(nodes.front());
+    Node_t::RemoveLeftmostKeys(new_root);
 
     // set a new root
-    auto *old_root = root_.exchange(nodes.front(), std::memory_order_release);
-    gc_.AddGarbage(old_root->Load<Delta_t *>());
+    auto *old_root = root_.exchange(new_root, std::memory_order_release);
+    gc_.AddGarbage(old_root->template Load<Delta_t *>());
     old_root->Clear();
 
     return ReturnCode::kSuccess;
@@ -752,7 +749,7 @@ class BwTree
   static constexpr size_t kDeltaRecSize = Delta_t::template GetMaxDeltaSize<Payload>();
 
   /// the expected length of keys for bulkloading.
-  static constexpr size_t kBulkKeyLen = (kIsVarLen) ? kWordSize : sizeof(Key);
+  static constexpr size_t kBulkKeyLen = (IsVarLenData<Key>()) ? kWordSize : sizeof(Key);
 
   /// the expected length of records in leaf nodes for bulkloading.
   static constexpr size_t kLeafRecLen = kBulkKeyLen + kPayLen;
@@ -767,9 +764,6 @@ class BwTree
   /// the expected capacity of internal nodes for bulkloading.
   static constexpr size_t kInnerNodeCap =
       (kPageSize - kHeaderLength - kBulkKeyLen) / (kInnerRecLen + kMetaLen);
-
-  /// a flag for indicating leaf nodes.
-  static constexpr bool kIsLeaf = true;
 
   /// a flag for preventing a consolidate-operation from splitting a node.
   static constexpr bool kIsScan = true;
@@ -883,7 +877,7 @@ class BwTree
     for (uintptr_t out_ptr{}; true;) {
       size_t delta_num = 0;
       const auto *head = LoadValidHead(key, closed, stack);
-      switch (DC::SearchChildNode(head, key, closed, out_ptr, delta_num)) {
+      switch (DC::SearchChildNode(head, key, out_ptr, delta_num)) {
         case DeltaRC::kRecordFound:
           stack.emplace_back(reinterpret_cast<LogicalID *>(out_ptr));
           return;
@@ -909,7 +903,7 @@ class BwTree
 
           // search a child node in a base node
           const auto *node = reinterpret_cast<Node_t *>(out_ptr);
-          stack.emplace_back(node->SearchChild(key, closed));
+          stack.emplace_back(node->SearchChild(key));
           return;
         }
       }
@@ -1079,7 +1073,7 @@ class BwTree
       // check whether the node is active and can include a target key
       uintptr_t out_ptr{};
       size_t delta_num = 0;
-      switch (DC::Validate(head, key, closed, out_ptr, delta_num)) {
+      switch (DC::Validate(head, key, out_ptr, delta_num)) {
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
           stack.back() = reinterpret_cast<LogicalID *>(out_ptr);
@@ -1222,7 +1216,7 @@ class BwTree
   {
     while (true) {
       const auto *head = GetHead(begin_key, closed, stack);
-      if (Consolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
+      if (TryConsolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
       // concurrent consolidations may block scanning
     }
 
@@ -1252,7 +1246,7 @@ class BwTree
     // consolidate a sibling node
     std::vector<LogicalID *> stack{sib_lid};
     stack.reserve(kExpectedTreeHeight);
-    const auto begin_pos = ConsolidateForScan(node, begin_key, !kClosed, stack);
+    const auto begin_pos = ConsolidateForScan(node, begin_key, kClosed, stack);
 
     // check the end position of scanning
     const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
@@ -1273,7 +1267,7 @@ class BwTree
    * @param stack a stack of traversed nodes.
    */
   void
-  TryConsolidation(  //
+  TrySMOs(  //
       LogicalID *target_lid,
       std::vector<LogicalID *> &stack)
   {
@@ -1288,8 +1282,8 @@ class BwTree
 
       // prepare a consolidated node
       auto *new_node = reinterpret_cast<Node_t *>(GetNodePage());
-      const auto rc = (head->IsLeaf()) ? Consolidate<Payload>(head, new_node)
-                                       : Consolidate<LogicalID *>(head, new_node);
+      const auto rc = (head->IsLeaf()) ? TryConsolidate<Payload>(head, new_node)
+                                       : TryConsolidate<LogicalID *>(head, new_node);
       switch (rc) {
         case kAlreadyConsolidated:
           // other threads have performed consolidation
@@ -1343,13 +1337,13 @@ class BwTree
    */
   template <class T>
   auto
-  Consolidate(  //
+  TryConsolidate(  //
       const Delta_t *head,
       Node_t *&consol_node,
       const bool is_scan = false)  //
       -> SMOsRC
   {
-    constexpr auto kIsLeaf = !std::is_same_v<T, LogicalID *>;
+    constexpr auto kIsInner = std::is_same_v<T, LogicalID *>;
 
     // sort delta records
     std::vector<Record> records{};
@@ -1362,14 +1356,10 @@ class BwTree
     // calculate the size of a consolidated node
     size_t size{};
     if constexpr (kIsVarLen) {
-      size = kHeaderLength + Node_t::PreConsolidate(consol_info, kIsLeaf) + diff;
+      size = Node_t::PreConsolidate(consol_info, kIsInner) + diff;
     } else {
-      const auto rec_num = Node_t::PreConsolidate(consol_info, kIsLeaf) + diff;
-      if (kIsLeaf) {
-        size = kHeaderLength + rec_num * (sizeof(Key) + sizeof(T));
-      } else {
-        size = (kHeaderLength - sizeof(Key)) + rec_num * (sizeof(Key) + sizeof(T));
-      }
+      const auto rec_num = Node_t::PreConsolidate(consol_info, kIsInner) + diff;
+      size = rec_num * (sizeof(Key) + sizeof(T));
     }
 
     // check whether splitting is needed
@@ -1377,17 +1367,17 @@ class BwTree
     bool do_split = false;
     if (is_scan) {
       // use dynamic page sizes for scanning
-      size = (size / kPageSize + 1) * kPageSize;
+      size = ((size + kHeaderLength) / kPageSize + 1) * kPageSize;
       if (size > consol_node->GetNodeSize()) {
         ::operator delete(page);
         page = ::operator new(size);
       }
-    } else if (size > kPageSize) {
+    } else if (size > kPageSize - kHeaderLength) {
       // perform splitting
       do_split = true;
-      size = size / 2 + (kHeaderLength / 2);
-      if (size > kPageSize) {
-        size += size - kPageSize;
+      size = size / 2;
+      if (size > kPageSize - kHeaderLength) {
+        size += size - kPageSize - kHeaderLength;
       }
     } else {
       // perform consolidation
@@ -1395,12 +1385,8 @@ class BwTree
     }
 
     // consolidate a target node
-    consol_node = new (page) Node_t{kIsLeaf, size, do_split};
-    if (kIsLeaf) {
-      LeafConsolidate<T>(consol_node, consol_info, records);
-    } else {
-      InternalConsolidate(consol_node, consol_info, records);
-    }
+    consol_node = new (page) Node_t{kIsInner, size, do_split};
+    Consolidate<T>(consol_node, consol_info, records);
 
     if (do_split) return kTrySplit;
     if (size <= kMinNodeSize) return kTryMerge;
@@ -1417,22 +1403,24 @@ class BwTree
    */
   template <class T>
   void
-  LeafConsolidate(  //
+  Consolidate(  //
       Node_t *consol_node,
       const std::vector<ConsolidateInfo> &consol_info,
       const std::vector<Record> &records)
   {
     const auto new_rec_num = records.size();
 
-    // copy a lowest key for consolidation or set initial offset for splitting
-    auto offset = consol_node->CopyLowKeyOrSetInitialOffset(consol_info.back());
-
     // perform merge-sort to consolidate a node
+    auto offset = consol_node->GetNodeSize();
     size_t j = 0;
     for (int64_t k = consol_info.size() - 1; k >= 0; --k) {
       const auto *node = reinterpret_cast<const Node_t *>(consol_info[k].node);
       const auto base_rec_num = consol_info[k].rec_num;
-      for (size_t i = 0; i < base_rec_num; ++i) {
+      size_t i = 0;
+      if (!node->IsLeaf() && node->IsLeftmost()) {
+        offset = consol_node->template CopyRecordFrom<T>(node, i++, offset);
+      }
+      for (; i < base_rec_num; ++i) {
         // copy new records
         const auto &node_key = node->GetKey(i);
         for (; j < new_rec_num && Node_t::LT(records[j], node_key); ++j) {
@@ -1441,8 +1429,7 @@ class BwTree
 
         // check a new record is updated one
         if (j < new_rec_num && Node_t::LE(records[j], node_key)) {
-          offset = consol_node->template CopyRecordFrom<T>(records[j], offset);
-          ++j;
+          offset = consol_node->template CopyRecordFrom<T>(records[j++], offset);
         } else {
           offset = consol_node->template CopyRecordFrom<T>(node, i, offset);
         }
@@ -1454,76 +1441,8 @@ class BwTree
       offset = consol_node->template CopyRecordFrom<T>(records[j], offset);
     }
 
-    // copy a highest key
-    consol_node->CopyHighKeyFrom(consol_info.front(), offset);
-  }
-
-  /**
-   * @brief Consolidate given internal nodes and delta records.
-   *
-   * @tparam T a class of expected payloads.
-   * @param consol_node a node page to store consolidated records.
-   * @param consol_info the set of internal nodes to be consolidated.
-   * @param records insert/modify/delete-delta records.
-   */
-  void
-  InternalConsolidate(  //
-      Node_t *consol_node,
-      const std::vector<ConsolidateInfo> &consol_info,
-      const std::vector<Record> &records)
-  {
-    const auto new_rec_num = records.size();
-
-    // copy a lowest key for consolidation or set initial offset for splitting
-    auto offset = consol_node->CopyLowKeyOrSetInitialOffset(consol_info.back());
-
-    // perform merge-sort to consolidate a node
-    bool payload_is_embedded = false;
-    size_t j = 0;
-    for (int64_t k = consol_info.size() - 1; k >= 0; --k) {
-      const auto *node = reinterpret_cast<const Node_t *>(consol_info[k].node);
-      const int64_t end_pos = consol_info[k].rec_num - 1;
-      for (int64_t i = 0; i <= end_pos && i >= 0; ++i) {
-        // copy a payload of a base node in advance to swap that of a new index entry
-        if (!payload_is_embedded) {  // skip a deleted page
-          offset = consol_node->template CopyPayloadFrom<LogicalID *>(node, offset, i);
-        }
-
-        // get a current key in the base node
-        if (i == end_pos) {
-          if (k == 0) break;  // the last record does not need a key
-          // if nodes are merged, a current key is equivalent with the lowest one in the next node
-          node = reinterpret_cast<const Node_t *>(consol_info[k - 1].node);
-          i = component::kCopyLowKey;
-        }
-        const auto &node_key = (i < 0) ? *(node->GetLowKey()) : node->GetKey(i);
-
-        // insert new index entries
-        for (; j < new_rec_num && Node_t::LT(records[j], node_key); ++j) {
-          offset = consol_node->CopyIndexEntryFrom(records[j], offset);
-        }
-
-        // set a key for the current record
-        if (j < new_rec_num && Node_t::LE(records[j], node_key)) {
-          // a record is in a base node, but it may be deleted and inserted again
-          offset = consol_node->CopyIndexEntryFrom(records[j], offset);
-          payload_is_embedded = true;
-          ++j;
-        } else {
-          // copy a key in a base node
-          offset = consol_node->CopyKeyFrom(node, offset, i);
-          payload_is_embedded = false;
-        }
-      }
-    }
-
-    // copy remaining new records
-    for (; j < new_rec_num; ++j) {
-      offset = consol_node->CopyIndexEntryFrom(records[j], offset);
-    }
-    consol_node->SetLastRecordForInternal(offset);
-
-    // copy a highest key
+    // copy the lowest/highest keys
+    offset = consol_node->CopyLowKeyFrom(consol_info.back(), offset);
     consol_node->CopyHighKeyFrom(consol_info.front(), offset);
   }
 
@@ -1558,7 +1477,7 @@ class BwTree
     consol_page_ = nullptr;
     CompleteSplit(split_d, stack);
     if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, stack);
+      TrySMOs(consol_page_, stack);
     }
   }
 
@@ -1706,7 +1625,7 @@ class BwTree
     consol_page_ = nullptr;
     CompleteMerge(merge_d, stack);
     if (consol_page_ != nullptr) {
-      TryConsolidation(consol_page_, stack);
+      TrySMOs(consol_page_, stack);
     }
 
     return true;
@@ -1830,76 +1749,61 @@ class BwTree
    *
    * @param iter the begin position of target records.
    * @param n the number of entries to be bulkloaded.
-   * @param is_rightmost a flag for indicating a constructed tree is rightmost one.
    * @retval 1st: the height of a constructed tree.
    * @retval 2nd: constructed nodes in the top layer.
    */
   template <class Entry>
   auto
   BulkloadWithSingleThread(  //
-      BulkIter<Entry> &iter,
-      const size_t n,
-      const bool is_rightmost = true)  //
+      BulkIter<Entry> iter,
+      const size_t n)  //
       -> BulkResult
   {
-    // reserve space for nodes in the leaf layer
-    std::vector<LogicalID *> nodes{};
-    nodes.reserve((n / kLeafNodeCap) + 1);
+    // construct a data layer (leaf nodes)
+    auto &&nodes = ConstructSingleLayer<Entry>(iter, n);
 
-    // load records into leaf nodes
-    const auto &iter_end = iter + n;
-    Node_t *prev_node = nullptr;
-    while (iter < iter_end) {
-      auto *node = new (GetNodePage()) Node_t{kIsLeaf};
-      auto *lid = mapping_table_.GetNewLogicalID();
-      lid->Store(node);
-      node->template Bulkload<Payload, Entry>(iter, iter_end, prev_node, lid, is_rightmost);
-      nodes.emplace_back(lid);
-      prev_node = node;
-    }
-
-    // construct index layers
+    // construct index layers (inner nodes)
     size_t height = 1;
-    if (nodes.size() > 1) {
-      // continue until the number of internal nodes is sufficiently small
-      do {
-        ++height;
-      } while (ConstructUpperLayer(nodes));
+    for (auto n = nodes.size(); n > kInnerNodeCap; n = nodes.size(), ++height) {
+      // continue until the number of inner nodes is sufficiently small
+      nodes = ConstructSingleLayer<NodeEntry>(nodes.cbegin(), n);
     }
 
     return {height, std::move(nodes)};
   }
 
   /**
-   * @brief Construct internal nodes based on given child nodes.
+   * @brief Construct nodes based on given entries.
    *
-   * @param child_nodes child nodes in a lower layer.
-   * @retval true if constructed nodes cannot be contained in a single node.
-   * @retval false otherwise.
+   * @param iter the begin position of target records.
+   * @param n the number of entries to be bulkloaded.
+   * @return constructed nodes.
    */
+  template <class Entry>
   auto
-  ConstructUpperLayer(std::vector<LogicalID *> &child_nodes)  //
-      -> bool
+  ConstructSingleLayer(  //
+      BulkIter<Entry> iter,
+      const size_t n)  //
+      -> std::vector<NodeEntry>
   {
+    using T = std::tuple_element_t<1, Entry>;
+    constexpr auto kIsInner = std::is_same_v<T, LogicalID *>;
+
     // reserve space for nodes in the upper layer
-    std::vector<LogicalID *> nodes{};
-    nodes.reserve((child_nodes.size() / kInnerNodeCap) + 1);
+    std::vector<NodeEntry> nodes{};
+    nodes.reserve((n / (kIsInner ? kInnerNodeCap : kLeafNodeCap)) + 1);
 
     // load child nodes into parent nodes
-    auto &&iter = child_nodes.cbegin();
-    const auto &iter_end = child_nodes.cend();
-    Node_t *prev_node = nullptr;
-    while (iter < iter_end) {
-      auto *node = new (GetNodePage()) Node_t{!kIsLeaf};
+    const auto &iter_end = iter + n;
+    for (Node_t *prev_node = nullptr; iter < iter_end;) {
+      auto *node = new (GetNodePage()) Node_t{kIsInner};
       auto *lid = mapping_table_.GetNewLogicalID();
       lid->Store(node);
-      node->Bulkload(iter, iter_end, prev_node, lid);
-      nodes.emplace_back(lid);
+      node->template Bulkload<Entry>(iter, iter_end, prev_node, lid, nodes);
       prev_node = node;
     }
 
-    child_nodes = std::move(nodes);
-    return child_nodes.size() > kInnerNodeCap;
+    return nodes;
   }
 
   /*####################################################################################

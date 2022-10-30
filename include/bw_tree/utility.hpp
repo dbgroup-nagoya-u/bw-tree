@@ -33,7 +33,7 @@ namespace dbgroup::index::bw_tree
 constexpr size_t kWordSize = sizeof(uintptr_t);
 
 /// the default time interval for garbage collection [us].
-constexpr size_t kDefaultGCTime = 100000;
+constexpr size_t kDefaultGCTime = 10000;
 
 /// the default number of worker threads for garbage collection.
 constexpr size_t kDefaultGCThreadNum = 1;

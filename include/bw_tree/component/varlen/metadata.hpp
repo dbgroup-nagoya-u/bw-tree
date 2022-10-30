@@ -46,9 +46,9 @@ class Metadata
       const size_t offset,
       const size_t key_length,
       const size_t total_length)
-      : offset_{static_cast<uint16_t>(offset)},
-        key_length_{static_cast<uint16_t>(key_length)},
-        total_length_{static_cast<uint16_t>(total_length)}
+      : offset{static_cast<uint16_t>(offset)},
+        key_len{static_cast<uint16_t>(key_length)},
+        rec_len{static_cast<uint16_t>(total_length)}
   {
   }
 
@@ -73,88 +73,27 @@ class Metadata
    *##################################################################################*/
 
   /**
-   * @return an offset to a corresponding record.
-   */
-  [[nodiscard]] constexpr auto
-  GetOffset() const  //
-      -> size_t
-  {
-    return offset_;
-  }
-
-  /**
-   * @return the length of a key in a corresponding record.
-   */
-  [[nodiscard]] constexpr auto
-  GetKeyLength() const  //
-      -> size_t
-  {
-    return key_length_;
-  }
-
-  /**
-   * @return the total length of a corresponding record.
-   */
-  [[nodiscard]] constexpr auto
-  GetTotalLength() const  //
-      -> size_t
-  {
-    return total_length_;
-  }
-
-  /**
    * @return the length of a payload in a corresponding record.
    */
   [[nodiscard]] constexpr auto
   GetPayloadLength() const  //
       -> size_t
   {
-    return GetTotalLength() - GetKeyLength();
+    return rec_len - key_len;
   }
 
-  /**
-   * @brief Create a new metadata with a given offset value.
-   *
-   * Note that this function is prepared for leaf nodes' consolidation.
-   *
-   * @param offset the offset to a corresponding record to be set.
-   * @return new metadata with updated offset.
-   */
-  [[nodiscard]] constexpr auto
-  UpdateForLeaf(const size_t offset) const  //
-      -> Metadata
-  {
-    return Metadata{offset, key_length_, total_length_};
-  }
-
-  /**
-   * @brief Create a new metadata with a given offset value.
-   *
-   * Note that this function is prepared for internal nodes' consolidation.
-   *
-   * @param offset the offset to a corresponding record to be set.
-   * @return new metadata with updated offset.
-   */
-  [[nodiscard]] constexpr auto
-  UpdateForInternal(const size_t offset) const  //
-      -> Metadata
-  {
-    return Metadata{offset, key_length_, key_length_ + kWordSize};
-  }
-
- private:
   /*####################################################################################
-   * Internal member variables
+   * Public member variables
    *##################################################################################*/
 
   /// an offset to a corresponding record.
-  uint32_t offset_{};
+  uint32_t offset{};
 
   /// the length of a key in a corresponding record.
-  uint16_t key_length_{};
+  uint16_t key_len{};
 
   /// the total length of a corresponding record.
-  uint16_t total_length_{};
+  uint16_t rec_len{};
 };
 
 }  // namespace dbgroup::index::bw_tree::component::varlen

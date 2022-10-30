@@ -44,8 +44,8 @@ enum DeltaRC {
  *
  */
 enum NodeType : uint16_t {
-  kInternal = 0,
-  kLeaf,
+  kLeaf = 0,
+  kInternal,
 };
 
 /**

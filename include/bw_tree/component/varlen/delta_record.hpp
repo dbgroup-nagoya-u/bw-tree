@@ -66,7 +66,9 @@ class DeltaRecord
       const Key &key,
       const size_t key_len,
       const T &payload)
-      : is_leaf_{kLeaf}, delta_type_{delta_type}, meta_{kHeaderLength, key_len, key_len + sizeof(T)}
+      : is_inner_{kLeaf},
+        delta_type_{delta_type},
+        meta_{kHeaderLength, key_len, key_len + sizeof(T)}
   {
     const auto offset = SetKey(kHeaderLength, key, key_len);
     SetPayload(offset, payload);
@@ -81,7 +83,7 @@ class DeltaRecord
   DeltaRecord(  //
       const Key &key,
       const size_t key_len)
-      : is_leaf_{kLeaf}, delta_type_{kDelete}, meta_{kHeaderLength, key_len, key_len}
+      : is_inner_{kLeaf}, delta_type_{kDelete}, meta_{kHeaderLength, key_len, key_len}
   {
     SetKey(kHeaderLength, key, key_len);
   }
@@ -96,13 +98,13 @@ class DeltaRecord
    * @param split_d a child split-delta record.
    */
   explicit DeltaRecord(const DeltaRecord *split_d)
-      : is_leaf_{kInternal},
+      : is_inner_{kInternal},
         delta_type_{kInsert},
         meta_{split_d->meta_},
         high_key_meta_{split_d->high_key_meta_}
   {
     // copy contents of a split delta
-    const auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetKeyLength();
+    const auto rec_len = meta_.rec_len + high_key_meta_.key_len;
     memcpy(&data_block_, &(split_d->data_block_), rec_len);
   }
 
@@ -115,17 +117,17 @@ class DeltaRecord
   DeltaRecord(  //
       const DeltaRecord *merge_d,
       const LogicalID *left_lid)
-      : is_leaf_{kInternal},
+      : is_inner_{kInternal},
         delta_type_{kDelete},
         meta_{merge_d->meta_},
         high_key_meta_{merge_d->high_key_meta_}
   {
     // copy contents of a merge delta
-    const auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetKeyLength();
+    const auto rec_len = meta_.rec_len + high_key_meta_.key_len;
     memcpy(&data_block_, &(merge_d->data_block_), rec_len);
 
     // update logical ID of a sibling node
-    SetPayload(kHeaderLength + meta_.GetKeyLength(), left_lid);
+    SetPayload(kHeaderLength + meta_.key_len, left_lid);
   }
 
   /*####################################################################################
@@ -145,12 +147,12 @@ class DeltaRecord
       const DeltaRecord *right_node,
       const LogicalID *right_lid,
       const DeltaRecord *next = nullptr)
-      : is_leaf_{right_node->is_leaf_},
+      : is_inner_{right_node->is_inner_},
         delta_type_{delta_type},
         next_{reinterpret_cast<uintptr_t>(next)}
   {
     // copy a lowest key
-    auto key_len = right_node->meta_.GetKeyLength();
+    auto key_len = right_node->meta_.key_len;
     meta_ = Metadata{kHeaderLength, key_len, key_len + kWordSize};
     memcpy(&data_block_, right_node->GetKeyAddr(right_node->meta_), key_len);
 
@@ -158,7 +160,7 @@ class DeltaRecord
     const auto offset = SetPayload(kHeaderLength + key_len, right_lid);
 
     // copy a highest key
-    key_len = right_node->high_key_meta_.GetKeyLength();
+    key_len = right_node->high_key_meta_.key_len;
     high_key_meta_ = Metadata{offset, key_len, key_len};
     memcpy(ShiftAddr(this, offset), right_node->GetKeyAddr(right_node->high_key_meta_), key_len);
   }
@@ -172,7 +174,7 @@ class DeltaRecord
   DeltaRecord(  //
       [[maybe_unused]] const DeltaType dummy,
       const DeltaRecord *removed_node)
-      : is_leaf_{removed_node->is_leaf_},
+      : is_inner_{removed_node->is_inner_},
         delta_type_{kRemoveNode},
         next_{reinterpret_cast<uintptr_t>(removed_node)}
   {
@@ -206,7 +208,7 @@ class DeltaRecord
   IsLeaf() const  //
       -> bool
   {
-    return is_leaf_;
+    return is_inner_ == kLeaf;
   }
 
   /**
@@ -224,34 +226,28 @@ class DeltaRecord
 
   /**
    * @param key a target key to be compared.
-   * @param closed a flag for indicating closed/open-interval.
-   * @retval true if the lowest key is less than a given key.
+   * @retval true if the lowest key is less than or equal to a given key.
    * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
-  LowKeyIsLT(  //
-      const Key &key,
-      const bool closed = kClosed) const  //
+  LowKeyIsLE(const Key &key) const  //
       -> bool
   {
     const auto &low_key = GetKey();
-    return Comp{}(low_key, key) || (!closed && !Comp{}(key, low_key));
+    return Comp{}(low_key, key) || !Comp{}(key, low_key);
   }
 
   /**
    * @param key a target key to be compared.
-   * @param closed a flag for indicating closed/open-interval.
-   * @retval true if the highest key is greater than or equal to a given key.
+   * @retval true if the highest key is greater than a given key.
    * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
-  HighKeyIsGE(  //
-      const Key &key,
-      const bool closed = kClosed) const  //
+  HighKeyIsGT(const Key &key) const  //
       -> bool
   {
     const auto &high_key = GetHighKey();
-    return !high_key || Comp{}(key, *high_key) || (closed && !Comp{}(*high_key, key));
+    return !high_key || Comp{}(key, *high_key);
   }
 
   /**
@@ -301,7 +297,7 @@ class DeltaRecord
   GetLowKey() const  //
       -> std::optional<Key>
   {
-    if (meta_.GetKeyLength() > 0) return GetKey();
+    if (meta_.key_len > 0) return GetKey();
     return std::nullopt;
   }
 
@@ -312,7 +308,7 @@ class DeltaRecord
   GetHighKey() const  //
       -> std::optional<Key>
   {
-    const auto key_len = high_key_meta_.GetKeyLength();
+    const auto key_len = high_key_meta_.key_len;
     if (key_len == 0) return std::nullopt;
 
     if constexpr (IsVarLenData<Key>()) {
@@ -407,8 +403,7 @@ class DeltaRecord
   {
     // check whether this record is in a target node
     const auto &rec_key = GetKey();
-    if (!sep_key || Comp{}(rec_key, *sep_key)
-        || (!Comp{}(*sep_key, rec_key) && (is_leaf_ || delta_type_ != kInsert))) {
+    if (!sep_key || Comp{}(rec_key, *sep_key)) {
       // check uniqueness
       auto it = records.cbegin();
       const auto it_end = records.cend();
@@ -422,7 +417,7 @@ class DeltaRecord
       }
 
       // update the page size
-      const auto rec_size = meta_.GetKeyLength() + sizeof(T) + kWordSize;
+      const auto rec_size = meta_.key_len + sizeof(T) + kWordSize;
       if (delta_type_ == kInsert) return rec_size;
       if (delta_type_ == kDelete) return -rec_size;
     }
@@ -450,7 +445,7 @@ class DeltaRecord
   GetKeyAddr(const Metadata meta) const  //
       -> void *
   {
-    return ShiftAddr(this, meta.GetOffset());
+    return ShiftAddr(this, meta.offset);
   }
 
   /**
@@ -460,7 +455,7 @@ class DeltaRecord
   GetPayloadAddr() const  //
       -> void *
   {
-    return ShiftAddr(this, meta_.GetOffset() + meta_.GetKeyLength());
+    return ShiftAddr(this, meta_.offset + meta_.key_len);
   }
 
   /**
@@ -514,7 +509,7 @@ class DeltaRecord
    *##################################################################################*/
 
   /// a flag for indicating whether this node is a leaf or internal node.
-  uint16_t is_leaf_ : 1;
+  uint16_t is_inner_ : 1;
 
   /// a flag for indicating the types of delta records.
   uint16_t delta_type_ : 3;
