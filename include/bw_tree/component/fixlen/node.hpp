@@ -45,6 +45,7 @@ class Node
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
+  using NodeEntry = std::tuple<Key, LogicalID *, size_t>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -55,7 +56,7 @@ class Node
    *
    */
   constexpr explicit Node(const bool is_leaf = true)
-      : is_leaf_{static_cast<NodeType>(is_leaf)},
+      : is_inner_{static_cast<NodeType>(!is_leaf)},
         delta_type_{kNotDelta},
         has_low_key_{0},
         has_high_key_{0},
@@ -72,14 +73,14 @@ class Node
   Node(  //
       const Node *split_d,
       const LogicalID *left_lid)
-      : is_leaf_{kInternal},
+      : is_inner_{kInternal},
         delta_type_{kNotDelta},
         has_low_key_{0},
         has_high_key_{0},
         do_split_{0},
         record_count_{2}
   {
-    keys_[0] = split_d->low_key_;
+    keys_[1] = split_d->low_key_;
     const auto offset = SetPayload(kPageSize, left_lid) - kWordSize;
     memcpy(ShiftAddr(this, offset), split_d->keys_, kWordSize);
   }
@@ -89,15 +90,15 @@ class Node
    *
    * Note that this construcor sets only header information.
    *
-   * @param node_type a flag for indicating whether a leaf or internal node is constructed.
+   * @param is_leaf a flag for indicating whether a leaf or internal node is constructed.
    * @param node_size the virtual size of this node.
    * @param do_split a flag for skipping left-split records in consolidation.
    */
   Node(  //
-      const bool node_type,
+      const bool is_leaf,
       const size_t node_size,
       const bool do_split)
-      : is_leaf_{static_cast<NodeType>(node_type)},
+      : is_inner_{static_cast<NodeType>(!is_leaf)},
         delta_type_{kNotDelta},
         has_low_key_{0},
         has_high_key_{0},
@@ -134,7 +135,18 @@ class Node
   IsLeaf() const  //
       -> bool
   {
-    return is_leaf_ == kLeaf;
+    return is_inner_ == kLeaf;
+  }
+
+  /**
+   * @retval true if this node is leftmost in its tree level.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] constexpr auto
+  IsLeftmost() const  //
+      -> bool
+  {
+    return has_low_key_ == 0;
   }
 
   /**
@@ -144,7 +156,7 @@ class Node
   GetNodeSize() const  //
       -> size_t
   {
-    return node_size_;
+    return (node_size_ < kPageSize) ? kPageSize : node_size_;
   }
 
   /**
@@ -284,16 +296,8 @@ class Node
   SearchRecord(const Key &key) const  //
       -> std::pair<DeltaRC, size_t>
   {
-    int64_t end_pos{};
-    if (is_leaf_ == kLeaf) {
-      end_pos = record_count_ - 1;
-    } else if (!has_high_key_ || Comp{}(key, high_key_)) {
-      end_pos = record_count_ - 2;
-    } else {
-      return {kRecordFound, record_count_ - 1};
-    }
-
-    int64_t begin_pos = 0;
+    int64_t begin_pos = is_inner_;
+    int64_t end_pos = record_count_ - 1;
     while (begin_pos <= end_pos) {
       const size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
       const auto &index_key = keys_[pos];
@@ -321,13 +325,11 @@ class Node
    * @return the logical ID of searched child node.
    */
   [[nodiscard]] auto
-  SearchChild(  //
-      const Key &key,
-      const bool range_is_closed) const  //
+  SearchChild(const Key &key) const  //
       -> LogicalID *
   {
-    int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 2;
+    int64_t begin_pos = is_inner_;
+    int64_t end_pos = record_count_ - 1;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
       const auto &index_key = keys_[pos];
@@ -337,13 +339,12 @@ class Node
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
       } else {  // find an equivalent key
-        if (!range_is_closed) ++pos;
-        begin_pos = pos;
+        begin_pos = pos + 1;
         break;
       }
     }
 
-    return GetPayload<LogicalID *>(begin_pos);
+    return GetPayload<LogicalID *>(begin_pos - 1);
   }
 
   /**
@@ -419,7 +420,7 @@ class Node
   [[nodiscard]] static auto
   PreConsolidate(  //
       std::vector<ConsolidateInfo> &consol_info,
-      const bool is_leaf)  //
+      [[maybe_unused]] const bool is_leaf)  //
       -> size_t
   {
     const auto end_pos = consol_info.size() - 1;
@@ -431,13 +432,8 @@ class Node
       const auto *split_d = reinterpret_cast<const Node *>(d_ptr);
 
       // check the number of records to be consolidated
-      if (split_d == nullptr) {
-        rec_num = node->record_count_;
-      } else {
-        const auto [rc, pos] = node->SearchRecord(split_d->low_key_);
-        rec_num = (!is_leaf || rc == kRecordFound) ? pos + 1 : pos;
-      }
-
+      rec_num = (split_d == nullptr) ? node->record_count_  //
+                                     : node->SearchRecord(split_d->low_key_).second;
       total_rec_num += rec_num;
     }
 
@@ -452,11 +448,25 @@ class Node
    * @return an initial offset.
    */
   auto
-  CopyLowKeyOrSetInitialOffset(const ConsolidateInfo &consol_info)  //
+  CopyLowKeyFrom(  //
+      const ConsolidateInfo &consol_info,
+      size_t offset)  //
       -> size_t
   {
-    if (do_split_) return kHeaderLength;  // the initial skipped page size
-    return CopyLowKeyFrom(reinterpret_cast<const Node *>(consol_info.node));
+    // prepare a node that has the lowest key
+    if (node_size_ < kPageSize) {
+      // this node is a split-right node, and so the leftmost record has the lowest key
+      has_low_key_ = 1;
+      low_key_ = keys_[0];
+      node_size_ = kPageSize;
+    } else {
+      // this node is a consolidated node, and so the given node has the lowest key
+      const auto *node = reinterpret_cast<const Node *>(consol_info.node);
+      has_low_key_ = node->has_low_key_;
+      low_key_ = node->low_key_;
+    }
+
+    return offset;
   }
 
   /**
@@ -511,16 +521,13 @@ class Node
       keys_[record_count_++] = node->keys_[pos];
       offset -= sizeof(T);
       memcpy(ShiftAddr(this, offset), node->template GetPayloadAddr<T>(pos), sizeof(T));
+    } else if (kPageSize - offset < node_size_) {
+      // calculate the skipped page size
+      offset -= sizeof(Key) + sizeof(T);
     } else {
-      if (offset < node_size_) {
-        // calculate the skipped page size
-        offset += sizeof(Key) + sizeof(T);
-      } else {
-        // this record is the end one in a split-left node
-        do_split_ = false;
-        node_size_ = kPageSize;
-        offset = CopyLowKeyFrom(node, pos);
-      }
+      // this record is the end one in a split-left node
+      do_split_ = false;
+      offset = kPageSize;
     }
 
     return offset;
@@ -547,118 +554,17 @@ class Node
         keys_[record_count_++] = rec->low_key_;
         offset -= sizeof(T);
         memcpy(ShiftAddr(this, offset), rec->keys_, sizeof(T));
-      } else {
-        if (offset < node_size_) {
-          // calculate the skipped page size
-          offset += sizeof(Key) + sizeof(T);
-        } else {
-          // this record is the end one in a split-left node
-          do_split_ = false;
-          node_size_ = kPageSize;
-          offset = CopyLowKeyFrom(rec);
-        }
-      }
-    }
-
-    return offset;
-  }
-
-  /**
-   * @brief Copy a key from a base node or a delta record.
-   *
-   * @param node an original node that has a target record.
-   * @param offset an offset to the bottom of free space.
-   * @param pos the position of a target record.
-   * @return an offset to the copied key.
-   */
-  constexpr auto
-  CopyKeyFrom(  //
-      const Node *node,
-      size_t offset,
-      const int64_t pos = kCopyLowKey)  //
-      -> size_t
-  {
-    if (!do_split_) {
-      // copy a record from the given node
-      keys_[record_count_++] = (pos < 0) ? node->low_key_ : node->keys_[pos];
-    } else {
-      if (offset < node_size_) {
+      } else if (kPageSize - offset < node_size_) {
         // calculate the skipped page size
-        offset += sizeof(Key);
+        offset -= sizeof(Key) + sizeof(T);
       } else {
         // this record is the end one in a split-left node
         do_split_ = false;
-        node_size_ = kPageSize;
-        offset = CopyLowKeyFrom(node, pos);
+        offset = kPageSize;
       }
     }
 
     return offset;
-  }
-
-  /**
-   * @brief Copy a payload from a base node or a delta record.
-   *
-   * @param node an original node that has a target record.
-   * @param offset an offset to the bottom of free space.
-   * @param pos the position of a target record.
-   * @return an offset to the copied payload.
-   */
-  template <class T>
-  auto
-  CopyPayloadFrom(  //
-      const Node *node,
-      size_t offset,
-      const int64_t pos = kCopyLowKey)  //
-      -> size_t
-  {
-    if (!do_split_) {
-      // copy the next (split-right) child page
-      offset -= kWordSize;
-      const auto *addr = (pos < 0) ? node->keys_ : node->template GetPayloadAddr<LogicalID *>(pos);
-      memcpy(ShiftAddr(this, offset), addr, kWordSize);
-    } else {
-      // calculate the skipped page size
-      offset += kWordSize;
-    }
-
-    return offset;
-  }
-
-  /**
-   * @brief Copy an index-entry from a delta record.
-   *
-   * @param rec_ptr an original delta record.
-   * @param offset an offset to the bottom of free space.
-   * @return an offset to the copied payload.
-   */
-  auto
-  CopyIndexEntryFrom(  //
-      const Record rec_ptr,
-      size_t offset)  //
-      -> size_t
-  {
-    const auto *delta = reinterpret_cast<const Node *>(rec_ptr);
-    if (delta->delta_type_ == kInsert) {
-      // copy a key to exchange a child page
-      offset = CopyKeyFrom(delta, offset);
-
-      // copy the next (split-right) child page
-      offset = CopyPayloadFrom<LogicalID *>(delta, offset);
-    }
-
-    return offset;
-  }
-
-  /**
-   * @brief Add the record count in this internal node.
-   *
-   * @param offset an offset to the bottom of free space.
-   */
-  void
-  SetLastRecordForInternal([[maybe_unused]] const size_t offset)
-  {
-    ++record_count_;
   }
 
   /*####################################################################################
@@ -666,32 +572,28 @@ class Node
    *##################################################################################*/
 
   /**
-   * @brief Create a leaf node with the maximum number of records for bulkloading.
+   * @brief Create a node with the maximum number of records for bulkloading.
    *
-   * @tparam Payload a target payload class.
    * @tparam Entry a container of a key/payload pair.
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
    * @param prev_node a left sibling node.
    * @param this_lid the logical ID of a this node.
-   * @param is_rightmost a flag for indicating a rightmost node to be created.
+   * @param nodes the container of construcred nodes.
    */
-  template <class Payload, class Entry>
+  template <class Entry>
   void
   Bulkload(  //
       BulkIter<Entry> &iter,
       const BulkIter<Entry> &iter_end,
       Node *prev_node,
-      const LogicalID *this_lid,
-      const bool is_rightmost)
+      LogicalID *this_lid,
+      std::vector<NodeEntry> &nodes)
   {
+    using Payload = std::tuple_element_t<1, Entry>;
+
     constexpr auto kKeyLen = sizeof(Key);
     constexpr auto kRecLen = kKeyLen + sizeof(Payload);
-
-    // set a lowest key and link sibling nodes if exist
-    if (prev_node != nullptr) {
-      prev_node->LinkNext(this_lid);
-    }
 
     // extract and insert entries into this node
     auto offset = kPageSize;
@@ -702,71 +604,21 @@ class Node
       if (node_size > kPageSize) break;
 
       // insert an entry into this node
-      const auto &[key, payload] = *iter;
+      const auto &[key, payload, key_len] = ParseEntry(*iter);
       offset = SetPayload(offset, payload);
       keys_[record_count_++] = key;
     }
 
-    // set a highest key if needed
-    if (iter < iter_end || !is_rightmost) {
-      high_key_ = keys_[record_count_ - 1];
-      has_high_key_ = 1;
-    }
-  }
+    // set a lowest key
+    has_low_key_ = 1;
+    low_key_ = keys_[0];
 
-  /**
-   * @brief Create an internal node with the maximum number of records for bulkloading.
-   *
-   * @param iter the begin position of child nodes.
-   * @param iter_end the end position of child nodes.
-   * @param prev_node a left sibling node.
-   * @param this_lid the logical ID of a this node.
-   */
-  void
-  Bulkload(  //
-      BulkIter<LogicalID *> &iter,
-      const BulkIter<LogicalID *> &iter_end,
-      Node *prev_node,
-      const LogicalID *this_lid)
-  {
-    constexpr auto kKeyLen = sizeof(Key);
-    constexpr auto kPayLen = sizeof(Node *);
-    constexpr auto kRecLen = kKeyLen + kPayLen;
-
-    // set a lowest key and link sibling nodes if exist
+    // link the sibling nodes if exist
     if (prev_node != nullptr) {
       prev_node->LinkNext(this_lid);
     }
 
-    // extract and insert child nodes
-    auto offset = kPageSize;
-    auto node_size = kHeaderLength;
-    auto is_rightmost = false;
-    for (; iter < iter_end; ++iter) {
-      const auto *child_lid = *iter;
-      const auto *child_node = child_lid->Load<Node *>();
-
-      if (!child_node->has_high_key_) {  // the rightmost node
-        node_size += kPayLen;
-        if (node_size > kPageSize) break;
-
-        offset = SetPayload(offset, child_lid);
-        ++record_count_;
-        is_rightmost = true;
-      } else {  // the other internal nodes
-        node_size += kRecLen;
-        if (node_size > kPageSize) break;
-
-        offset = SetPayload(offset, child_lid);
-        keys_[record_count_++] = child_node->high_key_;
-      }
-    }
-
-    // set a highest key
-    if (!is_rightmost) {
-      high_key_ = keys_[record_count_ - 1];
-      has_high_key_ = 1;
-    }
+    nodes.emplace_back(low_key_, this_lid, kKeyLen);
   }
 
   /**
@@ -780,16 +632,37 @@ class Node
       const LogicalID *left_lid,
       const LogicalID *right_lid)
   {
+    if (left_lid == nullptr) return;
+
     while (true) {
       auto *left_node = left_lid->Load<Node *>();
       left_node->LinkNext(right_lid);
 
-      if (left_node->is_leaf_) return;  // all the border nodes are linked
+      if (left_node->is_inner_ == 0) return;  // all the border nodes are linked
 
       // go down to the lower level
-      left_lid = left_node->template GetPayload<LogicalID *>(left_node->record_count_ - 1);
       const auto *right_node = right_lid->Load<Node *>();
       right_lid = right_node->template GetPayload<LogicalID *>(0);
+      left_lid = left_node->template GetPayload<LogicalID *>(left_node->record_count_ - 1);
+    }
+  }
+
+  /**
+   * @brief Remove the leftmost keys from the leftmost nodes.
+   *
+   * @param lid the logical ID of a root node.
+   */
+  static void
+  RemoveLeftmostKeys(const LogicalID *lid)
+  {
+    while (true) {
+      // remove the lowest key
+      auto *node = lid->Load<Node *>();
+      node->has_low_key_ = 0;
+      if (node->is_inner_ == 0) return;
+
+      // go down to the lower level
+      lid = node->template GetPayload<LogicalID *>(0);
     }
   }
 
@@ -816,7 +689,9 @@ class Node
   {
     if (!has_high_key_) return true;  // the rightmost node
     if (!end_key) return false;       // perform full scan
-    return !Comp{}(high_key_, std::get<0>(*end_key));
+
+    const auto &[end_k, dummy, closed] = *end_key;
+    return Comp{}(end_k, high_key_) || (!closed && !Comp{}(high_key_, end_k));
   }
 
   /**
@@ -856,27 +731,29 @@ class Node
    *##################################################################################*/
 
   /**
-   * @brief Copy a lowest key from a given base node.
+   * @brief Parse an entry of bulkload according to key's type.
    *
-   * @param node a base node that includes a lowest key.
-   * @param pos the position of a target record.
-   * @return an offset to the set key.
+   * @tparam Payload a payload type.
+   * @tparam Entry std::pair or std::tuple for containing entries.
+   * @param entry a bulkload entry.
+   * @retval 1st: a target key.
+   * @retval 2nd: a target payload.
+   * @retval 3rd: the length of a target key.
    */
-  auto
-  CopyLowKeyFrom(  //
-      const Node *node,
-      const int64_t pos = kCopyLowKey)  //
-      -> size_t
+  template <class Entry>
+  constexpr auto
+  ParseEntry(const Entry &entry)  //
+      -> std::tuple<Key, std::tuple_element_t<1, Entry>, size_t>
   {
-    if (pos >= 0) {
-      has_low_key_ = 1;
-      low_key_ = node->keys_[pos];
-    } else if (node->has_low_key_) {
-      has_low_key_ = 1;
-      low_key_ = node->low_key_;
-    }
+    constexpr auto kTupleSize = std::tuple_size_v<Entry>;
+    static_assert(2 <= kTupleSize && kTupleSize <= 3);
 
-    return node_size_;
+    if constexpr (kTupleSize == 3) {
+      return entry;
+    } else {
+      const auto &[key, payload] = entry;
+      return {key, payload, sizeof(Key)};
+    }
   }
 
   /**
@@ -888,12 +765,13 @@ class Node
   void
   LinkNext(const LogicalID *right_lid)
   {
-    // set a sibling link in a left node
+    // set a sibling link
     next_ = reinterpret_cast<uintptr_t>(right_lid);
 
-    // copy a highest key in a left node as a lowest key in a right node
+    // copy the lowest key in the right node as a highest key in this node
     auto *right_node = right_lid->Load<Node *>();
-    right_node->low_key_ = high_key_;
+    has_high_key_ = 1;
+    high_key_ = right_node->low_key_;
   }
 
   /*####################################################################################
@@ -901,7 +779,7 @@ class Node
    *##################################################################################*/
 
   /// a flag for indicating whether this node is a leaf or internal node.
-  uint16_t is_leaf_ : 1;
+  uint16_t is_inner_ : 1;
 
   /// a flag for indicating the types of delta records.
   uint16_t delta_type_ : 3;
