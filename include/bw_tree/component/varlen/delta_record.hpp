@@ -208,7 +208,7 @@ class DeltaRecord
   IsLeaf() const  //
       -> bool
   {
-    return is_inner_ == 0;
+    return is_inner_ == kLeaf;
   }
 
   /**

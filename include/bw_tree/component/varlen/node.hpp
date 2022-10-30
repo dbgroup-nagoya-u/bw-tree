@@ -55,8 +55,8 @@ class Node
    * @brief Construct an initial root node.
    *
    */
-  constexpr explicit Node(const bool is_leaf = true)
-      : is_inner_{static_cast<NodeType>(!is_leaf)}, delta_type_{kNotDelta}, do_split_{0}
+  constexpr explicit Node(const bool is_inner = false)
+      : is_inner_{static_cast<NodeType>(is_inner)}, delta_type_{kNotDelta}, do_split_{0}
   {
   }
 
@@ -90,15 +90,15 @@ class Node
    *
    * Note that this construcor sets only header information.
    *
-   * @param is_leaf a flag for indicating whether a leaf or internal node is constructed.
+   * @param is_inner a flag for indicating whether a leaf or internal node is constructed.
    * @param node_size the virtual size of this node.
    * @param do_split a flag for skipping left-split records in consolidation.
    */
   Node(  //
-      const bool is_leaf,
+      const bool is_inner,
       const size_t node_size,
       const bool do_split)
-      : is_inner_{static_cast<NodeType>(!is_leaf)},
+      : is_inner_{static_cast<NodeType>(is_inner)},
         delta_type_{kNotDelta},
         do_split_{static_cast<uint16_t>(do_split)},
         node_size_{static_cast<uint32_t>(node_size)}
@@ -133,7 +133,7 @@ class Node
   IsLeaf() const  //
       -> bool
   {
-    return is_inner_ == 0;
+    return is_inner_ == kLeaf;
   }
 
   /**
@@ -305,7 +305,7 @@ class Node
   SearchRecord(const Key &key) const  //
       -> std::pair<DeltaRC, size_t>
   {
-    int64_t begin_pos = 0;
+    int64_t begin_pos = is_inner_;
     int64_t end_pos = record_count_ - 1;
     while (begin_pos <= end_pos) {
       const size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
@@ -336,23 +336,8 @@ class Node
   SearchChild(const Key &key) const  //
       -> LogicalID *
   {
-    int64_t begin_pos = is_inner_;
-    int64_t end_pos = record_count_ - 1;
-    while (begin_pos <= end_pos) {
-      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
-      const auto &index_key = GetKey(meta_array_[pos]);
-
-      if (Comp{}(key, index_key)) {  // a target key is in a left side
-        end_pos = pos - 1;
-      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
-        begin_pos = pos + 1;
-      } else {  // find an equivalent key
-        begin_pos = pos + 1;
-        break;
-      }
-    }
-
-    return GetPayload<LogicalID *>(begin_pos - 1);
+    const auto [rc, pos] = SearchRecord(key);
+    return GetPayload<LogicalID *>((rc == kRecordFound) ? pos : pos - 1);
   }
 
   /**
@@ -420,13 +405,13 @@ class Node
    * for the following consolidation procedure.
    *
    * @param consol_info the set of consolidated nodes.
-   * @param is_leaf a flag for indicating a target node is leaf or internal ones.
+   * @param is_inner a flag for indicating a target node is leaf or internal ones.
    * @return the total block size of a consolidated node.
    */
   [[nodiscard]] static auto
   PreConsolidate(  //
       std::vector<ConsolidateInfo> &consol_info,
-      const bool is_leaf)  //
+      const bool is_inner)  //
       -> size_t
   {
     const auto end_pos = consol_info.size() - 1;
@@ -438,7 +423,7 @@ class Node
       const auto *split_d = reinterpret_cast<const Node *>(d_ptr);
 
       // add the length of the lowest key
-      if (!is_leaf || i == end_pos) {
+      if (is_inner || i == end_pos) {
         size += node->low_meta_.GetKeyLength();
       }
 
@@ -700,7 +685,7 @@ class Node
     while (true) {
       auto *left_node = left_lid->Load<Node *>();
       left_node->LinkNext(right_lid);
-      if (left_node->is_inner_ == 0) return;  // all the border nodes are linked
+      if (left_node->is_inner_ == kLeaf) return;  // all the border nodes are linked
 
       // go down to the lower level
       auto *right_node = right_lid->Load<Node *>();
@@ -721,7 +706,7 @@ class Node
       // remove the lowest key
       auto *node = lid->Load<Node *>();
       node->low_meta_ = Metadata{kPageSize, 0, 0};
-      if (node->is_inner_ == 0) return;
+      if (node->is_inner_ == kLeaf) return;
 
       // remove the leftmost key in a record region of an inner node
       const auto meta = node->meta_array_[0];

@@ -765,9 +765,6 @@ class BwTree
   static constexpr size_t kInnerNodeCap =
       (kPageSize - kHeaderLength - kBulkKeyLen) / (kInnerRecLen + kMetaLen);
 
-  /// a flag for indicating leaf nodes.
-  static constexpr bool kIsLeaf = true;
-
   /// a flag for preventing a consolidate-operation from splitting a node.
   static constexpr bool kIsScan = true;
 
@@ -1346,7 +1343,7 @@ class BwTree
       const bool is_scan = false)  //
       -> SMOsRC
   {
-    constexpr auto kIsLeaf = !std::is_same_v<T, LogicalID *>;
+    constexpr auto kIsInner = std::is_same_v<T, LogicalID *>;
 
     // sort delta records
     std::vector<Record> records{};
@@ -1359,9 +1356,9 @@ class BwTree
     // calculate the size of a consolidated node
     size_t size{};
     if constexpr (kIsVarLen) {
-      size = Node_t::PreConsolidate(consol_info, kIsLeaf) + diff;
+      size = Node_t::PreConsolidate(consol_info, kIsInner) + diff;
     } else {
-      const auto rec_num = Node_t::PreConsolidate(consol_info, kIsLeaf) + diff;
+      const auto rec_num = Node_t::PreConsolidate(consol_info, kIsInner) + diff;
       size = rec_num * (sizeof(Key) + sizeof(T));
     }
 
@@ -1388,7 +1385,7 @@ class BwTree
     }
 
     // consolidate a target node
-    consol_node = new (page) Node_t{kIsLeaf, size, do_split};
+    consol_node = new (page) Node_t{kIsInner, size, do_split};
     Consolidate<T>(consol_node, consol_info, records);
 
     if (do_split) return kTrySplit;
@@ -1790,16 +1787,16 @@ class BwTree
       -> std::vector<NodeEntry>
   {
     using T = std::tuple_element_t<1, Entry>;
-    constexpr auto kIsLeaf = std::is_same_v<T, Payload>;
+    constexpr auto kIsInner = std::is_same_v<T, LogicalID *>;
 
     // reserve space for nodes in the upper layer
     std::vector<NodeEntry> nodes{};
-    nodes.reserve((n / (kIsLeaf ? kLeafNodeCap : kInnerNodeCap)) + 1);
+    nodes.reserve((n / (kIsInner ? kInnerNodeCap : kLeafNodeCap)) + 1);
 
     // load child nodes into parent nodes
     const auto &iter_end = iter + n;
     for (Node_t *prev_node = nullptr; iter < iter_end;) {
-      auto *node = new (GetNodePage()) Node_t{kIsLeaf};
+      auto *node = new (GetNodePage()) Node_t{kIsInner};
       auto *lid = mapping_table_.GetNewLogicalID();
       lid->Store(node);
       node->template Bulkload<Entry>(iter, iter_end, prev_node, lid, nodes);

@@ -55,8 +55,8 @@ class Node
    * @brief Construct an initial root node.
    *
    */
-  constexpr explicit Node(const bool is_leaf = true)
-      : is_inner_{static_cast<NodeType>(!is_leaf)},
+  constexpr explicit Node(const bool is_inner = false)
+      : is_inner_{static_cast<NodeType>(is_inner)},
         delta_type_{kNotDelta},
         has_low_key_{0},
         has_high_key_{0},
@@ -90,15 +90,15 @@ class Node
    *
    * Note that this construcor sets only header information.
    *
-   * @param is_leaf a flag for indicating whether a leaf or internal node is constructed.
+   * @param is_inner a flag for indicating whether a leaf or internal node is constructed.
    * @param node_size the virtual size of this node.
    * @param do_split a flag for skipping left-split records in consolidation.
    */
   Node(  //
-      const bool is_leaf,
+      const bool is_inner,
       const size_t node_size,
       const bool do_split)
-      : is_inner_{static_cast<NodeType>(!is_leaf)},
+      : is_inner_{static_cast<NodeType>(is_inner)},
         delta_type_{kNotDelta},
         has_low_key_{0},
         has_high_key_{0},
@@ -328,23 +328,8 @@ class Node
   SearchChild(const Key &key) const  //
       -> LogicalID *
   {
-    int64_t begin_pos = is_inner_;
-    int64_t end_pos = record_count_ - 1;
-    while (begin_pos <= end_pos) {
-      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
-      const auto &index_key = keys_[pos];
-
-      if (Comp{}(key, index_key)) {  // a target key is in a left side
-        end_pos = pos - 1;
-      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
-        begin_pos = pos + 1;
-      } else {  // find an equivalent key
-        begin_pos = pos + 1;
-        break;
-      }
-    }
-
-    return GetPayload<LogicalID *>(begin_pos - 1);
+    const auto [rc, pos] = SearchRecord(key);
+    return GetPayload<LogicalID *>((rc == kRecordFound) ? pos : pos - 1);
   }
 
   /**
@@ -414,13 +399,13 @@ class Node
    * for the following consolidation procedure.
    *
    * @param consol_info the set of consolidated nodes.
-   * @param is_leaf a flag for indicating a target node is leaf or internal ones.
+   * @param is_inner a flag for indicating a target node is leaf or internal ones.
    * @return the total number of records in a consolidated node.
    */
   [[nodiscard]] static auto
   PreConsolidate(  //
       std::vector<ConsolidateInfo> &consol_info,
-      [[maybe_unused]] const bool is_leaf)  //
+      [[maybe_unused]] const bool is_inner)  //
       -> size_t
   {
     const auto end_pos = consol_info.size() - 1;
@@ -638,7 +623,7 @@ class Node
       auto *left_node = left_lid->Load<Node *>();
       left_node->LinkNext(right_lid);
 
-      if (left_node->is_inner_ == 0) return;  // all the border nodes are linked
+      if (left_node->is_inner_ == kLeaf) return;  // all the border nodes are linked
 
       // go down to the lower level
       const auto *right_node = right_lid->Load<Node *>();
@@ -659,7 +644,7 @@ class Node
       // remove the lowest key
       auto *node = lid->Load<Node *>();
       node->has_low_key_ = 0;
-      if (node->is_inner_ == 0) return;
+      if (node->is_inner_ == kLeaf) return;
 
       // go down to the lower level
       lid = node->template GetPayload<LogicalID *>(0);
