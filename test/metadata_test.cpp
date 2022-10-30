@@ -68,36 +68,10 @@ class MetadataFixture : public testing::Test
 
 TEST_F(MetadataFixture, ConstructWithArgumentsCreateExpectedMetadata)
 {
-  EXPECT_EQ(kExpectedOffset, meta_.GetOffset());
-  EXPECT_EQ(kExpectedKeyLength, meta_.GetKeyLength());
+  EXPECT_EQ(kExpectedOffset, meta_.offset);
+  EXPECT_EQ(kExpectedKeyLength, meta_.key_len);
   EXPECT_EQ(kExpectedPayloadLength, meta_.GetPayloadLength());
-  EXPECT_EQ(kExpectedTotalLength, meta_.GetTotalLength());
-}
-
-/*--------------------------------------------------------------------------------------
- * Utility tests
- *------------------------------------------------------------------------------------*/
-
-TEST_F(MetadataFixture, UpdateForLeafCreateNewMetadataWithoutSideEffects)
-{
-  constexpr size_t kNewOffset = 512;
-  meta_ = meta_.UpdateForLeaf(kNewOffset);
-
-  EXPECT_EQ(kNewOffset, meta_.GetOffset());
-  EXPECT_EQ(kExpectedKeyLength, meta_.GetKeyLength());
-  EXPECT_EQ(kExpectedPayloadLength, meta_.GetPayloadLength());
-  EXPECT_EQ(kExpectedTotalLength, meta_.GetTotalLength());
-}
-
-TEST_F(MetadataFixture, UpdateForInternalCreateNewMetadataWithNewPayloadLength)
-{
-  constexpr size_t kNewOffset = 512;
-  meta_ = meta_.UpdateForInternal(kNewOffset);
-
-  EXPECT_EQ(kNewOffset, meta_.GetOffset());
-  EXPECT_EQ(kExpectedKeyLength, meta_.GetKeyLength());
-  EXPECT_EQ(kWordSize, meta_.GetPayloadLength());
-  EXPECT_EQ(kExpectedKeyLength + kWordSize, meta_.GetTotalLength());
+  EXPECT_EQ(kExpectedTotalLength, meta_.rec_len);
 }
 
 }  // namespace dbgroup::index::bw_tree::component::varlen::test

@@ -104,7 +104,7 @@ class DeltaRecord
         high_key_meta_{split_d->high_key_meta_}
   {
     // copy contents of a split delta
-    const auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetKeyLength();
+    const auto rec_len = meta_.rec_len + high_key_meta_.key_len;
     memcpy(&data_block_, &(split_d->data_block_), rec_len);
   }
 
@@ -123,11 +123,11 @@ class DeltaRecord
         high_key_meta_{merge_d->high_key_meta_}
   {
     // copy contents of a merge delta
-    const auto rec_len = meta_.GetTotalLength() + high_key_meta_.GetKeyLength();
+    const auto rec_len = meta_.rec_len + high_key_meta_.key_len;
     memcpy(&data_block_, &(merge_d->data_block_), rec_len);
 
     // update logical ID of a sibling node
-    SetPayload(kHeaderLength + meta_.GetKeyLength(), left_lid);
+    SetPayload(kHeaderLength + meta_.key_len, left_lid);
   }
 
   /*####################################################################################
@@ -152,7 +152,7 @@ class DeltaRecord
         next_{reinterpret_cast<uintptr_t>(next)}
   {
     // copy a lowest key
-    auto key_len = right_node->meta_.GetKeyLength();
+    auto key_len = right_node->meta_.key_len;
     meta_ = Metadata{kHeaderLength, key_len, key_len + kWordSize};
     memcpy(&data_block_, right_node->GetKeyAddr(right_node->meta_), key_len);
 
@@ -160,7 +160,7 @@ class DeltaRecord
     const auto offset = SetPayload(kHeaderLength + key_len, right_lid);
 
     // copy a highest key
-    key_len = right_node->high_key_meta_.GetKeyLength();
+    key_len = right_node->high_key_meta_.key_len;
     high_key_meta_ = Metadata{offset, key_len, key_len};
     memcpy(ShiftAddr(this, offset), right_node->GetKeyAddr(right_node->high_key_meta_), key_len);
   }
@@ -297,7 +297,7 @@ class DeltaRecord
   GetLowKey() const  //
       -> std::optional<Key>
   {
-    if (meta_.GetKeyLength() > 0) return GetKey();
+    if (meta_.key_len > 0) return GetKey();
     return std::nullopt;
   }
 
@@ -308,7 +308,7 @@ class DeltaRecord
   GetHighKey() const  //
       -> std::optional<Key>
   {
-    const auto key_len = high_key_meta_.GetKeyLength();
+    const auto key_len = high_key_meta_.key_len;
     if (key_len == 0) return std::nullopt;
 
     if constexpr (IsVarLenData<Key>()) {
@@ -417,7 +417,7 @@ class DeltaRecord
       }
 
       // update the page size
-      const auto rec_size = meta_.GetKeyLength() + sizeof(T) + kWordSize;
+      const auto rec_size = meta_.key_len + sizeof(T) + kWordSize;
       if (delta_type_ == kInsert) return rec_size;
       if (delta_type_ == kDelete) return -rec_size;
     }
@@ -445,7 +445,7 @@ class DeltaRecord
   GetKeyAddr(const Metadata meta) const  //
       -> void *
   {
-    return ShiftAddr(this, meta.GetOffset());
+    return ShiftAddr(this, meta.offset);
   }
 
   /**
@@ -455,7 +455,7 @@ class DeltaRecord
   GetPayloadAddr() const  //
       -> void *
   {
-    return ShiftAddr(this, meta_.GetOffset() + meta_.GetKeyLength());
+    return ShiftAddr(this, meta_.offset + meta_.key_len);
   }
 
   /**
