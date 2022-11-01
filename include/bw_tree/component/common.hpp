@@ -66,8 +66,8 @@ enum DeltaType : uint16_t {
  * Internal constants
  *####################################################################################*/
 
-/// a flag for indicating variable-length data
-constexpr bool kIsVarLen = true;
+/// Assumes that one word is represented by 8 bytes.
+constexpr size_t kWordSize = sizeof(uintptr_t);
 
 /// the NULL value for uintptr_t
 constexpr uintptr_t kNullPtr = 0;

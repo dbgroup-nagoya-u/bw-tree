@@ -29,9 +29,6 @@ namespace dbgroup::index::bw_tree
  * Global constants
  *####################################################################################*/
 
-/// Assumes that one word is represented by 8 bytes.
-constexpr size_t kWordSize = sizeof(uintptr_t);
-
 /// the default time interval for garbage collection [us].
 constexpr size_t kDefaultGCTime = 10000;
 

@@ -66,11 +66,9 @@ class DeltaRecord
       const Key &key,
       const size_t key_len,
       const T &payload)
-      : is_inner_{kLeaf},
-        delta_type_{delta_type},
-        meta_{kHeaderLength, key_len, key_len + sizeof(T)}
+      : is_inner_{kLeaf}, delta_type_{delta_type}, meta_{kHeaderLen, key_len, key_len + sizeof(T)}
   {
-    const auto offset = SetKey(kHeaderLength, key, key_len);
+    const auto offset = SetKey(kHeaderLen, key, key_len);
     SetPayload(offset, payload);
   }
 
@@ -83,9 +81,9 @@ class DeltaRecord
   DeltaRecord(  //
       const Key &key,
       const size_t key_len)
-      : is_inner_{kLeaf}, delta_type_{kDelete}, meta_{kHeaderLength, key_len, key_len}
+      : is_inner_{kLeaf}, delta_type_{kDelete}, meta_{kHeaderLen, key_len, key_len}
   {
-    SetKey(kHeaderLength, key, key_len);
+    SetKey(kHeaderLen, key, key_len);
   }
 
   /*####################################################################################
@@ -127,7 +125,7 @@ class DeltaRecord
     memcpy(&data_block_, &(merge_d->data_block_), rec_len);
 
     // update logical ID of a sibling node
-    SetPayload(kHeaderLength + meta_.key_len, left_lid);
+    SetPayload(kHeaderLen + meta_.key_len, left_lid);
   }
 
   /*####################################################################################
@@ -153,11 +151,11 @@ class DeltaRecord
   {
     // copy a lowest key
     auto key_len = right_node->meta_.key_len;
-    meta_ = Metadata{kHeaderLength, key_len, key_len + kWordSize};
+    meta_ = Metadata{kHeaderLen, key_len, key_len + kPtrLen};
     memcpy(&data_block_, right_node->GetKeyAddr(right_node->meta_), key_len);
 
     // set a sibling node
-    const auto offset = SetPayload(kHeaderLength + key_len, right_lid);
+    const auto offset = SetPayload(kHeaderLen + key_len, right_lid);
 
     // copy a highest key
     key_len = right_node->high_key_meta_.key_len;
@@ -382,8 +380,8 @@ class DeltaRecord
       -> size_t
   {
     constexpr auto kKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
-    constexpr auto kPayLen = (sizeof(Payload) > kWordSize) ? sizeof(Payload) : kWordSize;
-    return kHeaderLength + 2 * kKeyLen + kPayLen;
+    constexpr auto kPayLen = (sizeof(Payload) > kPtrLen) ? sizeof(Payload) : kPtrLen;
+    return kHeaderLen + 2 * kKeyLen + kPayLen;
   }
 
   /**
@@ -417,7 +415,7 @@ class DeltaRecord
       }
 
       // update the page size
-      const auto rec_size = meta_.key_len + sizeof(T) + kWordSize;
+      const auto rec_size = meta_.key_len + sizeof(T) + kMetaLen;
       if (delta_type_ == kInsert) return rec_size;
       if (delta_type_ == kDelete) return -rec_size;
     }
@@ -431,7 +429,13 @@ class DeltaRecord
    *##################################################################################*/
 
   /// Header length in bytes.
-  static constexpr size_t kHeaderLength = sizeof(DeltaRecord);
+  static constexpr size_t kHeaderLen = sizeof(DeltaRecord);
+
+  /// the length of child pointers.
+  static constexpr size_t kPtrLen = sizeof(LogicalID *);
+
+  /// the length of record metadata.
+  static constexpr size_t kMetaLen = sizeof(Metadata);
 
   /*####################################################################################
    * Internal getters/setters

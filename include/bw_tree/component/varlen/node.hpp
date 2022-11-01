@@ -56,7 +56,7 @@ class Node
    *
    */
   constexpr explicit Node(const bool is_inner = false)
-      : is_inner_{static_cast<NodeType>(is_inner)}, delta_type_{kNotDelta}, do_split_{0}
+      : is_inner_{static_cast<NodeType>(is_inner)}, delta_type_{kNotDelta}
   {
   }
 
@@ -69,11 +69,11 @@ class Node
   Node(  //
       const Node *split_d,
       const LogicalID *left_lid)
-      : is_inner_{kInternal}, delta_type_{kNotDelta}, do_split_{0}, record_count_{2}
+      : is_inner_{kInternal}, delta_type_{kNotDelta}, rec_count_{2}
   {
     // set a split-left page
     auto offset = SetPayload(kPageSize, left_lid);
-    meta_array_[0] = Metadata{offset, 0, kWordSize};
+    meta_array_[0] = Metadata{offset, 0, kPtrLen};
 
     // set a split-right page
     const auto meta = split_d->low_meta_;
@@ -82,7 +82,7 @@ class Node
     offset = SetPayload(offset, right_lid);
     offset -= key_len;
     memcpy(ShiftAddr(this, offset), split_d->GetKeyAddr(meta), key_len);
-    meta_array_[1] = Metadata{offset, key_len, key_len + kWordSize};
+    meta_array_[1] = Metadata{offset, key_len, key_len + kPtrLen};
   }
 
   /**
@@ -97,11 +97,10 @@ class Node
   Node(  //
       const bool is_inner,
       const size_t node_size,
-      const bool do_split)
+      const bool is_scan)
       : is_inner_{static_cast<NodeType>(is_inner)},
         delta_type_{kNotDelta},
-        do_split_{static_cast<uint16_t>(do_split)},
-        node_size_{static_cast<uint32_t>(node_size)}
+        node_size_{static_cast<uint32_t>((is_scan) ? node_size : kPageSize)}
   {
   }
 
@@ -164,7 +163,7 @@ class Node
   GetRecordCount() const  //
       -> size_t
   {
-    return record_count_;
+    return rec_count_;
   }
 
   /**
@@ -306,7 +305,7 @@ class Node
       -> std::pair<DeltaRC, size_t>
   {
     int64_t begin_pos = is_inner_;
-    int64_t end_pos = record_count_ - 1;
+    int64_t end_pos = rec_count_ - 1;
     while (begin_pos <= end_pos) {
       const size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
       const auto &index_key = GetKey(meta_array_[pos]);
@@ -358,7 +357,7 @@ class Node
       const auto [rc, pos] = SearchRecord(e_key);
       end_pos = (rc == kRecordFound && e_closed) ? pos + 1 : pos;
     } else {
-      end_pos = record_count_;
+      end_pos = rec_count_;
     }
 
     return {is_end, end_pos};
@@ -405,13 +404,10 @@ class Node
    * for the following consolidation procedure.
    *
    * @param consol_info the set of consolidated nodes.
-   * @param is_inner a flag for indicating a target node is leaf or internal ones.
    * @return the total block size of a consolidated node.
    */
   [[nodiscard]] static auto
-  PreConsolidate(  //
-      std::vector<ConsolidateInfo> &consol_info,
-      const bool is_inner)  //
+  PreConsolidate(std::vector<ConsolidateInfo> &consol_info)  //
       -> size_t
   {
     const auto end_pos = consol_info.size() - 1;
@@ -422,28 +418,13 @@ class Node
       const auto *node = reinterpret_cast<const Node *>(n_ptr);
       const auto *split_d = reinterpret_cast<const Node *>(d_ptr);
 
-      // add the length of the lowest key
-      if (is_inner || i == end_pos) {
-        size += node->low_meta_.key_len;
-      }
-
       // check the number of records to be consolidated
       if (split_d == nullptr) {
-        rec_num = node->record_count_;
-
-        if (i == 0) {
-          // add the length of the highest key
-          size += node->high_meta_.key_len;
-        }
+        rec_num = node->rec_count_;
       } else {
         const auto sep_meta = split_d->low_meta_;
         const auto &sep_key = split_d->GetKey(sep_meta);
         rec_num = node->SearchRecord(sep_key).second;
-
-        if (i == 0) {
-          // add the length of the highest key
-          size += sep_meta.key_len;
-        }
       }
 
       // compute the length of a data block
@@ -469,8 +450,9 @@ class Node
   auto
   CopyLowKeyFrom(  //
       const ConsolidateInfo &consol_info,
-      size_t offset)  //
-      -> size_t
+      int64_t offset,
+      const bool do_split)  //
+      -> int64_t
   {
     if (is_inner_) {
       // inner nodes have the lowest key in a record region
@@ -482,7 +464,7 @@ class Node
     // prepare a node that has the lowest key
     const Node *node{};
     Metadata meta{};
-    if (node_size_ < kPageSize) {
+    if (do_split) {
       // this node is a split-right node, and so the leftmost record has the lowest key
       node = const_cast<const Node *>(this);
       meta = meta_array_[0];
@@ -496,7 +478,7 @@ class Node
     const auto key_len = meta.key_len;
     offset -= key_len;
     memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
-    low_meta_ = Metadata{offset, key_len, key_len};
+    low_meta_ = Metadata{static_cast<size_t>(offset), key_len, key_len};
 
     return offset;
   }
@@ -510,7 +492,7 @@ class Node
   void
   CopyHighKeyFrom(  //
       const ConsolidateInfo &consol_info,
-      size_t offset)
+      int64_t offset)
   {
     // prepare a node that has the highest key, and copy the next logical ID
     const Node *node{};
@@ -532,7 +514,7 @@ class Node
     if (key_len > 0) {
       offset -= key_len;
       memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
-      high_meta_ = Metadata{offset, key_len, key_len};
+      high_meta_ = Metadata{static_cast<size_t>(offset), key_len, key_len};
     } else {
       high_meta_ = Metadata{0, 0, 0};
     }
@@ -551,24 +533,24 @@ class Node
   CopyRecordFrom(  //
       const Node *node,
       const size_t pos,
-      size_t offset)  //
-      -> size_t
+      int64_t offset)  //
+      -> int64_t
   {
     const auto meta = node->meta_array_[pos];
     const auto rec_len = meta.rec_len;
 
-    if (!do_split_) {
+    if (offset > 0) {
       // copy a record from the given node
       offset -= rec_len;
       memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), rec_len);
-      meta_array_[record_count_++] = Metadata{offset, meta.key_len, rec_len};
-    } else if (kPageSize - offset < node_size_) {
-      // calculate the skipped page size
-      offset -= rec_len + kWordSize;
+      meta_array_[rec_count_++] = Metadata{static_cast<size_t>(offset), meta.key_len, rec_len};
     } else {
-      // this record is the end one in a split-left node
-      do_split_ = false;
-      offset = kPageSize;
+      // calculate the skipped page size
+      offset += kMetaLen + rec_len;
+      if (offset > 0) {
+        // this record is the end one in a split-left node
+        offset = kPageSize;
+      }
     }
 
     return offset;
@@ -585,8 +567,8 @@ class Node
   auto
   CopyRecordFrom(  //
       const Record &rec_pair,
-      size_t offset)  //
-      -> size_t
+      int64_t offset)  //
+      -> int64_t
   {
     const auto *rec = reinterpret_cast<const Node *>(rec_pair.second);
     if (rec->delta_type_ != kDelete) {
@@ -594,18 +576,18 @@ class Node
       const auto meta = rec->low_meta_;
       const auto rec_len = meta.rec_len;
 
-      if (!do_split_) {
+      if (offset > 0) {
         // copy a record from the given node
         offset -= rec_len;
         memcpy(ShiftAddr(this, offset), rec->GetKeyAddr(meta), rec_len);
-        meta_array_[record_count_++] = Metadata{offset, meta.key_len, rec_len};
-      } else if (kPageSize - offset < node_size_) {
-        // calculate the skipped page size
-        offset -= rec_len + kWordSize;
+        meta_array_[rec_count_++] = Metadata{static_cast<size_t>(offset), meta.key_len, rec_len};
       } else {
-        // this record is the end one in a split-left node
-        do_split_ = false;
-        offset = kPageSize;
+        // calculate the skipped page size
+        offset += kMetaLen + rec_len;
+        if (offset > 0) {
+          // this record is the end one in a split-left node
+          offset = kPageSize;
+        }
       }
     }
 
@@ -641,7 +623,7 @@ class Node
 
     // extract and insert entries into this node
     auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
-    auto node_size = kHeaderLength + kMaxKeyLen;
+    auto node_size = kHeaderLen + kMaxKeyLen;
     for (; iter < iter_end; ++iter) {
       const auto &[key, payload, key_len] = ParseEntry(*iter);
       const auto rec_len = key_len + sizeof(Payload);
@@ -653,7 +635,7 @@ class Node
       // insert an entry into this node
       offset = SetPayload(offset, payload);
       offset = SetKey(offset, key, key_len);
-      meta_array_[record_count_++] = Metadata{offset, key_len, rec_len};
+      meta_array_[rec_count_++] = Metadata{offset, key_len, rec_len};
     }
 
     // set a lowest key
@@ -689,7 +671,7 @@ class Node
       // go down to the lower level
       auto *right_node = right_lid->Load<Node *>();
       right_lid = right_node->template GetPayload<LogicalID *>(0);
-      left_lid = left_node->template GetPayload<LogicalID *>(left_node->record_count_ - 1);
+      left_lid = left_node->template GetPayload<LogicalID *>(left_node->rec_count_ - 1);
     }
   }
 
@@ -724,7 +706,13 @@ class Node
    *##################################################################################*/
 
   /// Header length in bytes.
-  static constexpr size_t kHeaderLength = sizeof(Node);
+  static constexpr size_t kHeaderLen = sizeof(Node);
+
+  /// the length of child pointers.
+  static constexpr size_t kPtrLen = sizeof(LogicalID *);
+
+  /// the length of record metadata.
+  static constexpr size_t kMetaLen = sizeof(Metadata);
 
   /*####################################################################################
    * Internal getters setters
@@ -907,16 +895,13 @@ class Node
   /// a flag for indicating the types of delta records.
   uint16_t delta_type_ : 3;
 
-  /// a flag for performing a split operation in consolidation.
-  uint16_t do_split_ : 1;
-
   /// a blank block for alignment.
   uint16_t : 0;
 
   /// the number of records in this node.
-  uint16_t record_count_{0};
+  uint16_t rec_count_{0};
 
-  /// an offset to the bottom of this node.
+  /// the size of this node in bytes.
   uint32_t node_size_{kPageSize};
 
   /// the pointer to a sibling node.
