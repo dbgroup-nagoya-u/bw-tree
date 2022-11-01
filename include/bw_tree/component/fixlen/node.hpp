@@ -76,11 +76,11 @@ class Node
         delta_type_{kNotDelta},
         has_low_key_{0},
         has_high_key_{0},
-        record_count_{2}
+        rec_count_{2}
   {
     keys_[1] = split_d->low_key_;
-    const auto offset = SetPayload(kPageSize, left_lid) - kWordSize;
-    memcpy(ShiftAddr(this, offset), split_d->keys_, kWordSize);
+    const auto offset = SetPayload(kPageSize, left_lid) - kPtrLen;
+    memcpy(ShiftAddr(this, offset), split_d->keys_, kPtrLen);
   }
 
   /**
@@ -163,7 +163,7 @@ class Node
   GetRecordCount() const  //
       -> size_t
   {
-    return record_count_;
+    return rec_count_;
   }
 
   /**
@@ -294,7 +294,7 @@ class Node
       -> std::pair<DeltaRC, size_t>
   {
     int64_t begin_pos = is_inner_;
-    int64_t end_pos = record_count_ - 1;
+    int64_t end_pos = rec_count_ - 1;
     while (begin_pos <= end_pos) {
       const size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
       const auto &index_key = keys_[pos];
@@ -347,7 +347,7 @@ class Node
       const auto [rc, pos] = SearchRecord(e_key);
       end_pos = (rc == kRecordFound && e_closed) ? pos + 1 : pos;
     } else {
-      end_pos = record_count_;
+      end_pos = rec_count_;
     }
 
     return {is_end, end_pos};
@@ -411,7 +411,7 @@ class Node
       const auto *split_d = reinterpret_cast<const Node *>(d_ptr);
 
       // check the number of records to be consolidated
-      rec_num = (split_d == nullptr) ? node->record_count_  //
+      rec_num = (split_d == nullptr) ? node->rec_count_  //
                                      : node->SearchRecord(split_d->low_key_).second;
       total_rec_num += rec_num;
     }
@@ -475,7 +475,7 @@ class Node
         has_high_key_ = 1;
         high_key_ = split_d->low_key_;
       }
-      memcpy(&next_, split_d->keys_, kWordSize);
+      memcpy(&next_, split_d->keys_, kPtrLen);
     }
   }
 
@@ -497,7 +497,7 @@ class Node
   {
     if (offset > 0) {
       // copy a record from the given node
-      keys_[record_count_++] = node->keys_[pos];
+      keys_[rec_count_++] = node->keys_[pos];
       offset -= sizeof(T);
       memcpy(ShiftAddr(this, offset), node->template GetPayloadAddr<T>(pos), sizeof(T));
     } else {
@@ -530,7 +530,7 @@ class Node
     if (rec->delta_type_ != kDelete) {  // the target record is insert/modify delta
       if (offset > 0) {
         // copy a record from the given node
-        keys_[record_count_++] = rec->low_key_;
+        keys_[rec_count_++] = rec->low_key_;
         offset -= sizeof(T);
         memcpy(ShiftAddr(this, offset), rec->keys_, sizeof(T));
       } else {
@@ -576,7 +576,7 @@ class Node
 
     // extract and insert entries into this node
     auto offset = kPageSize;
-    auto node_size = kHeaderLength;
+    auto node_size = kHeaderLen;
     for (; iter < iter_end; ++iter) {
       // check whether the node has sufficent space
       node_size += kRecLen;
@@ -585,7 +585,7 @@ class Node
       // insert an entry into this node
       const auto &[key, payload, key_len] = ParseEntry(*iter);
       offset = SetPayload(offset, payload);
-      keys_[record_count_++] = key;
+      keys_[rec_count_++] = key;
     }
 
     // set a lowest key
@@ -622,7 +622,7 @@ class Node
       // go down to the lower level
       const auto *right_node = right_lid->Load<Node *>();
       right_lid = right_node->template GetPayload<LogicalID *>(0);
-      left_lid = left_node->template GetPayload<LogicalID *>(left_node->record_count_ - 1);
+      left_lid = left_node->template GetPayload<LogicalID *>(left_node->rec_count_ - 1);
     }
   }
 
@@ -651,7 +651,10 @@ class Node
    *##################################################################################*/
 
   /// Header length in bytes.
-  static constexpr size_t kHeaderLength = sizeof(Node);
+  static constexpr size_t kHeaderLen = sizeof(Node);
+
+  /// the length of child pointers.
+  static constexpr size_t kPtrLen = sizeof(LogicalID *);
 
   /*####################################################################################
    * Internal getters setters
@@ -773,7 +776,7 @@ class Node
   uint16_t : 0;
 
   /// the number of records in this node.
-  uint16_t record_count_{0};
+  uint16_t rec_count_{0};
 
   /// the size of this node in bytes.
   uint32_t node_size_{kPageSize};

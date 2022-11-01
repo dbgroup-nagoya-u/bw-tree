@@ -69,11 +69,11 @@ class Node
   Node(  //
       const Node *split_d,
       const LogicalID *left_lid)
-      : is_inner_{kInternal}, delta_type_{kNotDelta}, record_count_{2}
+      : is_inner_{kInternal}, delta_type_{kNotDelta}, rec_count_{2}
   {
     // set a split-left page
     auto offset = SetPayload(kPageSize, left_lid);
-    meta_array_[0] = Metadata{offset, 0, kWordSize};
+    meta_array_[0] = Metadata{offset, 0, kPtrLen};
 
     // set a split-right page
     const auto meta = split_d->low_meta_;
@@ -82,7 +82,7 @@ class Node
     offset = SetPayload(offset, right_lid);
     offset -= key_len;
     memcpy(ShiftAddr(this, offset), split_d->GetKeyAddr(meta), key_len);
-    meta_array_[1] = Metadata{offset, key_len, key_len + kWordSize};
+    meta_array_[1] = Metadata{offset, key_len, key_len + kPtrLen};
   }
 
   /**
@@ -163,7 +163,7 @@ class Node
   GetRecordCount() const  //
       -> size_t
   {
-    return record_count_;
+    return rec_count_;
   }
 
   /**
@@ -305,7 +305,7 @@ class Node
       -> std::pair<DeltaRC, size_t>
   {
     int64_t begin_pos = is_inner_;
-    int64_t end_pos = record_count_ - 1;
+    int64_t end_pos = rec_count_ - 1;
     while (begin_pos <= end_pos) {
       const size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
       const auto &index_key = GetKey(meta_array_[pos]);
@@ -357,7 +357,7 @@ class Node
       const auto [rc, pos] = SearchRecord(e_key);
       end_pos = (rc == kRecordFound && e_closed) ? pos + 1 : pos;
     } else {
-      end_pos = record_count_;
+      end_pos = rec_count_;
     }
 
     return {is_end, end_pos};
@@ -420,7 +420,7 @@ class Node
 
       // check the number of records to be consolidated
       if (split_d == nullptr) {
-        rec_num = node->record_count_;
+        rec_num = node->rec_count_;
       } else {
         const auto sep_meta = split_d->low_meta_;
         const auto &sep_key = split_d->GetKey(sep_meta);
@@ -543,10 +543,10 @@ class Node
       // copy a record from the given node
       offset -= rec_len;
       memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), rec_len);
-      meta_array_[record_count_++] = Metadata{static_cast<size_t>(offset), meta.key_len, rec_len};
+      meta_array_[rec_count_++] = Metadata{static_cast<size_t>(offset), meta.key_len, rec_len};
     } else {
       // calculate the skipped page size
-      offset += rec_len + kWordSize;
+      offset += kMetaLen + rec_len;
       if (offset > 0) {
         // this record is the end one in a split-left node
         offset = kPageSize;
@@ -580,10 +580,10 @@ class Node
         // copy a record from the given node
         offset -= rec_len;
         memcpy(ShiftAddr(this, offset), rec->GetKeyAddr(meta), rec_len);
-        meta_array_[record_count_++] = Metadata{static_cast<size_t>(offset), meta.key_len, rec_len};
+        meta_array_[rec_count_++] = Metadata{static_cast<size_t>(offset), meta.key_len, rec_len};
       } else {
         // calculate the skipped page size
-        offset += rec_len + kWordSize;
+        offset += kMetaLen + rec_len;
         if (offset > 0) {
           // this record is the end one in a split-left node
           offset = kPageSize;
@@ -623,7 +623,7 @@ class Node
 
     // extract and insert entries into this node
     auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
-    auto node_size = kHeaderLength + kMaxKeyLen;
+    auto node_size = kHeaderLen + kMaxKeyLen;
     for (; iter < iter_end; ++iter) {
       const auto &[key, payload, key_len] = ParseEntry(*iter);
       const auto rec_len = key_len + sizeof(Payload);
@@ -635,7 +635,7 @@ class Node
       // insert an entry into this node
       offset = SetPayload(offset, payload);
       offset = SetKey(offset, key, key_len);
-      meta_array_[record_count_++] = Metadata{offset, key_len, rec_len};
+      meta_array_[rec_count_++] = Metadata{offset, key_len, rec_len};
     }
 
     // set a lowest key
@@ -671,7 +671,7 @@ class Node
       // go down to the lower level
       auto *right_node = right_lid->Load<Node *>();
       right_lid = right_node->template GetPayload<LogicalID *>(0);
-      left_lid = left_node->template GetPayload<LogicalID *>(left_node->record_count_ - 1);
+      left_lid = left_node->template GetPayload<LogicalID *>(left_node->rec_count_ - 1);
     }
   }
 
@@ -706,7 +706,13 @@ class Node
    *##################################################################################*/
 
   /// Header length in bytes.
-  static constexpr size_t kHeaderLength = sizeof(Node);
+  static constexpr size_t kHeaderLen = sizeof(Node);
+
+  /// the length of child pointers.
+  static constexpr size_t kPtrLen = sizeof(LogicalID *);
+
+  /// the length of record metadata.
+  static constexpr size_t kMetaLen = sizeof(Metadata);
 
   /*####################################################################################
    * Internal getters setters
@@ -893,7 +899,7 @@ class Node
   uint16_t : 0;
 
   /// the number of records in this node.
-  uint16_t record_count_{0};
+  uint16_t rec_count_{0};
 
   /// the size of this node in bytes.
   uint32_t node_size_{kPageSize};

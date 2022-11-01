@@ -100,7 +100,7 @@ class DeltaRecord
         high_key_{split_d->high_key_}
   {
     // copy contents of a split delta
-    memcpy(payload_, (split_d->payload_), kWordSize);
+    memcpy(payload_, (split_d->payload_), kPtrLen);
   }
 
   /**
@@ -352,8 +352,8 @@ class DeltaRecord
   GetMaxDeltaSize()  //
       -> size_t
   {
-    constexpr auto kPayLen = (sizeof(Payload) > kWordSize) ? sizeof(Payload) : kWordSize;
-    return kHeaderLength + kPayLen;
+    constexpr auto kPayLen = (sizeof(Payload) > kPtrLen) ? sizeof(Payload) : kPtrLen;
+    return kHeaderLen + kPayLen;
   }
 
   /**
@@ -403,7 +403,10 @@ class DeltaRecord
    *##################################################################################*/
 
   /// Header length in bytes.
-  static constexpr size_t kHeaderLength = sizeof(DeltaRecord);
+  static constexpr size_t kHeaderLen = sizeof(DeltaRecord);
+
+  /// the length of child pointers.
+  static constexpr size_t kPtrLen = sizeof(LogicalID *);
 
   /*####################################################################################
    * Internal getters/setters

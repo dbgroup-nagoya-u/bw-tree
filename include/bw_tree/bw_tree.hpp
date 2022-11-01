@@ -114,7 +114,7 @@ class BwTree
         const bool is_end)
         : bw_tree_{bw_tree},
           node_{node},
-          record_count_{end_pos},
+          rec_count_{end_pos},
           current_pos_{begin_pos},
           end_key_{std::move(end_key)},
           is_end_{is_end}
@@ -134,7 +134,7 @@ class BwTree
         size_t begin_pos,
         size_t end_pos,
         const bool is_end)
-        : node_{node}, record_count_{end_pos}, current_pos_{begin_pos}, is_end_{is_end}
+        : node_{node}, rec_count_{end_pos}, current_pos_{begin_pos}, is_end_{is_end}
     {
     }
 
@@ -149,7 +149,7 @@ class BwTree
     {
       node_ = obj.node_;
       obj.node_ = nullptr;
-      record_count_ = obj.record_count_;
+      rec_count_ = obj.rec_count_;
       current_pos_ = obj.current_pos_;
       is_end_ = obj.is_end_;
 
@@ -213,8 +213,8 @@ class BwTree
         -> bool
     {
       while (true) {
-        if (current_pos_ < record_count_) return true;  // records remain in this node
-        if (is_end_) return false;                      // this node is the end of range-scan
+        if (current_pos_ < rec_count_) return true;  // records remain in this node
+        if (is_end_) return false;                   // this node is the end of range-scan
 
         // go to the next sibling node and continue scanning
         const auto &next_key = node_->GetHighKey();
@@ -260,7 +260,7 @@ class BwTree
     Node_t *node_{nullptr};
 
     /// the number of records in this node.
-    size_t record_count_{0};
+    size_t rec_count_{0};
 
     /// the position of a current record.
     size_t current_pos_{0};
@@ -739,31 +739,34 @@ class BwTree
   /// the length of payloads.
   static constexpr size_t kPayLen = sizeof(Payload);
 
+  /// the length of child pointers.
+  static constexpr size_t kPtrLen = sizeof(LogicalID *);
+
   /// the length of record metadata.
   static constexpr size_t kMetaLen = (kIsVarLen) ? sizeof(component::varlen::Metadata) : 0;
 
   /// Header length in bytes.
-  static constexpr size_t kHeaderLength = sizeof(Node_t);
+  static constexpr size_t kHeaderLen = sizeof(Node_t);
 
   /// the maximum size of delta records.
   static constexpr size_t kDeltaRecSize = Delta_t::template GetMaxDeltaSize<Payload>();
 
   /// the expected length of keys for bulkloading.
-  static constexpr size_t kBulkKeyLen = (IsVarLenData<Key>()) ? kWordSize : sizeof(Key);
+  static constexpr size_t kBulkKeyLen = sizeof(Key);
 
   /// the expected length of records in leaf nodes for bulkloading.
   static constexpr size_t kLeafRecLen = kBulkKeyLen + kPayLen;
 
   /// the expected capacity of leaf nodes for bulkloading.
   static constexpr size_t kLeafNodeCap =
-      (kPageSize - kHeaderLength - kBulkKeyLen) / (kLeafRecLen + kMetaLen);
+      (kPageSize - kHeaderLen - kBulkKeyLen) / (kLeafRecLen + kMetaLen);
 
   /// the expected length of records in internal nodes for bulkloading.
-  static constexpr size_t kInnerRecLen = kBulkKeyLen + sizeof(LogicalID *);
+  static constexpr size_t kInnerRecLen = kBulkKeyLen + kPtrLen;
 
   /// the expected capacity of internal nodes for bulkloading.
   static constexpr size_t kInnerNodeCap =
-      (kPageSize - kHeaderLength - kBulkKeyLen) / (kInnerRecLen + kMetaLen);
+      (kPageSize - kHeaderLen - kBulkKeyLen) / (kInnerRecLen + kMetaLen);
 
   /// a flag for preventing a consolidate-operation from splitting a node.
   static constexpr bool kIsScan = true;
@@ -1345,7 +1348,7 @@ class BwTree
   {
     constexpr auto kIsInner = std::is_same_v<T, LogicalID *>;
     constexpr auto kSepKeyLen = (kIsVarLen) ? kMaxKeyLen : 0;
-    constexpr auto kMaxBlockSize = kPageSize - kHeaderLength - 2 * kSepKeyLen;
+    constexpr auto kMaxBlockSize = kPageSize - kHeaderLen - 2 * kSepKeyLen;
 
     // sort delta records
     std::vector<Record> records{};
@@ -1368,7 +1371,7 @@ class BwTree
     bool do_split = false;
     if (is_scan) {
       // use dynamic page sizes for scanning
-      size = ((size + kHeaderLength + 2 * kSepKeyLen) / kPageSize + 1) * kPageSize;
+      size = ((size + kHeaderLen + 2 * kSepKeyLen) / kPageSize + 1) * kPageSize;
       if (size > consol_node->GetNodeSize()) {
         ::operator delete(page);
         page = ::operator new(size);
