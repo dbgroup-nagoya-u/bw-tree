@@ -1344,6 +1344,8 @@ class BwTree
       -> SMOsRC
   {
     constexpr auto kIsInner = std::is_same_v<T, LogicalID *>;
+    constexpr auto kSepKeyLen = (kIsVarLen) ? kMaxKeyLen : 0;
+    constexpr auto kMaxBlockSize = kPageSize - kHeaderLength - 2 * kSepKeyLen;
 
     // sort delta records
     std::vector<Record> records{};
@@ -1356,10 +1358,9 @@ class BwTree
     // calculate the size of a consolidated node
     size_t size{};
     if constexpr (kIsVarLen) {
-      size = Node_t::PreConsolidate(consol_info, kIsInner) + diff;
+      size = Node_t::PreConsolidate(consol_info) + diff;
     } else {
-      const auto rec_num = Node_t::PreConsolidate(consol_info, kIsInner) + diff;
-      size = rec_num * (sizeof(Key) + sizeof(T));
+      size = (Node_t::PreConsolidate(consol_info) + diff) * (sizeof(Key) + sizeof(T));
     }
 
     // check whether splitting is needed
@@ -1367,17 +1368,18 @@ class BwTree
     bool do_split = false;
     if (is_scan) {
       // use dynamic page sizes for scanning
-      size = ((size + kHeaderLength) / kPageSize + 1) * kPageSize;
+      size = ((size + kHeaderLength + 2 * kSepKeyLen) / kPageSize + 1) * kPageSize;
       if (size > consol_node->GetNodeSize()) {
         ::operator delete(page);
         page = ::operator new(size);
       }
-    } else if (size > kPageSize - kHeaderLength) {
+    } else if (size > kMaxBlockSize) {
       // perform splitting
       do_split = true;
-      size = size / 2;
-      if (size > kPageSize - kHeaderLength) {
-        size += size - kPageSize - kHeaderLength;
+      if (auto sep_size = size / 2; sep_size > kMaxBlockSize) {
+        size -= kMaxBlockSize;
+      } else {
+        size = sep_size;
       }
     } else {
       // perform consolidation
@@ -1385,8 +1387,8 @@ class BwTree
     }
 
     // consolidate a target node
-    consol_node = new (page) Node_t{kIsInner, size, do_split};
-    Consolidate<T>(consol_node, consol_info, records);
+    consol_node = new (page) Node_t{kIsInner, size, is_scan};
+    Consolidate<T>(consol_node, consol_info, records, do_split, size);
 
     if (do_split) return kTrySplit;
     if (size <= kMinNodeSize) return kTryMerge;
@@ -1406,12 +1408,14 @@ class BwTree
   Consolidate(  //
       Node_t *consol_node,
       const std::vector<ConsolidateInfo> &consol_info,
-      const std::vector<Record> &records)
+      const std::vector<Record> &records,
+      const bool do_split,
+      const size_t size)
   {
     const auto new_rec_num = records.size();
 
     // perform merge-sort to consolidate a node
-    auto offset = consol_node->GetNodeSize();
+    int64_t offset = (do_split) ? -size : size;
     size_t j = 0;
     for (int64_t k = consol_info.size() - 1; k >= 0; --k) {
       const auto *node = reinterpret_cast<const Node_t *>(consol_info[k].node);
@@ -1442,7 +1446,7 @@ class BwTree
     }
 
     // copy the lowest/highest keys
-    offset = consol_node->CopyLowKeyFrom(consol_info.back(), offset);
+    offset = consol_node->CopyLowKeyFrom(consol_info.back(), offset, do_split);
     consol_node->CopyHighKeyFrom(consol_info.front(), offset);
   }
 
