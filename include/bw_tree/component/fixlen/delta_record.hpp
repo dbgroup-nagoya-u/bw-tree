@@ -213,26 +213,32 @@ class DeltaRecord
 
   /**
    * @param key a target key to be compared.
+   * @param closed a flag for including the same key.
    * @retval true if the lowest key is less than or equal to a given key.
    * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
-  LowKeyIsLE(const Key &key) const  //
+  LowKeyIsLE(  //
+      const Key &key,
+      const bool closed) const  //
       -> bool
   {
-    return Comp{}(key_, key) || !Comp{}(key, key_);
+    return Comp{}(key_, key) || (closed && !Comp{}(key, key_));
   }
 
   /**
    * @param key a target key to be compared.
+   * @param closed a flag for including the same key.
    * @retval true if the highest key is greater than a given key.
    * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
-  HighKeyIsGT(const Key &key) const  //
+  HighKeyIsGE(  //
+      const Key &key,
+      const bool closed) const  //
       -> bool
   {
-    return !has_high_key_ || Comp{}(key, high_key_);
+    return !has_high_key_ || Comp{}(key, high_key_) || (closed && !Comp{}(high_key_, key));
   }
 
   /**

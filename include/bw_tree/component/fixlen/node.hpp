@@ -308,7 +308,7 @@ class Node
       }
     }
 
-    return {kRecordDeleted, begin_pos};
+    return {kRecordDeleted, begin_pos - is_inner_};
   }
 
   /**
@@ -318,15 +318,18 @@ class Node
    * position that is greater than the specified key.
    *
    * @param key a target key.
-   * @param range_is_closed a flag for indicating a target range includes the key.
+   * @param closed a flag for including the same key.
    * @return the logical ID of searched child node.
    */
   [[nodiscard]] auto
-  SearchChild(const Key &key) const  //
+  SearchChild(  //
+      const Key &key,
+      const bool closed) const  //
       -> LogicalID *
   {
-    const auto [rc, pos] = SearchRecord(key);
-    return GetPayload<LogicalID *>((rc == kRecordFound) ? pos : pos - 1);
+    auto [rc, pos] = SearchRecord(key);
+    pos -= static_cast<size_t>(!closed && rc == kRecordFound);
+    return GetPayload<LogicalID *>(pos);
   }
 
   /**

@@ -880,7 +880,7 @@ class BwTree
     for (uintptr_t out_ptr{}; true;) {
       size_t delta_num = 0;
       const auto *head = LoadValidHead(key, closed, stack);
-      switch (DC::SearchChildNode(head, key, out_ptr, delta_num)) {
+      switch (DC::SearchChildNode(head, key, closed, out_ptr, delta_num)) {
         case DeltaRC::kRecordFound:
           stack.emplace_back(reinterpret_cast<LogicalID *>(out_ptr));
           return;
@@ -906,7 +906,7 @@ class BwTree
 
           // search a child node in a base node
           const auto *node = reinterpret_cast<Node_t *>(out_ptr);
-          stack.emplace_back(node->SearchChild(key));
+          stack.emplace_back(node->SearchChild(key, closed));
           return;
         }
       }
@@ -987,7 +987,7 @@ class BwTree
       if (key) {
         while (true) {
           if (stack.back() == target_lid) return;
-          SearchChildNode(*key, !kClosed, stack, target_lid);
+          SearchChildNode(*key, kClosed, stack, target_lid);
           cur_node = stack.back()->template Load<Node_t *>();
           if (cur_node == nullptr) {
             // the found node is removed, so retry
@@ -996,7 +996,7 @@ class BwTree
           }
           if (cur_node->IsLeaf()) break;
         }
-        GetHead(*key, !kClosed, stack);  // check sibling nodes
+        GetHead(*key, kClosed, stack);  // check sibling nodes
       } else {
         do {
           if (stack.back() == target_lid) return;
@@ -1076,7 +1076,7 @@ class BwTree
       // check whether the node is active and can include a target key
       uintptr_t out_ptr{};
       size_t delta_num = 0;
-      switch (DC::Validate(head, key, out_ptr, delta_num)) {
+      switch (DC::Validate(head, key, closed, out_ptr, delta_num)) {
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
           stack.back() = reinterpret_cast<LogicalID *>(out_ptr);
@@ -1369,29 +1369,30 @@ class BwTree
     // check whether splitting is needed
     void *page = consol_node;
     bool do_split = false;
+    auto page_size = kPageSize;
     if (is_scan) {
       // use dynamic page sizes for scanning
-      size = ((size + kHeaderLen + 2 * kSepKeyLen) / kPageSize + 1) * kPageSize;
-      if (size > consol_node->GetNodeSize()) {
+      page_size = ((size + kHeaderLen + 2 * kSepKeyLen) / kPageSize + 1) * kPageSize;
+      if (page_size > consol_node->GetNodeSize()) {
         ::operator delete(page);
-        page = ::operator new(size);
+        page = ::operator new(page_size);
       }
     } else if (size > kMaxBlockSize) {
       // perform splitting
       do_split = true;
       if (auto sep_size = size / 2; sep_size > kMaxBlockSize) {
-        size -= kMaxBlockSize;
+        page_size = size - kMaxBlockSize;
       } else {
-        size = sep_size;
+        page_size = sep_size;
       }
     } else {
       // perform consolidation
-      size = kPageSize;
+      page_size = kPageSize;
     }
 
     // consolidate a target node
-    consol_node = new (page) Node_t{kIsInner, size, is_scan};
-    Consolidate<T>(consol_node, consol_info, records, do_split, size);
+    consol_node = new (page) Node_t{kIsInner, page_size, is_scan};
+    Consolidate<T>(consol_node, consol_info, records, do_split, page_size);
 
     if (do_split) return kTrySplit;
     if (size <= kMinNodeSize) return kTryMerge;
@@ -1618,12 +1619,12 @@ class BwTree
     // search a left sibling node
     stack.pop_back();
     const auto &low_key = removed_node->GetKey();
-    SearchChildNode(low_key, kClosed, stack);
+    SearchChildNode(low_key, !kClosed, stack);
 
     // insert a merge delta into the left sibling node
     auto *merge_d = new (GetRecPage()) Delta_t{DeltaType::kMerge, removed_node, removed_lid};
     while (true) {  // continue until insertion succeeds
-      const auto *sib_head = GetHead(low_key, kClosed, stack);
+      const auto *sib_head = GetHead(low_key, !kClosed, stack);
       merge_d->SetNext(sib_head);
       if (stack.back()->CASWeak(sib_head, merge_d)) break;
     }
@@ -1668,7 +1669,7 @@ class BwTree
 
       // check concurrent splitting
       const auto *cur_lid = stack.back();
-      const auto *sib_head = GetHead(del_key, !kClosed, stack);
+      const auto *sib_head = GetHead(del_key, kClosed, stack);
       if (cur_lid != stack.back()) {
         // the target node was split, so check whether the merged nodes span two parent nodes
         const auto &low_key = DC::TraverseToGetLowKey(sib_head);
