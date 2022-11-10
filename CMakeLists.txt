@@ -17,6 +17,10 @@ project(
 set(BW_TREE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(MEMORY_MANAGER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/memory-manager")
 
+# check SSE support for spinlock hints
+include(CheckIncludeFileCXX)
+CHECK_INCLUDE_FILE_CXX("xmmintrin.h" BW_TREE_HAS_SPINLOCK_HINT)
+
 #--------------------------------------------------------------------------------------#
 # Bw-tree's configurations
 #--------------------------------------------------------------------------------------#
@@ -25,6 +29,8 @@ set(BW_TREE_PAGE_SIZE "1024" CACHE STRING " Page size in bytes.")
 set(BW_TREE_MAX_DELTA_RECORD_NUM "(2 * Log2(kPageSize / 256))" CACHE STRING " Invoking consolidation if the number of delta records exceeds this threshold.")
 set(BW_TREE_MIN_NODE_SIZE "(kPageSize / 16)" CACHE STRING " Invoking a merge-operation if the size of a node becomes lower than this threshold.")
 set(BW_TREE_MAX_VARIABLE_DATA_SIZE "128" CACHE STRING " The expected maximum size of a variable-length data.")
+set(BW_TREE_RETRY_THRESHOLD "10" CACHE STRING "The maximum number of retries for preventing busy loops.")
+set(BW_TREE_SLEEP_TIME "10" CACHE STRING "A sleep time for preventing busy loops [us].")
 
 #--------------------------------------------------------------------------------------#
 # Configure external libraries
@@ -48,6 +54,9 @@ if(NOT TARGET bw_tree::bw_tree)
     BW_TREE_MAX_DELTA_RECORD_NUM=${BW_TREE_MAX_DELTA_RECORD_NUM}
     BW_TREE_MIN_NODE_SIZE=${BW_TREE_MIN_NODE_SIZE}
     BW_TREE_MAX_VARIABLE_DATA_SIZE=${BW_TREE_MAX_VARIABLE_DATA_SIZE}
+    BW_TREE_RETRY_THRESHOLD=${BW_TREE_RETRY_THRESHOLD}
+    BW_TREE_SLEEP_TIME=${BW_TREE_SLEEP_TIME}
+    $<$<BOOL:${BW_TREE_HAS_SPINLOCK_HINT}>:BW_TREE_HAS_SPINLOCK_HINT>
   )
   target_include_directories(bw_tree INTERFACE
     ${BW_TREE_SOURCE_DIR}/include

@@ -18,6 +18,7 @@
 #define BW_TREE_COMPONENT_FIXLEN_DELTA_RECORD_HPP
 
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -34,7 +35,7 @@ namespace dbgroup::index::bw_tree::component::fixlen
  * @tparam Comp a comparetor class for keys.
  */
 template <class Key_t, class Comp_t>
-class DeltaRecord
+class alignas(kWordSize) DeltaRecord
 {
  public:
   /*####################################################################################
@@ -106,20 +107,22 @@ class DeltaRecord
   /**
    * @brief Construct a new delta record for deleting an index-entry.
    *
-   * @param merge_d a child merge-delta record.
-   * @param left_lid the logical ID of a merged-left child.
+   * @param removed_child a removed child node.
+   * @param left_lid the logical ID of a merged-left child (dummy nullptr).
    */
   DeltaRecord(  //
-      const DeltaRecord *merge_d,
-      const LogicalID *left_lid)
+      const DeltaRecord *removed_node,
+      [[maybe_unused]] const LogicalID *left_lid)
       : is_inner_{kInternal},
         delta_type_{kDelete},
         has_low_key_{1},
-        has_high_key_{merge_d->has_high_key_},
-        key_{merge_d->key_},
-        high_key_{merge_d->high_key_}
+        has_high_key_{removed_node->has_high_key_},
+        key_{removed_node->key_},
+        high_key_{removed_node->high_key_}
   {
-    SetPayload(left_lid);
+    // set a sibling node
+    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(ShiftAddr(this, kPayOffset));
+    payload->store(nullptr, std::memory_order_relaxed);
   }
 
   /*####################################################################################
@@ -131,13 +134,13 @@ class DeltaRecord
    *
    * @param delta_type a split or merge delta.
    * @param right_node a split/merged right node.
-   * @param right_lid the logical ID of a split/merged right node.
+   * @param right_lid the address of a split/merged right node.
    * @param next a pointer to the next delta record or base node.
    */
   DeltaRecord(  //
       const DeltaType delta_type,
       const DeltaRecord *right_node,
-      const LogicalID *right_lid,
+      const void *right_lid,
       const DeltaRecord *next = nullptr)
       : is_inner_{right_node->is_inner_},
         delta_type_{delta_type},
@@ -154,17 +157,13 @@ class DeltaRecord
   /**
    * @brief Construct a new delta record for removing a node.
    *
-   * @param dummy a dummy delta type for distinguishing constructors.
    * @param removed_node a removed node.
    */
-  DeltaRecord(  //
-      [[maybe_unused]] const DeltaType dummy,
-      const DeltaRecord *removed_node)
-      : is_inner_{removed_node->is_inner_},
+  explicit DeltaRecord(const bool is_leaf)
+      : is_inner_{static_cast<uint16_t>(!is_leaf)},
         delta_type_{kRemoveNode},
         has_low_key_{0},
-        has_high_key_{0},
-        next_{reinterpret_cast<uintptr_t>(removed_node)}
+        has_high_key_{0}
   {
   }
 
@@ -197,6 +196,17 @@ class DeltaRecord
       -> bool
   {
     return is_inner_ == kLeaf;
+  }
+
+  /**
+   * @retval true if this node is leftmost in its tree level.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] constexpr auto
+  IsLeftmost() const  //
+      -> bool
+  {
+    return has_low_key_ == 0;
   }
 
   /**
@@ -312,6 +322,26 @@ class DeltaRecord
   }
 
   /**
+   * @tparam T a class of expected payloads.
+   * @return a payload in this record.
+   */
+  [[nodiscard]] auto
+  GetPayloadAtomically() const  //
+      -> uintptr_t
+  {
+    const auto *pay_addr = reinterpret_cast<std::atomic_uintptr_t *>(ShiftAddr(this, kPayOffset));
+    while (true) {
+      for (size_t i = 1; true; ++i) {
+        const auto payload = pay_addr->load(std::memory_order_relaxed);
+        if (payload != kNullPtr) return payload;
+        if (i >= kRetryNum) break;
+        BW_TREE_SPINLOCK_HINT
+      }
+      std::this_thread::sleep_for(kShortSleep);
+    }
+  }
+
+  /**
    * @brief Update the delta-modification type of this record with a given one.
    *
    * @param type a modification type to be updated.
@@ -343,6 +373,18 @@ class DeltaRecord
     next_ = kNullPtr;
   }
 
+  /**
+   * @brief Set a merged-left child node to complete deleting an index-entry.
+   *
+   * @param left_lid the LID of a mereged-left child node.
+   */
+  void
+  SetSiblingLID(LogicalID *left_lid)
+  {
+    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(ShiftAddr(this, kPayOffset));
+    payload->store(left_lid, std::memory_order_relaxed);
+  }
+
   /*####################################################################################
    * Public utilities
    *##################################################################################*/
@@ -359,7 +401,7 @@ class DeltaRecord
       -> size_t
   {
     constexpr auto kPayLen = (sizeof(Payload) > kPtrLen) ? sizeof(Payload) : kPtrLen;
-    return kHeaderLen + kPayLen;
+    return kHeaderLen + kPayLen + kWordSize;
   }
 
   /**
@@ -413,6 +455,10 @@ class DeltaRecord
 
   /// the length of child pointers.
   static constexpr size_t kPtrLen = sizeof(LogicalID *);
+
+  static constexpr size_t kAlignMask = 0b111;
+
+  static constexpr size_t kPayOffset = (kHeaderLen + kAlignMask) & ~kAlignMask;
 
   /*####################################################################################
    * Internal getters/setters

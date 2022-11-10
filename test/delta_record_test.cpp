@@ -242,7 +242,7 @@ class DeltaRecordFixture : public testing::Test
     const auto &payload = payloads_[0];
     const auto &dummy_d = CreateLeafInsertModifyDelta(kInsert, key, payload);
 
-    auto *raw_p = new (GetPage()) Delta_t{kRemoveNode, dummy_d.get()};
+    auto *raw_p = new (GetPage()) Delta_t{true};
     std::unique_ptr<Delta_t> delta{raw_p};
 
     EXPECT_TRUE(delta->IsLeaf());

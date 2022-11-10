@@ -17,6 +17,13 @@
 #ifndef BW_TREE_COMPONENT_COMMON_HPP
 #define BW_TREE_COMPONENT_COMMON_HPP
 
+#ifdef BW_TREE_HAS_SPINLOCK_HINT
+#include <xmmintrin.h>
+#define BW_TREE_SPINLOCK_HINT _mm_pause();  // NOLINT
+#else
+#define BW_TREE_SPINLOCK_HINT /* do nothing */
+#endif
+
 #include "bw_tree/utility.hpp"
 
 namespace dbgroup::index::bw_tree::component
@@ -33,10 +40,12 @@ enum DeltaRC {
   kReachBaseNode = 0,
   kRecordFound,
   kRecordDeleted,
+  kRecordIsLeftmost,
   kNodeRemoved,
   kKeyIsInSibling,
   kPartialSplitMayExist,
-  kPartialMergeMayExist,
+  kReachMergedNode,
+  kAbortMerge,
 };
 
 /**

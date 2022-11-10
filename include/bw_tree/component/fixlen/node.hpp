@@ -34,7 +34,7 @@ namespace dbgroup::index::bw_tree::component::fixlen
  * @tparam Comp a comparetor class for keys.
  */
 template <class Key, class Comp>
-class Node
+class alignas(kWordSize) Node
 {
  public:
   /*####################################################################################
@@ -293,7 +293,7 @@ class Node
   SearchRecord(const Key &key) const  //
       -> std::pair<DeltaRC, size_t>
   {
-    int64_t begin_pos = is_inner_;
+    int64_t begin_pos = is_inner_ & ~static_cast<size_t>(has_low_key_);
     int64_t end_pos = rec_count_ - 1;
     while (begin_pos <= end_pos) {
       const size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
@@ -308,7 +308,7 @@ class Node
       }
     }
 
-    return {kRecordDeleted, begin_pos - is_inner_};
+    return {kRecordDeleted, begin_pos};
   }
 
   /**
@@ -327,9 +327,23 @@ class Node
       const bool closed) const  //
       -> LogicalID *
   {
-    auto [rc, pos] = SearchRecord(key);
-    pos -= static_cast<size_t>(!closed && rc == kRecordFound);
-    return GetPayload<LogicalID *>(pos);
+    int64_t begin_pos = 1;
+    int64_t end_pos = rec_count_ - 1;
+    while (begin_pos <= end_pos) {
+      const size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
+      const auto &index_key = keys_[pos];
+
+      if (Comp{}(key, index_key)) {  // a target key is in a left side
+        end_pos = pos - 1;
+      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
+        begin_pos = pos + 1;
+      } else {  // find an equivalent key
+        begin_pos = pos + static_cast<size_t>(closed);
+        break;
+      }
+    }
+
+    return GetPayload<LogicalID *>(begin_pos - 1);
   }
 
   /**

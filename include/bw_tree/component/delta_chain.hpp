@@ -58,10 +58,11 @@ class DeltaChain
    * @retval false otherwise.
    */
   [[nodiscard]] static auto
-  TraverseToGetLowKey(const DeltaRecord *delta)  //
+  TraverseToGetLowKey(const void *delta_addr)  //
       -> std::optional<Key>
   {
     // traverse to a base node
+    const auto *delta = reinterpret_cast<const DeltaRecord *>(delta_addr);
     while (delta->GetDeltaType() != kNotDelta) {
       delta = delta->GetNext();
     }
@@ -95,8 +96,7 @@ class DeltaChain
     // traverse a delta chain
     for (; true; delta = delta->GetNext(), ++out_delta_num) {
       switch (delta->GetDeltaType()) {
-        case kInsert:
-        case kDelete: {
+        case kInsert: {
           if (delta->LowKeyIsLE(key, closed) && delta->HighKeyIsGE(key, !closed)) {
             // this index-entry delta directly indicates a child node
             out_ptr = delta->template GetPayload<uintptr_t>();
@@ -105,13 +105,21 @@ class DeltaChain
           break;
         }
 
+        case kDelete: {
+          if (delta->LowKeyIsLE(key, closed) && delta->HighKeyIsGE(key, !closed)) {
+            // this index-entry delta directly indicates a child node
+            out_ptr = delta->GetPayloadAtomically();
+            return kRecordFound;
+          }
+          break;
+        }
+
         case kSplit: {
-          if (delta->LowKeyIsLE(key, closed)) {
+          if (!has_smo && delta->LowKeyIsLE(key, closed)) {
             // a sibling node includes a target key
             out_ptr = delta->template GetPayload<uintptr_t>();
             return kKeyIsInSibling;
           }
-
           has_smo = true;
           break;
         }
@@ -122,20 +130,17 @@ class DeltaChain
         case kMerge: {
           // check whether the merged node contains a target key
           if (delta->LowKeyIsLE(key, closed)) {
-            // check whether the merging is aborted
-            const auto *sib_lid = delta->template GetPayload<LogicalID *>();
-            const auto *remove_d = sib_lid->template Load<DeltaRecord *>();
-            if (remove_d == nullptr) return kNodeRemoved;  // the node is consolidated
-            if (remove_d->GetDeltaType() == kRemoveNode) {
-              // a target record may be in the merged node
-              out_ptr = remove_d->template GetNext<uintptr_t>();
-              return kReachBaseNode;
+            // check whether the node contains a target key
+            const auto *merged_node = delta->template GetPayload<DeltaRecord *>();
+            if (!has_smo && !delta->HighKeyIsGE(key, !closed)) {
+              out_ptr = merged_node->template GetNext<uintptr_t>();
+              return kKeyIsInSibling;
             }
-            // merging was aborted, so check the sibling node
-            out_ptr = reinterpret_cast<uintptr_t>(sib_lid);
-            return kKeyIsInSibling;
-          }
 
+            // a target record may be in the merged node
+            out_ptr = reinterpret_cast<uintptr_t>(merged_node);
+            return kReachMergedNode;
+          }
           has_smo = true;
           break;
         }
@@ -199,11 +204,10 @@ class DeltaChain
 
         case kSplit: {
           // check whether the right-sibling node contains a target key
-          if (delta->LowKeyIsLE(key, kClosed)) {
+          if (!has_smo && delta->LowKeyIsLE(key, kClosed)) {
             out_ptr = delta->template GetPayload<uintptr_t>();
             return kKeyIsInSibling;
           }
-
           has_smo = true;
           break;
         }
@@ -214,20 +218,17 @@ class DeltaChain
         case kMerge: {
           // check whether the merged node contains a target key
           if (delta->LowKeyIsLE(key, kClosed)) {
-            // check whether the merging is aborted
-            const auto *sib_lid = delta->template GetPayload<LogicalID *>();
-            const auto *remove_d = sib_lid->template Load<DeltaRecord *>();
-            if (remove_d == nullptr) return kNodeRemoved;  // the node is consolidated
-            if (remove_d->GetDeltaType() == kRemoveNode) {
-              // a target record may be in the merged node
-              out_ptr = remove_d->template GetNext<uintptr_t>();
-              return kReachBaseNode;
+            // check whether the node contains a target key
+            const auto *merged_node = delta->template GetPayload<DeltaRecord *>();
+            if (!has_smo && !delta->HighKeyIsGE(key, kOpen)) {
+              out_ptr = merged_node->template GetNext<uintptr_t>();
+              return kKeyIsInSibling;
             }
-            // merging was aborted, so check the sibling node
-            out_ptr = reinterpret_cast<uintptr_t>(sib_lid);
-            return kKeyIsInSibling;
-          }
 
+            // a target record may be in the merged node
+            out_ptr = reinterpret_cast<uintptr_t>(merged_node);
+            return kReachMergedNode;
+          }
           has_smo = true;
           break;
         }
@@ -235,9 +236,115 @@ class DeltaChain
         case kNotDelta:
         default: {
           // check whether the node contains a target key
-          if (!has_smo && !delta->HighKeyIsGE(key, !kClosed)) {
+          if (!has_smo && !delta->HighKeyIsGE(key, kOpen)) {
             out_ptr = delta->template GetNext<uintptr_t>();
             return kKeyIsInSibling;
+          }
+
+          // a target record may be in the base node
+          out_ptr = reinterpret_cast<uintptr_t>(delta);
+          return kReachBaseNode;
+        }
+      }
+    }
+  }
+
+  /**
+   * @brief Traverse a delta-chain to search a record with a given key.
+   *
+   * @param delta the head record in a delta-chain.
+   * @param key a target key to be searched.
+   * @param out_ptr an output pointer if needed.
+   * @param out_delta_num the number of records in this delta-chain.
+   * @retval kRecordFound if a delta record (in out_ptr) has the given key.
+   * @retval kReachBaseNode if a base node (in out_ptr) may have the given key.
+   * @retval kKeyIsInSibling if the target key is not in this node due to other SMOs.
+   * @retval kNodeRemoved if this node is removed by other SMOs.
+   */
+  static auto
+  SearchForMerge(  //
+      const DeltaRecord *delta,
+      const Key &key,
+      const std::optional<Key> &sib_key,
+      uintptr_t &out_ptr,
+      size_t &out_delta_num,
+      bool &key_found,
+      bool &sib_key_found)  //
+      -> DeltaRC
+  {
+    auto has_smo = false;
+
+    // traverse a delta chain
+    for (; true; delta = delta->GetNext(), ++out_delta_num) {
+      switch (delta->GetDeltaType()) {
+        case kInsert: {
+          // check whether a target record is inserted
+          if (!key_found && delta->HasSameKey(key)) {
+            key_found = true;
+            if (sib_key_found) return kRecordFound;
+          }
+          if (!sib_key_found && delta->HasSameKey(*sib_key)) {
+            sib_key_found = true;
+            if (key_found) return kRecordFound;
+          }
+          break;
+        }
+
+        case kDelete: {
+          // check whether a target record is deleted
+          if (!key_found && delta->HasSameKey(key)) return kAbortMerge;
+          if (!sib_key_found && delta->HasSameKey(*sib_key)) return kAbortMerge;  // merged node
+          break;
+        }
+
+        case kSplit:
+          // check whether the right-sibling node contains a target key
+          if (!has_smo) {
+            if (!key_found && delta->LowKeyIsLE(key, kClosed)) {
+              out_ptr = delta->template GetPayload<uintptr_t>();
+              return kKeyIsInSibling;
+            }
+            if (!sib_key_found && delta->HasSameKey(*sib_key)) {
+              sib_key_found = true;
+              if (key_found) return kRecordFound;
+            }
+            has_smo = true;
+          }
+          break;
+
+        case kRemoveNode:
+          return kNodeRemoved;
+
+        case kMerge:
+          // check whether the merged node contains a target key
+          if (delta->LowKeyIsLE(key, kClosed)) {
+            // check whether the node contains a target key
+            const auto *merged_node = delta->template GetPayload<DeltaRecord *>();
+            if (!has_smo && !key_found && !delta->HighKeyIsGE(key, kOpen)) {
+              out_ptr = merged_node->template GetNext<uintptr_t>();
+              return kKeyIsInSibling;
+            }
+
+            // a target record may be in the merged node
+            out_ptr = reinterpret_cast<uintptr_t>(merged_node);
+            return kReachMergedNode;
+          }
+          if (!sib_key_found && delta->HasSameKey(*sib_key)) {
+            sib_key_found = true;
+            if (key_found) return kRecordFound;
+          }
+          has_smo = true;
+          break;
+
+        case kNotDelta:
+        default: {
+          // check whether the node contains a target key
+          if (!key_found) {
+            if (!delta->IsLeftmost() && delta->HasSameKey(key)) return kAbortMerge;
+            if (!has_smo && !delta->HighKeyIsGE(key, kOpen)) {
+              out_ptr = delta->template GetNext<uintptr_t>();
+              return kKeyIsInSibling;
+            }
           }
 
           // a target record may be in the base node
@@ -257,7 +364,6 @@ class DeltaChain
    * @retval kReachBaseNode if this node does not have partial SMOs.
    * @retval kNodeRemoved if this node is removed by other SMOs.
    * @retval kPartialSplitMayExist if this node may be in splitting.
-   * @retval kPartialMergeMayExist if this node may be in merging.
    */
   static auto
   CheckPartialSMOs(  //
@@ -282,16 +388,8 @@ class DeltaChain
           return kNodeRemoved;
 
         case kMerge: {
-          // check whether this merging is in processing
-          auto tmp_ptr = delta->template GetPayload<uintptr_t>();
-          const auto *merged_lid = reinterpret_cast<LogicalID *>(tmp_ptr);
-          const auto *remove_d = merged_lid->template Load<DeltaRecord *>();
-          if (remove_d == nullptr) return kNodeRemoved;        // the node is consolidated
-          if (remove_d->GetDeltaType() != kRemoveNode) break;  // merging was aborted
-
           if (rc == kReachBaseNode) {
-            rc = kPartialMergeMayExist;
-            out_ptr = reinterpret_cast<uintptr_t>(delta);
+            rc = kReachMergedNode;
           }
           break;
         }
@@ -333,11 +431,10 @@ class DeltaChain
       switch (delta->GetDeltaType()) {
         case kSplit: {
           // check whether the right-sibling node contains a target key
-          if (delta->LowKeyIsLE(key, closed)) {
+          if (!has_smo && delta->LowKeyIsLE(key, closed)) {
             out_ptr = delta->template GetPayload<uintptr_t>();
             return kKeyIsInSibling;
           }
-
           has_smo = true;
           break;
         }
@@ -346,20 +443,13 @@ class DeltaChain
           return kNodeRemoved;
 
         case kMerge: {
-          // check whether the merged node contains a target key
-          if (delta->LowKeyIsLE(key, closed)) {
-            // check whether the merging is aborted and the sibling node includes a target key
-            out_ptr = delta->template GetPayload<uintptr_t>();
-            const auto *merged_lid = reinterpret_cast<LogicalID *>(out_ptr);
-            const auto *remove_d = merged_lid->template Load<DeltaRecord *>();
-            if (remove_d == nullptr) return kNodeRemoved;  // the node is consolidated
-            if (remove_d->GetDeltaType() != kRemoveNode) {
-              // merging was aborted, so check the sibling node
-              return kKeyIsInSibling;
-            }
+          // check whether the node contains a target key
+          if (!has_smo && !delta->HighKeyIsGE(key, !closed)) {
+            const auto *merged_node = delta->template GetPayload<DeltaRecord *>();
+            out_ptr = merged_node->template GetNext<uintptr_t>();
+            return kKeyIsInSibling;
           }
-
-          return kReachBaseNode;
+          return kReachMergedNode;
         }
 
         case kNotDelta: {
@@ -368,7 +458,6 @@ class DeltaChain
             out_ptr = delta->template GetNext<uintptr_t>();
             return kKeyIsInSibling;
           }
-
           return kReachBaseNode;
         }
 
@@ -421,14 +510,8 @@ class DeltaChain
         }
 
         case kMerge: {
-          // check whether the merging was aborted
-          const auto *sib_lid = delta->template GetPayload<LogicalID *>();
-          const auto *remove_d = sib_lid->template Load<DeltaRecord *>();
-          if (remove_d == nullptr) return {true, 0};           // the node is consolidated
-          if (remove_d->GetDeltaType() != kRemoveNode) break;  // merging was aborted
-
           // keep the merged node and the corresponding separator key
-          consol_info.emplace_back(remove_d->GetNext(), split_d);
+          consol_info.emplace_back(delta->template GetPayload<DeltaRecord *>(), split_d);
           break;
         }
 

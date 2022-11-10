@@ -151,14 +151,14 @@ class MappingTable
 
       for (size_t i = 0; i < size; ++i) {
         auto *rec = logical_ids_[i].template Load<Delta *>();
-        if (rec == nullptr) continue;
 
         // delete delta records
-        while (rec->GetDeltaType() != kNotDelta) {
+        while (rec != nullptr && rec->GetDeltaType() != kNotDelta) {
           auto *next = rec->GetNext();
           delete rec;
           rec = next;
         }
+        if (rec == nullptr) continue;
 
         // delete a base node
         auto *node = reinterpret_cast<Node *>(rec);
