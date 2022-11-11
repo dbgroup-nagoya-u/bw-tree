@@ -155,6 +155,10 @@ class MappingTable
         // delete delta records
         while (rec != nullptr && rec->GetDeltaType() != kNotDelta) {
           auto *next = rec->GetNext();
+          if (rec->GetDeltaType() == kMerge) {
+            delete rec->template GetPayload<Node *>();
+          }
+
           delete rec;
           rec = next;
         }

@@ -832,7 +832,7 @@ class BwTree
       // if the delta record is merge-delta, delete the merged sibling node
       if (garbage->GetDeltaType() == DeltaType::kMerge) {
         auto *removed_node = garbage->template GetPayload<Node_t *>();
-        AddToGC(removed_node);
+        gc_.AddGarbage(removed_node);
       }
 
       // check the next delta record or base node
@@ -1233,7 +1233,7 @@ class BwTree
           return;
 
         case kTrySplit:
-          if (TrySplit(head, reinterpret_cast<Delta_t *>(new_node), stack)) return;
+          TrySplit(head, reinterpret_cast<Delta_t *>(new_node), stack);
           continue;  // retry from consolidation
 
         case kTryMerge:
@@ -1514,18 +1514,18 @@ class BwTree
       tls_node_page_.reset(removed_node);
       return false;
     }
+    AddToGC(head);
 
     // remove the index entry before merging
     consol_page_ = nullptr;
     const auto &low_key = removed_node->GetLowKey();
     auto *delete_d = TryDeleteIndexEntry(removed_node_d, low_key, stack);
     if (delete_d == nullptr) {
+      // check this tree should be shrinked
+      if (TryRemoveRoot(removed_node, removed_lid, stack)) return true;
       // merging has failed, but consolidation succeeds
       removed_lid->Store(removed_node);
       AddToGC(remove_d);
-
-      // check this tree should be shrinked
-      TryRemoveRoot(removed_node, removed_lid, stack);
       return true;
     }
 
@@ -1586,18 +1586,21 @@ class BwTree
     }
   }
 
-  void
+  auto
   TryRemoveRoot(  //
       const Node_t *root,
-      LogicalID *removed_lid,
-      std::vector<LogicalID *> &stack)
+      LogicalID *old_lid,
+      std::vector<LogicalID *> &stack)  //
+      -> bool
   {
     // check a given node can be shrinked
-    if (!stack.empty() || root->GetRecordCount() > 1 || root->IsLeaf()) return;
+    if (!stack.empty() || root->GetRecordCount() > 1 || root->IsLeaf()) return false;
 
     // shrink the tree by removing a useless root node
-    auto *new_root = root->GetLeftmostChild();
-    root_.compare_exchange_strong(removed_lid, new_root, std::memory_order_relaxed);
+    auto *new_lid = root->GetLeftmostChild();
+    if (!root_.compare_exchange_strong(old_lid, new_lid, std::memory_order_relaxed)) return false;
+    AddToGC(root);
+    return true;
   }
 
   /*####################################################################################
