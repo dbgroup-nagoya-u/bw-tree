@@ -309,12 +309,12 @@ class DeltaRecordFixture : public testing::Test
     size_t diff = 0;
     for (const auto &id : ids) {
       auto &&delta = CreateLeafInsertModifyDelta(kDelete, keys_[id], payloads_[id]);
-      diff += delta->template AddByInsertionSortTo<Payload>(std::nullopt, records);
+      diff += delta->AddByInsertionSortTo(std::nullopt, records);
       entities.emplace_back(std::move(delta));
     }
     for (const auto &id : ids) {
       auto &&delta = CreateLeafInsertModifyDelta(kInsert, keys_[id], payloads_[id]);
-      diff += delta->template AddByInsertionSortTo<Payload>(std::nullopt, records);
+      diff += delta->AddByInsertionSortTo(std::nullopt, records);
       entities.emplace_back(std::move(delta));
     }
 

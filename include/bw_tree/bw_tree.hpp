@@ -411,7 +411,7 @@ class BwTree
       auto &&stack = SearchLeftmostLeaf();
       while (true) {
         const auto *head = stack.back()->template Load<Delta_t *>();
-        if (TryConsolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
+        if (TryConsolidate(head, node, kIsScan) != kAlreadyConsolidated) break;
         // concurrent consolidations may block scanning
       }
       begin_pos = 0;
@@ -758,6 +758,9 @@ class BwTree
 
   /// a flag for preventing a consolidate-operation from splitting a node.
   static constexpr bool kIsScan = true;
+
+  /// a flag for indicating leaf nodes.
+  static constexpr bool kIsLeaf = false;
 
   /**
    * @brief An internal enum for distinguishing a partial SMO status.
@@ -1198,7 +1201,7 @@ class BwTree
   {
     while (true) {
       const auto *head = GetHead(begin_key, closed, stack);
-      if (TryConsolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
+      if (TryConsolidate(head, node, kIsScan) != kAlreadyConsolidated) break;
       // concurrent consolidations may block scanning
     }
 
@@ -1264,9 +1267,7 @@ class BwTree
 
       // prepare a consolidated node
       auto *new_node = reinterpret_cast<Node_t *>(GetNodePage());
-      const auto rc = (head->IsLeaf()) ? TryConsolidate<Payload>(head, new_node)
-                                       : TryConsolidate<LogicalID *>(head, new_node);
-      switch (rc) {
+      switch (TryConsolidate(head, new_node)) {
         case kAlreadyConsolidated:
           // other threads have performed consolidation
           return;
@@ -1308,7 +1309,6 @@ class BwTree
    * @param is_scan a flag to prevent a split-operation.
    * @return the status of a consolidation result.
    */
-  template <class T>
   auto
   TryConsolidate(  //
       const Delta_t *head,
@@ -1316,24 +1316,24 @@ class BwTree
       const bool is_scan = false)  //
       -> SMOsRC
   {
-    constexpr auto kIsInner = std::is_same_v<T, LogicalID *>;
     constexpr auto kSepKeyLen = (kIsVarLen) ? kMaxKeyLen : 0;
     constexpr auto kMaxBlockSize = kPageSize - kHeaderLen - 2 * kSepKeyLen;
+    size_t size{};
 
     // sort delta records
     std::vector<Record> records{};
     std::vector<ConsolidateInfo> consol_info{};
     records.reserve(kMaxDeltaRecordNum * 4);
     consol_info.reserve(kMaxDeltaRecordNum);
-    const auto [consolidated, diff] = DC::template Sort<T>(head, records, consol_info);
+    const auto [consolidated, diff] = DC::Sort(head, records, consol_info);
     if (consolidated) return kAlreadyConsolidated;
 
     // calculate the size of a consolidated node
-    size_t size{};
     if constexpr (kIsVarLen) {
       size = Node_t::PreConsolidate(consol_info) + diff;
     } else {
-      size = (Node_t::PreConsolidate(consol_info) + diff) * (sizeof(Key) + sizeof(T));
+      const auto rec_len = sizeof(Key) + (head->IsLeaf() ? kPayLen : kPtrLen);
+      size = (Node_t::PreConsolidate(consol_info) + diff) * rec_len;
     }
 
     // check whether splitting is needed
@@ -1361,8 +1361,13 @@ class BwTree
     }
 
     // consolidate a target node
-    consol_node = new (page) Node_t{kIsInner, page_size, is_scan};
-    Consolidate<T>(consol_node, consol_info, records, do_split, page_size);
+    if (head->IsLeaf()) {
+      consol_node = new (page) Node_t{kIsLeaf, page_size, is_scan};
+      Consolidate<Payload>(consol_node, consol_info, records, do_split, page_size);
+    } else {
+      consol_node = new (page) Node_t{!kIsLeaf, page_size, is_scan};
+      Consolidate<LogicalID *>(consol_node, consol_info, records, do_split, page_size);
+    }
 
     if (do_split) return kTrySplit;
     if (size <= kMinNodeSize) return kTryMerge;

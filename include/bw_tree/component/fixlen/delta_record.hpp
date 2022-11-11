@@ -412,7 +412,6 @@ class alignas(kWordSize) DeltaRecord
    * @param records a set of records to be inserted this delta record.
    * @return the difference of a record count.
    */
-  template <class T>
   [[nodiscard]] auto
   AddByInsertionSortTo(  //
       const std::optional<Key> &sep_key,

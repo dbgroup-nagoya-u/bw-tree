@@ -462,7 +462,6 @@ class DeltaChain
    * @retval 1st: true if this node has been already consolidated.
    * @retval 2nd: the difference of node size in bytes.
    */
-  template <class T>
   static auto
   Sort(  //
       const DeltaRecord *delta,
@@ -480,10 +479,10 @@ class DeltaChain
         case kInsert:
         case kModify:
         case kDelete:
-          size_diff += delta->template AddByInsertionSortTo<T>(sep_key, records);
+          size_diff += delta->AddByInsertionSortTo(sep_key, records);
           break;
 
-        case kSplit:
+        case kSplit: {
           const auto &cur_key = delta->GetKey();
           if (!sep_key || Comp{}(cur_key, *sep_key)) {
             // keep a separator key to exclude out-of-range records
@@ -491,6 +490,7 @@ class DeltaChain
             split_d = delta;
           }
           break;
+        }
 
         case kMerge:
           // keep the merged node and the corresponding separator key

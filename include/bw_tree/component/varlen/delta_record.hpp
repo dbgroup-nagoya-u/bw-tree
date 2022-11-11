@@ -448,7 +448,6 @@ class alignas(kWordSize) DeltaRecord
    * @param records a set of records to be inserted this delta record.
    * @return the difference of a node size.
    */
-  template <class T>
   [[nodiscard]] auto
   AddByInsertionSortTo(  //
       const std::optional<Key> &sep_key,
@@ -471,7 +470,7 @@ class alignas(kWordSize) DeltaRecord
       }
 
       // update the page size
-      const auto rec_size = meta_.key_len + sizeof(T) + kMetaLen;
+      const auto rec_size = meta_.rec_len + kMetaLen;
       if (delta_type_ == kInsert) return rec_size;
       if (delta_type_ == kDelete) return -rec_size;
     }
