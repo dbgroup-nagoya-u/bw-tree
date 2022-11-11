@@ -96,23 +96,21 @@ class DeltaChain
     // traverse a delta chain
     for (; true; delta = delta->GetNext(), ++out_delta_num) {
       switch (delta->GetDeltaType()) {
-        case kInsert: {
+        case kInsert:
           if (delta->LowKeyIsLE(key, closed) && delta->HighKeyIsGE(key, !closed)) {
             // this index-entry delta directly indicates a child node
             out_ptr = delta->template GetPayload<uintptr_t>();
             return kRecordFound;
           }
           break;
-        }
 
-        case kDelete: {
+        case kDelete:
           if (delta->LowKeyIsLE(key, closed) && delta->HighKeyIsGE(key, !closed)) {
             // this index-entry delta directly indicates a child node
             out_ptr = delta->GetPayloadAtomically();
             return kRecordFound;
           }
           break;
-        }
 
         case kSplit: {
           if (!has_smo && delta->LowKeyIsLE(key, closed)) {
@@ -127,7 +125,7 @@ class DeltaChain
         case kRemoveNode:
           return kNodeRemoved;
 
-        case kMerge: {
+        case kMerge:
           // check whether the merged node contains a target key
           if (delta->LowKeyIsLE(key, closed)) {
             // check whether the node contains a target key
@@ -139,14 +137,13 @@ class DeltaChain
 
             // a target record may be in the merged node
             out_ptr = reinterpret_cast<uintptr_t>(merged_node);
-            return kReachMergedNode;
+            return kReachBaseNode;
           }
           has_smo = true;
           break;
-        }
 
         case kNotDelta:
-        default: {
+        default:
           if (!has_smo && !delta->HighKeyIsGE(key, !closed)) {
             // a sibling node includes a target key
             out_ptr = delta->template GetNext<uintptr_t>();
@@ -156,7 +153,6 @@ class DeltaChain
           // reach a base page
           out_ptr = reinterpret_cast<uintptr_t>(delta);
           return kReachBaseNode;
-        }
       }
     }
   }
@@ -187,22 +183,20 @@ class DeltaChain
     for (; true; delta = delta->GetNext(), ++out_delta_num) {
       switch (delta->GetDeltaType()) {
         case kInsert:
-        case kModify: {
+        case kModify:
           // check whether a target record is inserted
           if (delta->HasSameKey(key)) {
             out_ptr = reinterpret_cast<uintptr_t>(delta);
             return kRecordFound;
           }
           break;
-        }
 
-        case kDelete: {
+        case kDelete:
           // check whether a target record is deleted
           if (delta->HasSameKey(key)) return kRecordDeleted;
           break;
-        }
 
-        case kSplit: {
+        case kSplit:
           // check whether the right-sibling node contains a target key
           if (!has_smo && delta->LowKeyIsLE(key, kClosed)) {
             out_ptr = delta->template GetPayload<uintptr_t>();
@@ -210,12 +204,11 @@ class DeltaChain
           }
           has_smo = true;
           break;
-        }
 
         case kRemoveNode:
           return kNodeRemoved;
 
-        case kMerge: {
+        case kMerge:
           // check whether the merged node contains a target key
           if (delta->LowKeyIsLE(key, kClosed)) {
             // check whether the node contains a target key
@@ -227,14 +220,13 @@ class DeltaChain
 
             // a target record may be in the merged node
             out_ptr = reinterpret_cast<uintptr_t>(merged_node);
-            return kReachMergedNode;
+            return kReachBaseNode;
           }
           has_smo = true;
           break;
-        }
 
         case kNotDelta:
-        default: {
+        default:
           // check whether the node contains a target key
           if (!has_smo && !delta->HighKeyIsGE(key, kOpen)) {
             out_ptr = delta->template GetNext<uintptr_t>();
@@ -244,7 +236,6 @@ class DeltaChain
           // a target record may be in the base node
           out_ptr = reinterpret_cast<uintptr_t>(delta);
           return kReachBaseNode;
-        }
       }
     }
   }
@@ -277,7 +268,7 @@ class DeltaChain
     // traverse a delta chain
     for (; true; delta = delta->GetNext(), ++out_delta_num) {
       switch (delta->GetDeltaType()) {
-        case kInsert: {
+        case kInsert:
           // check whether a target record is inserted
           if (!key_found && delta->HasSameKey(key)) {
             key_found = true;
@@ -288,14 +279,12 @@ class DeltaChain
             if (key_found) return kRecordFound;
           }
           break;
-        }
 
-        case kDelete: {
+        case kDelete:
           // check whether a target record is deleted
           if (!key_found && delta->HasSameKey(key)) return kAbortMerge;
           if (!sib_key_found && delta->HasSameKey(*sib_key)) return kAbortMerge;  // merged node
           break;
-        }
 
         case kSplit:
           // check whether the right-sibling node contains a target key
@@ -327,7 +316,7 @@ class DeltaChain
 
             // a target record may be in the merged node
             out_ptr = reinterpret_cast<uintptr_t>(merged_node);
-            return kReachMergedNode;
+            return kReachBaseNode;
           }
           if (!sib_key_found && delta->HasSameKey(*sib_key)) {
             sib_key_found = true;
@@ -337,7 +326,7 @@ class DeltaChain
           break;
 
         case kNotDelta:
-        default: {
+        default:
           // check whether the node contains a target key
           if (!key_found) {
             if (!delta->IsLeftmost() && delta->HasSameKey(key)) return kAbortMerge;
@@ -350,7 +339,6 @@ class DeltaChain
           // a target record may be in the base node
           out_ptr = reinterpret_cast<uintptr_t>(delta);
           return kReachBaseNode;
-        }
       }
     }
   }
@@ -389,7 +377,7 @@ class DeltaChain
 
         case kMerge: {
           if (rc == kReachBaseNode) {
-            rc = kReachMergedNode;
+            rc = kReachBaseNode;
           }
           break;
         }
@@ -429,7 +417,7 @@ class DeltaChain
     // traverse a delta chain
     for (; true; delta = delta->GetNext(), ++out_delta_num) {
       switch (delta->GetDeltaType()) {
-        case kSplit: {
+        case kSplit:
           // check whether the right-sibling node contains a target key
           if (!has_smo && delta->LowKeyIsLE(key, closed)) {
             out_ptr = delta->template GetPayload<uintptr_t>();
@@ -437,29 +425,26 @@ class DeltaChain
           }
           has_smo = true;
           break;
-        }
 
         case kRemoveNode:
           return kNodeRemoved;
 
-        case kMerge: {
+        case kMerge:
           // check whether the node contains a target key
           if (!has_smo && !delta->HighKeyIsGE(key, !closed)) {
             const auto *merged_node = delta->template GetPayload<DeltaRecord *>();
             out_ptr = merged_node->template GetNext<uintptr_t>();
             return kKeyIsInSibling;
           }
-          return kReachMergedNode;
-        }
+          return kReachBaseNode;
 
-        case kNotDelta: {
+        case kNotDelta:
           // check whether the node contains a target key
           if (!has_smo && !delta->HighKeyIsGE(key, !closed)) {
             out_ptr = delta->template GetNext<uintptr_t>();
             return kKeyIsInSibling;
           }
           return kReachBaseNode;
-        }
 
         default:
           break;  // do nothing
@@ -494,12 +479,11 @@ class DeltaChain
       switch (delta->GetDeltaType()) {
         case kInsert:
         case kModify:
-        case kDelete: {
+        case kDelete:
           size_diff += delta->template AddByInsertionSortTo<T>(sep_key, records);
           break;
-        }
 
-        case kSplit: {
+        case kSplit:
           const auto &cur_key = delta->GetKey();
           if (!sep_key || Comp{}(cur_key, *sep_key)) {
             // keep a separator key to exclude out-of-range records
@@ -507,13 +491,11 @@ class DeltaChain
             split_d = delta;
           }
           break;
-        }
 
-        case kMerge: {
+        case kMerge:
           // keep the merged node and the corresponding separator key
           consol_info.emplace_back(delta->template GetPayload<DeltaRecord *>(), split_d);
           break;
-        }
 
         case kNotDelta:
         default:
