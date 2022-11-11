@@ -347,54 +347,6 @@ class DeltaChain
    * @brief Traverse a delta-chain to check this node is valid for modifying this tree.
    *
    * @param delta the head record in a delta-chain.
-   * @param out_ptr an output pointer if needed.
-   * @param out_delta_num the number of records in this delta-chain.
-   * @retval kReachBaseNode if this node does not have partial SMOs.
-   * @retval kNodeRemoved if this node is removed by other SMOs.
-   * @retval kPartialSplitMayExist if this node may be in splitting.
-   */
-  static auto
-  CheckPartialSMOs(  //
-      const DeltaRecord *delta,
-      uintptr_t &out_ptr,
-      size_t &out_delta_num)  //
-      -> DeltaRC
-  {
-    auto rc = kReachBaseNode;
-
-    // traverse a delta chain
-    for (; true; delta = delta->GetNext(), ++out_delta_num) {
-      switch (delta->GetDeltaType()) {
-        case kSplit:
-          if (rc == kReachBaseNode) {
-            rc = kPartialSplitMayExist;
-            out_ptr = reinterpret_cast<uintptr_t>(delta);
-          }
-          break;
-
-        case kRemoveNode:
-          return kNodeRemoved;
-
-        case kMerge: {
-          if (rc == kReachBaseNode) {
-            rc = kReachBaseNode;
-          }
-          break;
-        }
-
-        case kNotDelta:
-          return rc;
-
-        default:
-          break;  // do nothing
-      }
-    }
-  }
-
-  /**
-   * @brief Traverse a delta-chain to check this node is valid for modifying this tree.
-   *
-   * @param delta the head record in a delta-chain.
    * @param key a target key to be searched.
    * @param closed a flag for including the same key.
    * @param out_ptr an output pointer if needed.
@@ -466,7 +418,8 @@ class DeltaChain
   Sort(  //
       const DeltaRecord *delta,
       std::vector<Record> &records,
-      std::vector<ConsolidateInfo> &consol_info)  //
+      std::vector<ConsolidateInfo> &consol_info,
+      const bool is_scan)  //
       -> std::pair<bool, int64_t>
   {
     std::optional<Key> sep_key = std::nullopt;
@@ -474,7 +427,7 @@ class DeltaChain
 
     // traverse and sort a delta chain
     int64_t size_diff = 0;
-    for (; true; delta = delta->GetNext()) {
+    for (size_t delta_num = 0; true; delta = delta->GetNext(), ++delta_num) {
       switch (delta->GetDeltaType()) {
         case kInsert:
         case kModify:
@@ -492,6 +445,9 @@ class DeltaChain
           break;
         }
 
+        case kRemoveNode:
+          return {true, 0};  // abort consolidation
+
         case kMerge:
           // keep the merged node and the corresponding separator key
           consol_info.emplace_back(delta->template GetPayload<DeltaRecord *>(), split_d);
@@ -500,7 +456,7 @@ class DeltaChain
         case kNotDelta:
         default:
           consol_info.emplace_back(delta, split_d);
-          return {false, size_diff};
+          return {!is_scan && delta_num < kMaxDeltaRecordNum, size_diff};
       }
     }
   }

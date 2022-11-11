@@ -1025,43 +1025,6 @@ class BwTree
   }
 
   /**
-   * @brief Get the head pointer of a logical node and complete partial SMOs if exist.
-   *
-   * @param stack a stack of traversed nodes.
-   * @retval 1st: the head of this logical node.
-   * @retval 2nd: the number of delta records in this node.
-   */
-  auto
-  GetHeadForConsolidation(std::vector<LogicalID *> &stack)  //
-      -> std::pair<const Delta_t *, size_t>
-  {
-    // check whether the node has partial SMOs
-    const auto *head = stack.back()->template Load<Delta_t *>();
-    if (head == nullptr) return {nullptr, 0};  // abort consolidation
-
-    // check whether the node is active
-    uintptr_t out_ptr = 0;
-    size_t delta_num = 0;
-    switch (DC::CheckPartialSMOs(head, out_ptr, delta_num)) {
-      case DeltaRC::kNodeRemoved:
-        // abort consolidation
-        return {nullptr, 0};
-
-      case DeltaRC::kPartialSplitMayExist: {
-        // const auto *split_d = reinterpret_cast<Delta_t *>(out_ptr);
-        // CompleteSplit(split_d, stack);
-        break;
-      }
-
-      case DeltaRC::kReachBaseNode:
-      default:
-        break;  // do nothing
-    }
-
-    return {head, delta_num};
-  }
-
-  /**
    * @brief Get the head pointer of a logical node and check key existence.
    *
    * @param key a search key.
@@ -1261,11 +1224,8 @@ class BwTree
       while (!stack.empty() && stack.back() != target_lid) stack.pop_back();
       if (stack.empty()) return;
 
-      // check whether the target node is valid (containing a target key and no incomplete SMOs)
-      const auto [head, delta_rec_num] = GetHeadForConsolidation(stack);
-      if (head == nullptr || delta_rec_num < kMaxDeltaRecordNum) return;
-
       // prepare a consolidated node
+      const auto *head = stack.back()->template Load<Delta_t *>();
       auto *new_node = reinterpret_cast<Node_t *>(GetNodePage());
       switch (TryConsolidate(head, new_node)) {
         case kAlreadyConsolidated:
@@ -1294,9 +1254,6 @@ class BwTree
 
       // if consolidation is failed, keep the allocated page to reuse
       tls_node_page_.reset(new_node);
-
-      // no retry if the number of delta records is sufficiently small
-      if (delta_rec_num < 2 * kMaxDeltaRecordNum) return;
     }
   }
 
@@ -1325,7 +1282,7 @@ class BwTree
     std::vector<ConsolidateInfo> consol_info{};
     records.reserve(kMaxDeltaRecordNum * 4);
     consol_info.reserve(kMaxDeltaRecordNum);
-    const auto [consolidated, diff] = DC::Sort(head, records, consol_info);
+    const auto [consolidated, diff] = DC::Sort(head, records, consol_info, is_scan);
     if (consolidated) return kAlreadyConsolidated;
 
     // calculate the size of a consolidated node
