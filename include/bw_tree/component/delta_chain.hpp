@@ -76,7 +76,6 @@ class DeltaChain
    * @param key a target key to be searched.
    * @param closed a flag for including the same key.
    * @param out_ptr an output pointer if needed.
-   * @param out_delta_num the number of records in this delta-chain.
    * @retval kRecordFound if a delta record (in out_ptr) has a corresponding child.
    * @retval kReachBaseNode if a base node (in out_ptr) has a corresponding child.
    * @retval kKeyIsInSibling if the target key is not in this node due to other SMOs.
@@ -87,14 +86,13 @@ class DeltaChain
       const DeltaRecord *delta,
       const Key &key,
       const bool closed,
-      uintptr_t &out_ptr,
-      size_t &out_delta_num)  //
+      uintptr_t &out_ptr)  //
       -> DeltaRC
   {
     auto has_smo = false;
 
     // traverse a delta chain
-    for (; true; delta = delta->GetNext(), ++out_delta_num) {
+    for (; true; delta = delta->GetNext()) {
       switch (delta->GetDeltaType()) {
         case kInsert:
           if (delta->LowKeyIsLE(key, closed) && delta->HighKeyIsGE(key, !closed)) {
@@ -163,7 +161,6 @@ class DeltaChain
    * @param delta the head record in a delta-chain.
    * @param key a target key to be searched.
    * @param out_ptr an output pointer if needed.
-   * @param out_delta_num the number of records in this delta-chain.
    * @retval kRecordFound if a delta record (in out_ptr) has the given key.
    * @retval kReachBaseNode if a base node (in out_ptr) may have the given key.
    * @retval kKeyIsInSibling if the target key is not in this node due to other SMOs.
@@ -173,14 +170,13 @@ class DeltaChain
   SearchRecord(  //
       const DeltaRecord *delta,
       const Key &key,
-      uintptr_t &out_ptr,
-      size_t &out_delta_num)  //
+      uintptr_t &out_ptr)  //
       -> DeltaRC
   {
     auto has_smo = false;
 
     // traverse a delta chain
-    for (; true; delta = delta->GetNext(), ++out_delta_num) {
+    for (; true; delta = delta->GetNext()) {
       switch (delta->GetDeltaType()) {
         case kInsert:
         case kModify:
@@ -246,7 +242,6 @@ class DeltaChain
    * @param delta the head record in a delta-chain.
    * @param key a target key to be searched.
    * @param out_ptr an output pointer if needed.
-   * @param out_delta_num the number of records in this delta-chain.
    * @retval kRecordFound if a delta record (in out_ptr) has the given key.
    * @retval kReachBaseNode if a base node (in out_ptr) may have the given key.
    * @retval kKeyIsInSibling if the target key is not in this node due to other SMOs.
@@ -258,7 +253,6 @@ class DeltaChain
       const Key &key,
       const std::optional<Key> &sib_key,
       uintptr_t &out_ptr,
-      size_t &out_delta_num,
       bool &key_found,
       bool &sib_key_found)  //
       -> DeltaRC
@@ -266,7 +260,7 @@ class DeltaChain
     auto has_smo = false;
 
     // traverse a delta chain
-    for (; true; delta = delta->GetNext(), ++out_delta_num) {
+    for (; true; delta = delta->GetNext()) {
       switch (delta->GetDeltaType()) {
         case kInsert:
           // check whether a target record is inserted
@@ -350,7 +344,6 @@ class DeltaChain
    * @param key a target key to be searched.
    * @param closed a flag for including the same key.
    * @param out_ptr an output pointer if needed.
-   * @param out_delta_num the number of records in this delta-chain.
    * @retval kReachBaseNode if this node is valid for the given key.
    * @retval kKeyIsInSibling if the target key is not in this node due to other SMOs.
    * @retval kNodeRemoved if this node is removed by other SMOs.
@@ -360,14 +353,13 @@ class DeltaChain
       const DeltaRecord *delta,
       const Key &key,
       const bool closed,
-      uintptr_t &out_ptr,
-      size_t &out_delta_num)  //
+      uintptr_t &out_ptr)  //
       -> DeltaRC
   {
     auto has_smo = false;
 
     // traverse a delta chain
-    for (; true; delta = delta->GetNext(), ++out_delta_num) {
+    for (; true; delta = delta->GetNext()) {
       switch (delta->GetDeltaType()) {
         case kSplit:
           // check whether the right-sibling node contains a target key

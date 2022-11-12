@@ -338,8 +338,7 @@ class BwTree
       const auto *head = stack.back()->template Load<Delta_t *>();
 
       uintptr_t out_ptr{};
-      size_t delta_num = 0;
-      auto rc = DC::SearchRecord(head, key, out_ptr, delta_num);
+      auto rc = DC::SearchRecord(head, key, out_ptr);
       switch (rc) {
         case DeltaRC::kRecordFound:
           payload = reinterpret_cast<Delta_t *>(out_ptr)->template GetPayload<Payload>();
@@ -371,7 +370,7 @@ class BwTree
         }
       }
 
-      if (delta_num >= kMaxDeltaRecordNum) {
+      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
         consol_page_ = stack.back();
       }
 
@@ -865,12 +864,11 @@ class BwTree
     }
 
     for (uintptr_t out_ptr{}; true;) {
-      size_t delta_num = 0;
       const auto *head = stack.back()->template Load<Delta_t *>();
-      switch (DC::SearchChildNode(head, key, closed, out_ptr, delta_num)) {
+      switch (DC::SearchChildNode(head, key, closed, out_ptr)) {
         case DeltaRC::kRecordFound:
           stack.emplace_back(reinterpret_cast<LogicalID *>(out_ptr));
-          return;
+          break;
 
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
@@ -885,16 +883,17 @@ class BwTree
 
         case DeltaRC::kReachBaseNode:
         default: {
-          if (delta_num >= kMaxDeltaRecordNum) {
-            consol_page_ = stack.back();
-          }
-
           // search a child node in a base node
           const auto *node = reinterpret_cast<Node_t *>(out_ptr);
           stack.emplace_back(node->SearchChild(key, closed));
-          return;
+          break;
         }
       }
+
+      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
+        consol_page_ = stack.back();
+      }
+      return;
     }
   }
 
@@ -998,8 +997,7 @@ class BwTree
     for (uintptr_t out_ptr{}; true;) {
       // check whether the node is active and can include a target key
       const auto *head = stack.back()->template Load<Delta_t *>();
-      size_t delta_num = 0;
-      switch (DC::Validate(head, key, closed, out_ptr, delta_num)) {
+      switch (DC::Validate(head, key, closed, out_ptr)) {
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
           stack.back() = reinterpret_cast<LogicalID *>(out_ptr);
@@ -1016,7 +1014,7 @@ class BwTree
           break;  // do nothing
       }
 
-      if (delta_num >= kMaxDeltaRecordNum) {
+      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
         consol_page_ = stack.back();
       }
 
@@ -1041,8 +1039,7 @@ class BwTree
     for (uintptr_t out_ptr{}; true;) {
       // check whether the node is active and has a target key
       const auto *head = stack.back()->template Load<Delta_t *>();
-      size_t delta_num = 0;
-      auto rc = DC::SearchRecord(head, key, out_ptr, delta_num);
+      auto rc = DC::SearchRecord(head, key, out_ptr);
       switch (rc) {
         case DeltaRC::kRecordFound:
         case DeltaRC::kRecordDeleted:
@@ -1067,7 +1064,7 @@ class BwTree
         }
       }
 
-      if (delta_num >= kMaxDeltaRecordNum) {
+      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
         consol_page_ = stack.back();
       }
 
@@ -1094,9 +1091,8 @@ class BwTree
       // check whether the node is active and has a target key
       const auto *head = stack.back()->template Load<Delta_t *>();
       auto key_found = false;
-      auto s_key_found = !sib_key;
-      size_t d_num = 0;
-      auto rc = DC::SearchForMerge(head, key, sib_key, out_ptr, d_num, key_found, s_key_found);
+      auto sib_key_found = !sib_key;
+      auto rc = DC::SearchForMerge(head, key, sib_key, out_ptr, key_found, sib_key_found);
       switch (rc) {
         case DeltaRC::kRecordFound:
         case DeltaRC::kAbortMerge:
@@ -1121,19 +1117,19 @@ class BwTree
               key_found = true;
             }
           }
-          if (!s_key_found) {
+          if (!sib_key_found) {
             if (node->SearchRecord(*sib_key).first != DeltaRC::kRecordFound) {
               rc = DeltaRC::kAbortMerge;
               break;
             }
-            s_key_found = true;
+            sib_key_found = true;
           }
-          rc = (key_found && s_key_found) ? DeltaRC::kRecordFound : DeltaRC::kAbortMerge;
+          rc = (key_found && sib_key_found) ? DeltaRC::kRecordFound : DeltaRC::kAbortMerge;
           break;
         }
       }
 
-      if (d_num >= kMaxDeltaRecordNum) {
+      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
         consol_page_ = stack.back();
       }
 
@@ -1403,7 +1399,8 @@ class BwTree
     // create a split-delta record
     auto *sib_lid = mapping_table_.GetNewLogicalID();
     sib_lid->Store(split_node);
-    auto *split_d = new (GetRecPage()) Delta_t{DeltaType::kSplit, split_node, sib_lid, head};
+    auto *split_d = new (GetRecPage()) Delta_t{DeltaType::kSplit, split_node, sib_lid};
+    split_d->SetNext(head);
 
     // install the delta record for splitting a child node
     if (!stack.back()->CASStrong(head, split_d)) {

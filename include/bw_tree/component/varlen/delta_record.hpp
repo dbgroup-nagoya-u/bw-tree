@@ -150,16 +150,12 @@ class alignas(kWordSize) DeltaRecord
    * @param delta_type a split or merge delta.
    * @param right_node a split/merged right node.
    * @param right_lid the address of a split/merged right node.
-   * @param next a pointer to the next delta record or base node.
    */
   DeltaRecord(  //
       const DeltaType delta_type,
       const DeltaRecord *right_node,
-      const void *right_lid,
-      const DeltaRecord *next = nullptr)
-      : is_inner_{right_node->is_inner_},
-        delta_type_{delta_type},
-        next_{reinterpret_cast<uintptr_t>(next)}
+      const void *right_lid)
+      : is_inner_{right_node->is_inner_}, delta_type_{delta_type}
   {
     // copy a lowest key
     auto key_len = right_node->meta_.key_len;
@@ -279,7 +275,17 @@ class alignas(kWordSize) DeltaRecord
   GetDeltaType() const  //
       -> DeltaType
   {
-    return DeltaType{delta_type_};
+    return static_cast<DeltaType>(delta_type_);
+  }
+
+  /**
+   * @return the number of delta records in this chain.
+   */
+  [[nodiscard]] constexpr auto
+  GetRecordCount() const  //
+      -> size_t
+  {
+    return rec_count_;
   }
 
   /**
@@ -395,6 +401,7 @@ class alignas(kWordSize) DeltaRecord
   void
   SetNext(const DeltaRecord *next)
   {
+    rec_count_ = (next->delta_type_ == kNotDelta) ? 1 : next->rec_count_ + 1;
     next_ = reinterpret_cast<uintptr_t>(next);
   }
 
@@ -572,6 +579,12 @@ class alignas(kWordSize) DeltaRecord
 
   /// a flag for indicating the types of delta records.
   uint16_t delta_type_ : 3;
+
+  /// a blank block for alignment.
+  uint16_t : 0;
+
+  /// the number of delta records in this chain.
+  uint16_t rec_count_{0};
 
   /// a blank block for alignment.
   uint64_t : 0;
