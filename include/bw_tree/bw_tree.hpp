@@ -789,7 +789,7 @@ class BwTree
     if (tls_node_page_) return tls_node_page_.release();
 
     auto *page = gc_.template GetPageIfPossible<Node_t>();
-    return (page == nullptr) ? (::operator new(kPageSize)) : page;
+    return (page == nullptr) ? (aligned_alloc(kCacheLineSize, kPageSize)) : page;
   }
 
   /**
@@ -804,7 +804,7 @@ class BwTree
     if (tls_delta_page_) return tls_delta_page_.release();
 
     auto *page = gc_.template GetPageIfPossible<Delta_t>();
-    return (page == nullptr) ? (::operator new(kDeltaRecSize)) : page;
+    return (page == nullptr) ? (aligned_alloc(kCacheLineSize, kDeltaRecSize)) : page;
   }
 
   /**

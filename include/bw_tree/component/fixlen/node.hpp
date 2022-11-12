@@ -34,7 +34,7 @@ namespace dbgroup::index::bw_tree::component::fixlen
  * @tparam Comp a comparetor class for keys.
  */
 template <class Key, class Comp>
-class alignas(kWordSize) Node
+class Node
 {
  public:
   /*####################################################################################

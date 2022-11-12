@@ -35,7 +35,7 @@ namespace dbgroup::index::bw_tree::component::fixlen
  * @tparam Comp a comparetor class for keys.
  */
 template <class Key_t, class Comp_t>
-class alignas(kWordSize) DeltaRecord
+class DeltaRecord
 {
  public:
   /*####################################################################################
@@ -409,7 +409,7 @@ class alignas(kWordSize) DeltaRecord
       -> size_t
   {
     constexpr auto kPayLen = (sizeof(Payload) > kPtrLen) ? sizeof(Payload) : kPtrLen;
-    return kHeaderLen + kPayLen + kWordSize;
+    return (kHeaderLen + kPayLen + kCacheAlign) & ~kCacheAlign;
   }
 
   /**
@@ -463,9 +463,7 @@ class alignas(kWordSize) DeltaRecord
   /// the length of child pointers.
   static constexpr size_t kPtrLen = sizeof(LogicalID *);
 
-  static constexpr size_t kAlignMask = 0b111;
-
-  static constexpr size_t kPayOffset = (kHeaderLen + kAlignMask) & ~kAlignMask;
+  static constexpr size_t kPayOffset = (kHeaderLen + kWordAlign) & ~kWordAlign;
 
   /*####################################################################################
    * Internal getters/setters

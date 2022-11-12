@@ -37,7 +37,7 @@ namespace dbgroup::index::bw_tree::component::varlen
  * @tparam Comp a comparetor class for keys.
  */
 template <class Key_t, class Comp_t>
-class alignas(kWordSize) DeltaRecord
+class DeltaRecord
 {
  public:
   /*####################################################################################
@@ -118,12 +118,10 @@ class alignas(kWordSize) DeltaRecord
       [[maybe_unused]] const LogicalID *left_lid)
       : is_inner_{kInternal}, delta_type_{kDelete}
   {
-    constexpr size_t kAlignMask = 0b111;
-
     // copy a lowest key
     const auto low_meta = removed_node->meta_;
     const auto low_key_len = low_meta.key_len;
-    auto offset = ((kHeaderLen + kAlignMask + low_key_len) & ~kAlignMask) - low_key_len;
+    auto offset = ((kHeaderLen + kWordAlign + low_key_len) & ~kWordAlign) - low_key_len;
     meta_ = Metadata{offset, low_key_len, low_key_len + kPtrLen};
     memcpy(ShiftAddr(this, offset), removed_node->GetKeyAddr(low_meta), low_key_len);
 
@@ -444,7 +442,7 @@ class alignas(kWordSize) DeltaRecord
   {
     constexpr auto kKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
     constexpr auto kPayLen = (sizeof(Payload) > kPtrLen) ? sizeof(Payload) : kPtrLen;
-    return kHeaderLen + 2 * kKeyLen + kPayLen + kWordSize;
+    return (kHeaderLen + 2 * kKeyLen + kPayLen + kCacheAlign) & ~kCacheAlign;
   }
 
   /**

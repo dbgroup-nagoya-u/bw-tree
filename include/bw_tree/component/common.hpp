@@ -73,8 +73,11 @@ enum DeltaType : uint16_t {
  * Internal constants
  *####################################################################################*/
 
-/// Assumes that one word is represented by 8 bytes.
-constexpr size_t kWordSize = sizeof(uintptr_t);
+/// bits for word alignments.
+constexpr size_t kWordAlign = kWordSize - 1;
+
+/// bits for cache line alignments.
+constexpr size_t kCacheAlign = kCacheLineSize - 1;
 
 /// the NULL value for uintptr_t
 constexpr uintptr_t kNullPtr = 0;
