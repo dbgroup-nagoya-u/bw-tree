@@ -238,16 +238,11 @@ class DeltaRecordFixture : public testing::Test
   void
   VerifyRemoveNodeConstructor()
   {
-    const auto &key = keys_[0];
-    const auto &payload = payloads_[0];
-    const auto &dummy_d = CreateLeafInsertModifyDelta(kInsert, key, payload);
-
-    auto *raw_p = new (GetPage()) Delta_t{true};
-    std::unique_ptr<Delta_t> delta{raw_p};
+    std::unique_ptr<Delta_t> delta{new (GetPage()) Delta_t{true}};
 
     EXPECT_TRUE(delta->IsLeaf());
     EXPECT_EQ(kRemoveNode, delta->GetDeltaType());
-    EXPECT_EQ(dummy_d.get(), delta->GetNext());
+    EXPECT_EQ(nullptr, delta->GetNext());
   }
 
   void
