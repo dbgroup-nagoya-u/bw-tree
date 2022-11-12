@@ -1226,6 +1226,7 @@ class BwTree
       switch (TryConsolidate(head, new_node)) {
         case kAlreadyConsolidated:
           // other threads have performed consolidation
+          tls_node_page_.reset(new_node);
           return;
 
         case kTrySplit:
