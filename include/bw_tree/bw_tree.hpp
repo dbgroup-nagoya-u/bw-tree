@@ -1230,23 +1230,22 @@ class BwTree
           return;
 
         case kTrySplit:
-          TrySplit(head, reinterpret_cast<Delta_t *>(new_node), stack);
-          continue;  // retry from consolidation
+          if (TrySplit(head, reinterpret_cast<Delta_t *>(new_node), stack)) return;
+          break;  // retry from consolidation
 
         case kTryMerge:
           if (TryMerge(head, new_node, stack)) return;
-          continue;  // retry from consolidation
+          break;  // retry from consolidation
 
         case kConsolidate:
         default:
-          break;  // perform consolidation
-      }
-
-      // install a consolidated node
-      if (target_lid->CASStrong(head, new_node)) {
-        // delete consolidated delta records and a base node
-        AddToGC(head);
-        return;
+          // install a consolidated node
+          if (target_lid->CASStrong(head, new_node)) {
+            // delete consolidated delta records and a base node
+            AddToGC(head);
+            return;
+          }
+          break;  // retry from consolidation
       }
 
       // if consolidation is failed, keep the allocated page to reuse
@@ -1408,7 +1407,6 @@ class BwTree
       // retry from consolidation
       sib_lid->Clear();
       tls_delta_page_.reset(split_d);
-      tls_node_page_.reset(reinterpret_cast<Node_t *>(split_node));
       return false;
     }
 
@@ -1509,7 +1507,6 @@ class BwTree
     if (!removed_lid->CASStrong(head, remove_d)) {
       // retry from consolidation
       tls_delta_page_.reset(remove_d);
-      tls_node_page_.reset(removed_node);
       return false;
     }
     AddToGC(head);
@@ -1521,24 +1518,24 @@ class BwTree
     if (delete_d == nullptr) {
       // check this tree should be shrinked
       if (TryRemoveRoot(removed_node, removed_lid, stack)) return true;
+
       // merging has failed, but consolidation succeeds
       removed_lid->Store(removed_node);
       AddToGC(remove_d);
-      return true;
-    }
+    } else {
+      // search a left sibling node
+      const auto &sep_key = *low_key;
+      SearchChildNode(sep_key, kOpen, stack);
 
-    // search a left sibling node
-    const auto &sep_key = *low_key;
-    SearchChildNode(sep_key, kOpen, stack);
-
-    // insert a merge delta into the left sibling node
-    auto *merge_d = new (GetRecPage()) Delta_t{DeltaType::kMerge, removed_node_d, removed_node};
-    while (true) {  // continue until insertion succeeds
-      const auto *sib_head = GetHead(sep_key, kOpen, stack);
-      merge_d->SetNext(sib_head);
-      if (stack.back()->CASWeak(sib_head, merge_d)) break;
+      // insert a merge delta into the left sibling node
+      auto *merge_d = new (GetRecPage()) Delta_t{DeltaType::kMerge, removed_node_d, removed_node};
+      while (true) {  // continue until insertion succeeds
+        const auto *sib_head = GetHead(sep_key, kOpen, stack);
+        merge_d->SetNext(sib_head);
+        if (stack.back()->CASWeak(sib_head, merge_d)) break;
+      }
+      delete_d->SetSiblingLID(stack.back());
     }
-    delete_d->SetSiblingLID(stack.back());
 
     // execute recursive SMOs if needed
     if (consol_page_ != nullptr) {
