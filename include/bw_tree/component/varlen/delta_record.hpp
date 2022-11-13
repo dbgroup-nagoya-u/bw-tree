@@ -267,6 +267,17 @@ class DeltaRecord
   }
 
   /**
+   * @retval true if there is a delta chain.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] constexpr auto
+  NeedConsolidation() const  //
+      -> bool
+  {
+    return delta_type_ != kNotDelta && delta_type_ != kRemoveNode;
+  }
+
+  /**
    * @return the modification type of this delta record.
    */
   [[nodiscard]] constexpr auto

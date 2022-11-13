@@ -370,14 +370,6 @@ class BwTree
         }
       }
 
-      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
-        consol_page_ = stack.back();
-      }
-
-      if (consol_page_ != nullptr) {
-        TrySMOs(consol_page_, stack);
-      }
-
       if (rc == DeltaRC::kRecordDeleted) return std::nullopt;
       return payload;
     }
@@ -410,8 +402,9 @@ class BwTree
       auto &&stack = SearchLeftmostLeaf();
       while (true) {
         const auto *head = stack.back()->template Load<Delta_t *>();
-        if (TryConsolidate(head, node, kIsScan) != kAlreadyConsolidated) break;
-        // concurrent consolidations may block scanning
+        if (head->GetDeltaType() == DeltaType::kRemoveNode) continue;
+        TryConsolidate(head, node, kIsScan);
+        break;
       }
       begin_pos = 0;
     }
@@ -1160,8 +1153,9 @@ class BwTree
   {
     while (true) {
       const auto *head = GetHead(begin_key, closed, stack);
-      if (TryConsolidate(head, node, kIsScan) != kAlreadyConsolidated) break;
-      // concurrent consolidations may block scanning
+      if (head->GetDeltaType() == DeltaType::kRemoveNode) continue;
+      TryConsolidate(head, node, kIsScan);
+      break;
     }
 
     // check the begin position for scanning
@@ -1222,13 +1216,9 @@ class BwTree
 
       // prepare a consolidated node
       const auto *head = stack.back()->template Load<Delta_t *>();
+      if (!head->NeedConsolidation()) return;
       auto *new_node = reinterpret_cast<Node_t *>(GetNodePage());
       switch (TryConsolidate(head, new_node)) {
-        case kAlreadyConsolidated:
-          // other threads have performed consolidation
-          tls_node_page_.reset(new_node);
-          return;
-
         case kTrySplit:
           if (TrySplit(head, reinterpret_cast<Delta_t *>(new_node), stack)) return;
           break;  // retry from consolidation
@@ -1250,6 +1240,7 @@ class BwTree
 
       // if consolidation is failed, keep the allocated page to reuse
       tls_node_page_.reset(new_node);
+      if (head->GetRecordCount() < kMaxDeltaRecordNum * 4) return;
     }
   }
 
@@ -1274,12 +1265,11 @@ class BwTree
     size_t size{};
 
     // sort delta records
-    std::vector<Record> records{};
-    std::vector<ConsolidateInfo> consol_info{};
-    records.reserve(kMaxDeltaRecordNum * 4);
-    consol_info.reserve(kMaxDeltaRecordNum);
-    const auto [consolidated, diff] = DC::Sort(head, records, consol_info, is_scan);
-    if (consolidated) return kAlreadyConsolidated;
+    thread_local std::vector<Record> records(kMaxDeltaRecordNum * 4);
+    thread_local std::vector<ConsolidateInfo> consol_info(kMaxDeltaRecordNum);
+    records.clear();
+    consol_info.clear();
+    const auto diff = DC::Sort(head, records, consol_info);
 
     // calculate the size of a consolidated node
     if constexpr (kIsVarLen) {

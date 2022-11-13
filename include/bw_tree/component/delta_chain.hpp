@@ -410,16 +410,14 @@ class DeltaChain
   Sort(  //
       const DeltaRecord *delta,
       std::vector<Record> &records,
-      std::vector<ConsolidateInfo> &consol_info,
-      const bool is_scan)  //
-      -> std::pair<bool, int64_t>
+      std::vector<ConsolidateInfo> &consol_info)  //
+      -> int64_t
   {
     std::optional<Key> sep_key = std::nullopt;
     const DeltaRecord *split_d = nullptr;
 
     // traverse and sort a delta chain
-    int64_t size_diff = 0;
-    for (size_t delta_num = 0; true; delta = delta->GetNext(), ++delta_num) {
+    for (int64_t size_diff = 0; true; delta = delta->GetNext()) {
       switch (delta->GetDeltaType()) {
         case kInsert:
         case kModify:
@@ -437,9 +435,6 @@ class DeltaChain
           break;
         }
 
-        case kRemoveNode:
-          return {true, 0};  // abort consolidation
-
         case kMerge:
           // keep the merged node and the corresponding separator key
           consol_info.emplace_back(delta->template GetPayload<DeltaRecord *>(), split_d);
@@ -448,7 +443,7 @@ class DeltaChain
         case kNotDelta:
         default:
           consol_info.emplace_back(delta, split_d);
-          return {!is_scan && delta_num < kMaxDeltaRecordNum, size_diff};
+          return size_diff;
       }
     }
   }
