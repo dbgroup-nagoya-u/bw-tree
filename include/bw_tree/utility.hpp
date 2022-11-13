@@ -18,6 +18,7 @@
 #define BW_TREE_UTILITY_HPP
 
 #include <cassert>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -118,6 +119,18 @@ constexpr size_t kMinNodeSize = BW_TREE_MIN_NODE_SIZE;
 
 /// The maximun size of variable-length data
 constexpr size_t kMaxVarDataSize = BW_TREE_MAX_VARIABLE_DATA_SIZE;
+
+/// The maximum number of retries for preventing busy loops.
+constexpr size_t kRetryNum = BW_TREE_RETRY_THRESHOLD;
+
+/// Assumes that one word is represented by 8 bytes.
+constexpr size_t kWordSize = 8;
+
+/// Assumes that one cache line is represented by 64 bytes.
+constexpr size_t kCacheLineSize = 64;
+
+/// A sleep time for preventing busy loops [us].
+static constexpr auto kShortSleep = std::chrono::microseconds{BW_TREE_SLEEP_TIME};
 
 /// a flag for indicating optimized page layouts for fixed-length data.
 constexpr bool kOptimizeForFixLenData = false;

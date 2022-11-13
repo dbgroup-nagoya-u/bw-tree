@@ -238,16 +238,11 @@ class DeltaRecordFixture : public testing::Test
   void
   VerifyRemoveNodeConstructor()
   {
-    const auto &key = keys_[0];
-    const auto &payload = payloads_[0];
-    const auto &dummy_d = CreateLeafInsertModifyDelta(kInsert, key, payload);
-
-    auto *raw_p = new (GetPage()) Delta_t{kRemoveNode, dummy_d.get()};
-    std::unique_ptr<Delta_t> delta{raw_p};
+    std::unique_ptr<Delta_t> delta{new (GetPage()) Delta_t{true}};
 
     EXPECT_TRUE(delta->IsLeaf());
     EXPECT_EQ(kRemoveNode, delta->GetDeltaType());
-    EXPECT_EQ(dummy_d.get(), delta->GetNext());
+    EXPECT_EQ(nullptr, delta->GetNext());
   }
 
   void
@@ -309,12 +304,12 @@ class DeltaRecordFixture : public testing::Test
     size_t diff = 0;
     for (const auto &id : ids) {
       auto &&delta = CreateLeafInsertModifyDelta(kDelete, keys_[id], payloads_[id]);
-      diff += delta->template AddByInsertionSortTo<Payload>(std::nullopt, records);
+      diff += delta->AddByInsertionSortTo(std::nullopt, records);
       entities.emplace_back(std::move(delta));
     }
     for (const auto &id : ids) {
       auto &&delta = CreateLeafInsertModifyDelta(kInsert, keys_[id], payloads_[id]);
-      diff += delta->template AddByInsertionSortTo<Payload>(std::nullopt, records);
+      diff += delta->AddByInsertionSortTo(std::nullopt, records);
       entities.emplace_back(std::move(delta));
     }
 

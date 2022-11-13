@@ -164,7 +164,7 @@ class BwTree
      * @brief Destroy the iterator and a retained node if exist.
      *
      */
-    ~RecordIterator() { ::operator delete(node_); }
+    ~RecordIterator() { free(node_); }
 
     /*##################################################################################
      * Public operators for iterators
@@ -330,16 +330,15 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // check whether the leaf node has a target key
-    consol_page_ = nullptr;
+    consol_lid_ = nullptr;
     auto &&stack = SearchLeafNode(key, kClosed);
 
     for (Payload payload{}; true;) {
       // check whether the node is active and has a target key
-      const auto *head = LoadValidHead(key, kClosed, stack);
+      const auto *head = stack.back()->template Load<Delta_t *>();
 
       uintptr_t out_ptr{};
-      size_t delta_num = 0;
-      auto rc = DC::SearchRecord(head, key, out_ptr, delta_num);
+      auto rc = DC::SearchRecord(head, key, out_ptr);
       switch (rc) {
         case DeltaRC::kRecordFound:
           payload = reinterpret_cast<Delta_t *>(out_ptr)->template GetPayload<Payload>();
@@ -369,14 +368,6 @@ class BwTree
           }
           break;
         }
-      }
-
-      if (delta_num >= kMaxDeltaRecordNum) {
-        consol_page_ = stack.back();
-      }
-
-      if (consol_page_ != nullptr) {
-        TrySMOs(consol_page_, stack);
       }
 
       if (rc == DeltaRC::kRecordDeleted) return std::nullopt;
@@ -411,8 +402,9 @@ class BwTree
       auto &&stack = SearchLeftmostLeaf();
       while (true) {
         const auto *head = stack.back()->template Load<Delta_t *>();
-        if (TryConsolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
-        // concurrent consolidations may block scanning
+        if (head->GetDeltaType() == DeltaType::kRemoveNode) continue;
+        TryConsolidate(head, node, kIsScan);
+        break;
       }
       begin_pos = 0;
     }
@@ -449,7 +441,7 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    consol_page_ = nullptr;
+    consol_lid_ = nullptr;
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
@@ -465,8 +457,8 @@ class BwTree
       if (stack.back()->CASWeak(head, write_d)) break;
     }
 
-    if (consol_page_ != nullptr) {
-      TrySMOs(consol_page_, stack);
+    if (consol_lid_ != nullptr) {
+      TrySMOs(consol_lid_, stack);
     }
 
     return kSuccess;
@@ -495,7 +487,7 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    consol_page_ = nullptr;
+    consol_lid_ = nullptr;
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
@@ -504,10 +496,6 @@ class BwTree
     while (true) {
       // check target record's existence and get a head pointer
       const auto [head, existence] = GetHeadWithKeyCheck(key, stack);
-      if (existence == DeltaRC::kKeyIsInSibling) {
-        stack = SearchLeafNode(key, kClosed);
-        continue;
-      }
       if (existence == DeltaRC::kRecordFound) {
         rc = kKeyExist;
         tls_delta_page_.reset(insert_d);
@@ -519,8 +507,8 @@ class BwTree
       if (stack.back()->CASWeak(head, insert_d)) break;
     }
 
-    if (consol_page_ != nullptr) {
-      TrySMOs(consol_page_, stack);
+    if (consol_lid_ != nullptr) {
+      TrySMOs(consol_lid_, stack);
     }
 
     return rc;
@@ -549,7 +537,7 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    consol_page_ = nullptr;
+    consol_lid_ = nullptr;
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
@@ -558,10 +546,6 @@ class BwTree
     while (true) {
       // check target record's existence and get a head pointer
       const auto [head, existence] = GetHeadWithKeyCheck(key, stack);
-      if (existence == DeltaRC::kKeyIsInSibling) {
-        stack = SearchLeafNode(key, kClosed);
-        continue;
-      }
       if (existence == DeltaRC::kRecordDeleted) {
         rc = kKeyNotExist;
         tls_delta_page_.reset(modify_d);
@@ -573,8 +557,8 @@ class BwTree
       if (stack.back()->CASWeak(head, modify_d)) break;
     }
 
-    if (consol_page_ != nullptr) {
-      TrySMOs(consol_page_, stack);
+    if (consol_lid_ != nullptr) {
+      TrySMOs(consol_lid_, stack);
     }
 
     return rc;
@@ -600,7 +584,7 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    consol_page_ = nullptr;
+    consol_lid_ = nullptr;
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
@@ -609,10 +593,6 @@ class BwTree
     while (true) {
       // check target record's existence and get a head pointer
       auto [head, existence] = GetHeadWithKeyCheck(key, stack);
-      if (existence == DeltaRC::kKeyIsInSibling) {
-        stack = SearchLeafNode(key, kClosed);
-        continue;
-      }
       if (existence == DeltaRC::kRecordDeleted) {
         rc = kKeyNotExist;
         tls_delta_page_.reset(delete_d);
@@ -624,8 +604,8 @@ class BwTree
       if (stack.back()->CASWeak(head, delete_d)) break;
     }
 
-    if (consol_page_ != nullptr) {
-      TrySMOs(consol_page_, stack);
+    if (consol_lid_ != nullptr) {
+      TrySMOs(consol_lid_, stack);
     }
 
     return rc;
@@ -771,6 +751,9 @@ class BwTree
   /// a flag for preventing a consolidate-operation from splitting a node.
   static constexpr bool kIsScan = true;
 
+  /// a flag for indicating leaf nodes.
+  static constexpr bool kIsLeaf = false;
+
   /**
    * @brief An internal enum for distinguishing a partial SMO status.
    *
@@ -799,7 +782,7 @@ class BwTree
     if (tls_node_page_) return tls_node_page_.release();
 
     auto *page = gc_.template GetPageIfPossible<Node_t>();
-    return (page == nullptr) ? (::operator new(kPageSize)) : page;
+    return (page == nullptr) ? (aligned_alloc(kCacheLineSize, kPageSize)) : page;
   }
 
   /**
@@ -814,7 +797,7 @@ class BwTree
     if (tls_delta_page_) return tls_delta_page_.release();
 
     auto *page = gc_.template GetPageIfPossible<Delta_t>();
-    return (page == nullptr) ? (::operator new(kDeltaRecSize)) : page;
+    return (page == nullptr) ? (aligned_alloc(kCacheLineSize, kDeltaRecSize)) : page;
   }
 
   /**
@@ -840,12 +823,8 @@ class BwTree
 
       // if the delta record is merge-delta, delete the merged sibling node
       if (garbage->GetDeltaType() == DeltaType::kMerge) {
-        auto *sib_lid = garbage->template GetPayload<LogicalID *>();
-        const auto *remove_d = sib_lid->template Load<Delta_t *>();
-        if (remove_d->GetDeltaType() == DeltaType::kRemoveNode) {  // check merging is not aborted
-          sib_lid->Clear();
-          AddToGC(remove_d);
-        }
+        auto *removed_node = garbage->template GetPayload<Node_t *>();
+        gc_.AddGarbage(removed_node);
       }
 
       // check the next delta record or base node
@@ -873,43 +852,41 @@ class BwTree
       const LogicalID *target_lid = nullptr) const
   {
     if (stack.empty()) {
-      stack.emplace_back(LoadValidRoot());
+      stack.emplace_back(root_.load(std::memory_order_relaxed));
       return;
     }
 
     for (uintptr_t out_ptr{}; true;) {
-      size_t delta_num = 0;
-      const auto *head = LoadValidHead(key, closed, stack);
-      switch (DC::SearchChildNode(head, key, out_ptr, delta_num)) {
+      const auto *head = stack.back()->template Load<Delta_t *>();
+      switch (DC::SearchChildNode(head, key, closed, out_ptr)) {
         case DeltaRC::kRecordFound:
           stack.emplace_back(reinterpret_cast<LogicalID *>(out_ptr));
-          return;
+          break;
 
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
           stack.back() = reinterpret_cast<LogicalID *>(out_ptr);
-          if (target_lid != nullptr && stack.back() == target_lid) return;
           continue;
 
         case DeltaRC::kNodeRemoved:
           // retry from the parent node
           stack.pop_back();
           SearchChildNode(key, closed, stack, target_lid);
-          if (target_lid != nullptr && stack.back() == target_lid) return;
           continue;
 
         case DeltaRC::kReachBaseNode:
         default: {
-          if (delta_num >= kMaxDeltaRecordNum) {
-            consol_page_ = stack.back();
-          }
-
           // search a child node in a base node
           const auto *node = reinterpret_cast<Node_t *>(out_ptr);
-          stack.emplace_back(node->SearchChild(key));
-          return;
+          stack.emplace_back(node->SearchChild(key, closed));
+          break;
         }
       }
+
+      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
+        consol_lid_ = stack.back();
+      }
+      return;
     }
   }
 
@@ -933,12 +910,6 @@ class BwTree
     while (true) {
       SearchChildNode(key, closed, stack);
       const auto *node = stack.back()->template Load<Node_t *>();
-      if (node == nullptr) {
-        // the found node is removed, so retry
-        stack.pop_back();
-        continue;
-      }
-
       if (node->IsLeaf()) return stack;
     }
   }
@@ -952,7 +923,7 @@ class BwTree
   SearchLeftmostLeaf() const  //
       -> std::vector<LogicalID *>
   {
-    std::vector<LogicalID *> stack{LoadValidRoot()};
+    std::vector<LogicalID *> stack{root_.load(std::memory_order_relaxed)};
     stack.reserve(kExpectedTreeHeight);
 
     // traverse a Bw-tree
@@ -979,78 +950,25 @@ class BwTree
       const LogicalID *target_lid)
   {
     while (true) {
-      auto *cur_lid = LoadValidRoot();
+      auto *cur_lid = root_.load(std::memory_order_relaxed);
       const auto *cur_node = cur_lid->template Load<Node_t *>();
-      if (cur_node->IsLeaf()) continue;
       stack.emplace_back(cur_lid);
 
       if (key) {
-        while (true) {
-          if (stack.back() == target_lid) return;
-          SearchChildNode(*key, !kClosed, stack, target_lid);
+        while (!cur_node->IsLeaf() && stack.back() != target_lid) {
+          SearchChildNode(*key, kClosed, stack, target_lid);
           cur_node = stack.back()->template Load<Node_t *>();
-          if (cur_node == nullptr) {
-            // the found node is removed, so retry
-            stack.pop_back();
-            continue;
-          }
-          if (cur_node->IsLeaf()) break;
         }
-        GetHead(*key, !kClosed, stack);  // check sibling nodes
       } else {
-        do {
-          if (stack.back() == target_lid) return;
+        while (!cur_node->IsLeaf() && stack.back() != target_lid) {
           cur_lid = cur_node->GetLeftmostChild();
           cur_node = cur_lid->template Load<Node_t *>();
           stack.emplace_back(cur_lid);
-        } while (!cur_node->IsLeaf());
+        }
       }
 
-      if (stack.back() == target_lid) return;
+      if (stack.back() == target_lid && stack.size() > 1) return;
       stack.clear();
-    }
-  }
-
-  /**
-   * @return the logical ID of a current root node.
-   */
-  [[nodiscard]] auto
-  LoadValidRoot() const  //
-      -> LogicalID *
-  {
-    while (true) {
-      auto *root_lid = root_.load(std::memory_order_relaxed);
-      const auto *root_d = root_lid->template Load<const Delta_t *>();
-      if (root_d != nullptr && root_d->GetDeltaType() != DeltaType::kRemoveNode) return root_lid;
-    }
-  }
-
-  /**
-   * @brief Get a valid (i.e., not NULL) head pointer of a logical node.
-   *
-   * @param key a search key.
-   * @param closed a flag for indicating closed/open-interval.
-   * @param stack a stack of traversed nodes.
-   * @return the head of this logical node.
-   */
-  auto
-  LoadValidHead(  //
-      const Key &key,
-      const bool closed,
-      std::vector<LogicalID *> &stack) const  //
-      -> const Delta_t *
-  {
-    while (true) {
-      const auto *head = stack.back()->template Load<Delta_t *>();
-      if (head != nullptr) return head;
-
-      // the current node is removed, so restore a new one
-      stack.pop_back();
-      if (stack.empty()) {
-        stack.emplace_back(LoadValidRoot());
-      } else {
-        SearchChildNode(key, closed, stack);
-      }
     }
   }
 
@@ -1069,14 +987,10 @@ class BwTree
       std::vector<LogicalID *> &stack)  //
       -> const Delta_t *
   {
-    while (true) {
-      // check whether the node has partial SMOs
-      const auto *head = LoadValidHead(key, closed, stack);
-
+    for (uintptr_t out_ptr{}; true;) {
       // check whether the node is active and can include a target key
-      uintptr_t out_ptr{};
-      size_t delta_num = 0;
-      switch (DC::Validate(head, key, out_ptr, delta_num)) {
+      const auto *head = stack.back()->template Load<Delta_t *>();
+      switch (DC::Validate(head, key, closed, out_ptr)) {
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
           stack.back() = reinterpret_cast<LogicalID *>(out_ptr);
@@ -1093,55 +1007,12 @@ class BwTree
           break;  // do nothing
       }
 
-      if (delta_num >= kMaxDeltaRecordNum) {
-        consol_page_ = stack.back();
+      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
+        consol_lid_ = stack.back();
       }
 
       return head;
     }
-  }
-
-  /**
-   * @brief Get the head pointer of a logical node and complete partial SMOs if exist.
-   *
-   * @param stack a stack of traversed nodes.
-   * @retval 1st: the head of this logical node.
-   * @retval 2nd: the number of delta records in this node.
-   */
-  auto
-  GetHeadForConsolidation(std::vector<LogicalID *> &stack)  //
-      -> std::pair<const Delta_t *, size_t>
-  {
-    // check whether the node has partial SMOs
-    const auto *head = stack.back()->template Load<Delta_t *>();
-    if (head == nullptr) return {nullptr, 0};  // abort consolidation
-
-    // check whether the node is active
-    uintptr_t out_ptr = 0;
-    size_t delta_num = 0;
-    switch (DC::CheckPartialSMOs(head, out_ptr, delta_num)) {
-      case DeltaRC::kNodeRemoved:
-        // abort consolidation
-        return {nullptr, 0};
-
-      case DeltaRC::kPartialSplitMayExist: {
-        const auto *split_d = reinterpret_cast<Delta_t *>(out_ptr);
-        CompleteSplit(split_d, stack);
-        break;
-      }
-
-      case DeltaRC::kPartialMergeMayExist: {
-        const auto *merge_d = reinterpret_cast<Delta_t *>(out_ptr);
-        CompleteMerge(merge_d, stack);
-        break;
-      }
-
-      case DeltaRC::kReachBaseNode:
-      default:
-        break;  // do nothing
-    }
-
-    return {head, delta_num};
   }
 
   /**
@@ -1159,12 +1030,9 @@ class BwTree
       -> std::pair<const Delta_t *, DeltaRC>
   {
     for (uintptr_t out_ptr{}; true;) {
-      // check whether the node has partial SMOs
-      const auto *head = LoadValidHead(key, kClosed, stack);
-
       // check whether the node is active and has a target key
-      size_t delta_num = 0;
-      auto rc = DC::SearchRecord(head, key, out_ptr, delta_num);
+      const auto *head = stack.back()->template Load<Delta_t *>();
+      auto rc = DC::SearchRecord(head, key, out_ptr);
       switch (rc) {
         case DeltaRC::kRecordFound:
         case DeltaRC::kRecordDeleted:
@@ -1182,14 +1050,80 @@ class BwTree
           continue;
 
         case DeltaRC::kReachBaseNode:
-        default:
+        default: {
           // search a target key in the base node
           rc = reinterpret_cast<Node_t *>(out_ptr)->SearchRecord(key).first;
           break;
+        }
       }
 
-      if (delta_num >= kMaxDeltaRecordNum) {
-        consol_page_ = stack.back();
+      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
+        consol_lid_ = stack.back();
+      }
+
+      return {head, rc};
+    }
+  }
+
+  /**
+   * @brief Get the head pointer of a logical node and check key existence.
+   *
+   * @param key a search key.
+   * @param stack a stack of traversed nodes.
+   * @retval 1st: the head of this logical node.
+   * @retval 2nd: key existence.
+   */
+  auto
+  GetHeadForMerge(  //
+      const Key &key,
+      const std::optional<Key> &sib_key,
+      std::vector<LogicalID *> &stack)  //
+      -> std::pair<const Delta_t *, DeltaRC>
+  {
+    for (uintptr_t out_ptr{}; true;) {
+      // check whether the node is active and has a target key
+      const auto *head = stack.back()->template Load<Delta_t *>();
+      auto key_found = false;
+      auto sib_key_found = !sib_key;
+      auto rc = DC::SearchForMerge(head, key, sib_key, out_ptr, key_found, sib_key_found);
+      switch (rc) {
+        case DeltaRC::kRecordFound:
+        case DeltaRC::kAbortMerge:
+          break;
+
+        case DeltaRC::kKeyIsInSibling:
+          // swap a current node in a stack and retry
+          stack.back() = reinterpret_cast<LogicalID *>(out_ptr);
+          continue;
+
+        case DeltaRC::kNodeRemoved:
+          // retry from the parent node
+          stack.pop_back();
+          SearchChildNode(key, kClosed, stack);
+          continue;
+
+        case DeltaRC::kReachBaseNode:
+        default: {
+          const auto *node = reinterpret_cast<Node_t *>(out_ptr);
+          if (!key_found) {
+            if (node->SearchRecord(key).first == DeltaRC::kRecordFound) {
+              key_found = true;
+            }
+          }
+          if (!sib_key_found) {
+            if (node->SearchRecord(*sib_key).first != DeltaRC::kRecordFound) {
+              rc = DeltaRC::kAbortMerge;
+              break;
+            }
+            sib_key_found = true;
+          }
+          rc = (key_found && sib_key_found) ? DeltaRC::kRecordFound : DeltaRC::kAbortMerge;
+          break;
+        }
+      }
+
+      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
+        consol_lid_ = stack.back();
       }
 
       return {head, rc};
@@ -1219,8 +1153,9 @@ class BwTree
   {
     while (true) {
       const auto *head = GetHead(begin_key, closed, stack);
-      if (TryConsolidate<Payload>(head, node, kIsScan) != kAlreadyConsolidated) break;
-      // concurrent consolidations may block scanning
+      if (head->GetDeltaType() == DeltaType::kRemoveNode) continue;
+      TryConsolidate(head, node, kIsScan);
+      break;
     }
 
     // check the begin position for scanning
@@ -1279,53 +1214,33 @@ class BwTree
       while (!stack.empty() && stack.back() != target_lid) stack.pop_back();
       if (stack.empty()) return;
 
-      // check whether the target node is valid (containing a target key and no incomplete SMOs)
-      const auto [head, delta_rec_num] = GetHeadForConsolidation(stack);
-      if (head == nullptr || delta_rec_num < kMaxDeltaRecordNum) return;
-
       // prepare a consolidated node
+      const auto *head = stack.back()->template Load<Delta_t *>();
+      if (!head->NeedConsolidation()) return;
       auto *new_node = reinterpret_cast<Node_t *>(GetNodePage());
-      const auto rc = (head->IsLeaf()) ? TryConsolidate<Payload>(head, new_node)
-                                       : TryConsolidate<LogicalID *>(head, new_node);
-      switch (rc) {
-        case kAlreadyConsolidated:
-          // other threads have performed consolidation
-          return;
-
+      switch (TryConsolidate(head, new_node)) {
         case kTrySplit:
-          // switch to splitting
-          TrySplit(head, reinterpret_cast<Delta_t *>(new_node), stack);
-          continue;  // retry from consolidation
+          if (TrySplit(head, new_node, stack)) return;
+          break;  // retry from consolidation
 
         case kTryMerge:
-          if (CanMerge(new_node, stack)) {
-            // switch to merging
-            if (TryMerge(head, reinterpret_cast<Delta_t *>(new_node), stack)) return;
-            continue;  // retry from consolidation
-          } else if (stack.size() == 1 && new_node->GetRecordCount() == 1 && !new_node->IsLeaf()) {
-            // switch to removing a root node
-            if (TryRemoveRoot(head, new_node, target_lid)) return;
-            continue;  // retry from consolidation
-          }
-          break;  // perform consolidation
+          if (TryMerge(head, new_node, stack)) return;
+          break;  // retry from consolidation
 
         case kConsolidate:
         default:
-          break;  // perform consolidation
-      }
-
-      // install a consolidated node
-      if (target_lid->CASStrong(head, new_node)) {
-        // delete consolidated delta records and a base node
-        AddToGC(head);
-        return;
+          // install a consolidated node
+          if (target_lid->CASStrong(head, new_node)) {
+            // delete consolidated delta records and a base node
+            AddToGC(head);
+            return;
+          }
+          break;  // retry from consolidation
       }
 
       // if consolidation is failed, keep the allocated page to reuse
       tls_node_page_.reset(new_node);
-
-      // no retry if the number of delta records is sufficiently small
-      if (delta_rec_num < 2 * kMaxDeltaRecordNum) return;
+      if (head->GetRecordCount() < kMaxDeltaRecordNum * 4) return;
     }
   }
 
@@ -1338,7 +1253,6 @@ class BwTree
    * @param is_scan a flag to prevent a split-operation.
    * @return the status of a consolidation result.
    */
-  template <class T>
   auto
   TryConsolidate(  //
       const Delta_t *head,
@@ -1346,52 +1260,57 @@ class BwTree
       const bool is_scan = false)  //
       -> SMOsRC
   {
-    constexpr auto kIsInner = std::is_same_v<T, LogicalID *>;
     constexpr auto kSepKeyLen = (kIsVarLen) ? kMaxKeyLen : 0;
     constexpr auto kMaxBlockSize = kPageSize - kHeaderLen - 2 * kSepKeyLen;
+    size_t size{};
 
     // sort delta records
-    std::vector<Record> records{};
-    std::vector<ConsolidateInfo> consol_info{};
-    records.reserve(kMaxDeltaRecordNum * 4);
-    consol_info.reserve(kMaxDeltaRecordNum);
-    const auto [consolidated, diff] = DC::template Sort<T>(head, records, consol_info);
-    if (consolidated) return kAlreadyConsolidated;
+    thread_local std::vector<Record> records(kMaxDeltaRecordNum * 4);
+    thread_local std::vector<ConsolidateInfo> consol_info(kMaxDeltaRecordNum);
+    records.clear();
+    consol_info.clear();
+    const auto diff = DC::Sort(head, records, consol_info);
 
     // calculate the size of a consolidated node
-    size_t size{};
     if constexpr (kIsVarLen) {
       size = Node_t::PreConsolidate(consol_info) + diff;
     } else {
-      size = (Node_t::PreConsolidate(consol_info) + diff) * (sizeof(Key) + sizeof(T));
+      const auto rec_len = sizeof(Key) + (head->IsLeaf() ? kPayLen : kPtrLen);
+      size = (Node_t::PreConsolidate(consol_info) + diff) * rec_len;
     }
 
     // check whether splitting is needed
     void *page = consol_node;
     bool do_split = false;
+    auto page_size = kPageSize;
     if (is_scan) {
       // use dynamic page sizes for scanning
-      size = ((size + kHeaderLen + 2 * kSepKeyLen) / kPageSize + 1) * kPageSize;
-      if (size > consol_node->GetNodeSize()) {
-        ::operator delete(page);
-        page = ::operator new(size);
+      page_size = ((size + kHeaderLen + 2 * kSepKeyLen) / kPageSize + 1) * kPageSize;
+      if (page_size > consol_node->GetNodeSize()) {
+        free(page);
+        page = aligned_alloc(kCacheLineSize, page_size);
       }
     } else if (size > kMaxBlockSize) {
       // perform splitting
       do_split = true;
       if (auto sep_size = size / 2; sep_size > kMaxBlockSize) {
-        size -= kMaxBlockSize;
+        page_size = size - kMaxBlockSize;
       } else {
-        size = sep_size;
+        page_size = sep_size;
       }
     } else {
       // perform consolidation
-      size = kPageSize;
+      page_size = kPageSize;
     }
 
     // consolidate a target node
-    consol_node = new (page) Node_t{kIsInner, size, is_scan};
-    Consolidate<T>(consol_node, consol_info, records, do_split, size);
+    if (head->IsLeaf()) {
+      consol_node = new (page) Node_t{kIsLeaf, page_size, is_scan};
+      Consolidate<Payload>(consol_node, consol_info, records, do_split, page_size);
+    } else {
+      consol_node = new (page) Node_t{!kIsLeaf, page_size, is_scan};
+      Consolidate<LogicalID *>(consol_node, consol_info, records, do_split, page_size);
+    }
 
     if (do_split) return kTrySplit;
     if (size <= kMinNodeSize) return kTryMerge;
@@ -1460,32 +1379,37 @@ class BwTree
    * @param split_node a split-right node to be inserted to this tree.
    * @param stack a stack of traversed nodes.
    */
-  void
+  auto
   TrySplit(  //
       const Delta_t *head,
-      Delta_t *split_node,
-      std::vector<LogicalID *> &stack)
+      Node_t *split_node,
+      std::vector<LogicalID *> &stack)  //
+      -> bool
   {
+    const auto *split_node_d = reinterpret_cast<Delta_t *>(split_node);
+
     // create a split-delta record
     auto *sib_lid = mapping_table_.GetNewLogicalID();
     sib_lid->Store(split_node);
-    auto *split_d = new (GetRecPage()) Delta_t{DeltaType::kSplit, split_node, sib_lid, head};
+    auto *split_d = new (GetRecPage()) Delta_t{DeltaType::kSplit, split_node_d, sib_lid};
+    split_d->SetNext(head);
 
     // install the delta record for splitting a child node
     if (!stack.back()->CASStrong(head, split_d)) {
       // retry from consolidation
       sib_lid->Clear();
       tls_delta_page_.reset(split_d);
-      tls_node_page_.reset(reinterpret_cast<Node_t *>(split_node));
-      return;
+      return false;
     }
 
     // execute parent update and recursive SMOs if needed
-    consol_page_ = nullptr;
+    consol_lid_ = nullptr;
     CompleteSplit(split_d, stack);
-    if (consol_page_ != nullptr) {
-      TrySMOs(consol_page_, stack);
+    if (consol_lid_ != nullptr) {
+      TrySMOs(consol_lid_, stack);
     }
+
+    return true;
   }
 
   /**
@@ -1497,10 +1421,10 @@ class BwTree
   void
   CompleteSplit(  //
       const Delta_t *split_d,
-      std::vector<LogicalID *> stack)
+      std::vector<LogicalID *> &stack)
   {
     // check whether this splitting modifies a root node
-    if (stack.size() < 2 && RootSplit(reinterpret_cast<const Node_t *>(split_d), stack)) return;
+    if (stack.size() < 2 && RootSplit(split_d, stack)) return;
 
     // create an index-entry delta record to complete split
     auto *entry_d = new (GetRecPage()) Delta_t{split_d};
@@ -1508,16 +1432,9 @@ class BwTree
 
     // insert the delta record into a parent node
     stack.pop_back();  // remove the split child node to modify its parent node
-    consol_page_ = nullptr;
     while (true) {
-      // check whether another thread has already completed this splitting
-      const auto [head, rc] = GetHeadWithKeyCheck(sep_key, stack);
-      if (rc == DeltaRC::kRecordFound) {
-        tls_delta_page_.reset(entry_d);
-        break;
-      }
-
       // try to insert the index-entry delta record
+      const auto *head = GetHead(sep_key, kClosed, stack);
       entry_d->SetNext(head);
       if (stack.back()->CASWeak(head, entry_d)) break;
     }
@@ -1533,14 +1450,16 @@ class BwTree
    */
   auto
   RootSplit(  //
-      const Node_t *split_d,
+      const Delta_t *split_d,
       std::vector<LogicalID *> &stack)  //
       -> bool
   {
+    const auto *split_delta_n = reinterpret_cast<const Node_t *>(split_d);
+
     // create a new root node
     auto *old_lid = stack.back();
     stack.pop_back();  // remove the current root to push a new one
-    auto *new_root = new (GetNodePage()) Node_t{split_d, old_lid};
+    auto *new_root = new (GetNodePage()) Node_t{split_delta_n, old_lid};
 
     // prepare a new logical ID for the new root
     auto *new_lid = mapping_table_.GetNewLogicalID();
@@ -1553,39 +1472,10 @@ class BwTree
     // another thread has already inserted a new root
     new_lid->Clear();
     tls_node_page_.reset(new_root);
-    const auto &low_key = DC::TraverseToGetLowKey(reinterpret_cast<const Delta_t *>(split_d));
+    const auto &low_key = DC::TraverseToGetLowKey(split_d);
     SearchTargetNode(stack, low_key, old_lid);
 
     return false;
-  }
-
-  /**
-   * @brief Check a given node can be merged with its left-sibling node.
-   *
-   * That is, this function checks a given node is not leftmost in its parent node.
-   *
-   * @param child a node to be merged.
-   * @param stack a stack of traversed nodes.
-   * @retval true if a target node can be merged with its left-sibling node.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] auto
-  CanMerge(  //
-      const Node_t *child,
-      const std::vector<LogicalID *> &stack)  //
-      -> bool
-  {
-    const auto &low_key = child->GetLowKey();
-    if (!low_key) return false;  // the leftmost node cannot be merged
-
-    // if a parent node has the same lowest-key, the child is the leftmost node in it
-    std::vector<LogicalID *> copied_stack{stack};
-    copied_stack.pop_back();
-    const auto *parent_head = GetHead(*low_key, kClosed, copied_stack);
-    const auto &parent_low_key = DC::TraverseToGetLowKey(parent_head);
-    if (!parent_low_key) return true;
-
-    return Comp{}(*parent_low_key, *low_key) || Comp{}(*low_key, *parent_low_key);
   }
 
   /**
@@ -1600,41 +1490,52 @@ class BwTree
   auto
   TryMerge(  //
       const Delta_t *head,
-      Delta_t *removed_node,
+      Node_t *removed_node,
       std::vector<LogicalID *> &stack)  //
       -> bool
   {
-    auto *removed_lid = stack.back();
+    auto *removed_node_d = reinterpret_cast<Delta_t *>(removed_node);
 
     // insert a remove-node delta to prevent other threads from modifying this node
-    auto *remove_d = new (GetRecPage()) Delta_t{DeltaType::kRemoveNode, removed_node};
+    auto *remove_d = new (GetRecPage()) Delta_t{removed_node->IsLeaf()};
+    auto *removed_lid = stack.back();
     if (!removed_lid->CASStrong(head, remove_d)) {
       // retry from consolidation
       tls_delta_page_.reset(remove_d);
-      tls_node_page_.reset(reinterpret_cast<Node_t *>(removed_node));
       return false;
     }
+    AddToGC(head);
 
-    // search a left sibling node
-    stack.pop_back();
-    const auto &low_key = removed_node->GetKey();
-    SearchChildNode(low_key, kClosed, stack);
+    // remove the index entry before merging
+    consol_lid_ = nullptr;
+    const auto &low_key = removed_node->GetLowKey();
+    auto *delete_d = TryDeleteIndexEntry(removed_node_d, low_key, stack);
+    if (delete_d == nullptr) {
+      // check this tree should be shrinked
+      if (TryRemoveRoot(removed_node, removed_lid, stack)) return true;
 
-    // insert a merge delta into the left sibling node
-    auto *merge_d = new (GetRecPage()) Delta_t{DeltaType::kMerge, removed_node, removed_lid};
-    while (true) {  // continue until insertion succeeds
-      const auto *sib_head = GetHead(low_key, kClosed, stack);
-      merge_d->SetNext(sib_head);
-      if (stack.back()->CASWeak(sib_head, merge_d)) break;
+      // merging has failed, but consolidation succeeds
+      removed_lid->Store(removed_node);
+      AddToGC(remove_d);
+    } else {
+      // search a left sibling node
+      const auto &sep_key = *low_key;
+      SearchChildNode(sep_key, kOpen, stack);
+
+      // insert a merge delta into the left sibling node
+      auto *merge_d = new (GetRecPage()) Delta_t{DeltaType::kMerge, removed_node_d, removed_node};
+      while (true) {  // continue until insertion succeeds
+        const auto *sib_head = GetHead(sep_key, kOpen, stack);
+        merge_d->SetNext(sib_head);
+        if (stack.back()->CASWeak(sib_head, merge_d)) break;
+      }
+      delete_d->SetSiblingLID(stack.back());
     }
 
-    // execute parent update and recursive SMOs if needed
-    consol_page_ = nullptr;
-    CompleteMerge(merge_d, stack);
-    if (consol_page_ != nullptr) {
-      TrySMOs(consol_page_, stack);
+    // execute recursive SMOs if needed
+    if (consol_lid_ != nullptr) {
+      TrySMOs(consol_lid_, stack);
     }
-
     return true;
   }
 
@@ -1644,103 +1545,51 @@ class BwTree
    * @param merge_d a merge-delta record.
    * @param stack a copied stack of traversed nodes.
    */
-  void
-  CompleteMerge(  //
-      const Delta_t *merge_d,
-      std::vector<LogicalID *> stack)
+  auto
+  TryDeleteIndexEntry(  //
+      const Delta_t *removed_node,
+      const std::optional<Key> &low_key,
+      std::vector<LogicalID *> &stack)  //
+      -> Delta_t *
   {
-    if (stack.size() < 2) return;
-
-    // create an index-delete delta record to complete merging
-    auto *delete_d = new (GetRecPage()) Delta_t{merge_d, stack.back()};
-    const auto &del_key = merge_d->GetKey();
+    // check a current node can be merged
+    stack.pop_back();
+    if (stack.empty()) return nullptr;  // a root node cannot be merged
+    if (!low_key) return nullptr;       // the leftmost nodes cannot be merged
 
     // insert the delta record into a parent node
-    stack.pop_back();  // remove the split child node to modify its parent node
+    auto *delete_d = new (GetRecPage()) Delta_t{removed_node, nullptr};
+    const auto &key = *low_key;
+    const auto &sib_key = removed_node->GetHighKey();
     while (true) {
-      // check whether another thread has already completed this merging
-      auto [head, rc] = GetHeadWithKeyCheck(del_key, stack);
-      if (rc == DeltaRC::kRecordDeleted) {
-        // another thread has already deleted the merged node
+      // check the removed node is not leftmost in its parent node
+      auto [head, rc] = GetHeadForMerge(key, sib_key, stack);
+      if (rc == DeltaRC::kAbortMerge) {
+        // the leftmost nodes cannot be merged
         tls_delta_page_.reset(delete_d);
-        break;
-      }
-
-      // check concurrent splitting
-      const auto *cur_lid = stack.back();
-      const auto *sib_head = GetHead(del_key, !kClosed, stack);
-      if (cur_lid != stack.back()) {
-        // the target node was split, so check whether the merged nodes span two parent nodes
-        const auto &low_key = DC::TraverseToGetLowKey(sib_head);
-        if (low_key && !Comp{}(*low_key, del_key) && !Comp{}(del_key, *low_key)) {
-          // the merged nodes have different parent nodes, so abort
-          AbortMerge(merge_d);
-          break;
-        }
-        continue;  // the merged nodes have the same parent node, so retry
+        return nullptr;
       }
 
       // try to insert the index-delete delta record
       delete_d->SetNext(head);
-      if (stack.back()->CASWeak(head, delete_d)) break;
+      if (stack.back()->CASWeak(head, delete_d)) return delete_d;
     }
   }
 
-  /**
-   * @brief Abort partial merging by deleting a remove-node delta record.
-   *
-   * @param merge_d a merge-delta record.
-   */
-  void
-  AbortMerge(const Delta_t *merge_d)
-  {
-    // check this merging is still active
-    auto *sib_lid = merge_d->template GetPayload<LogicalID *>();
-    const auto *remove_d = sib_lid->template Load<Delta_t *>();
-    if (remove_d->GetDeltaType() != DeltaType::kRemoveNode) return;  // merging has been aborted
-
-    // delete the remove-node delta to allow other threads to modify the node
-    sib_lid->CASStrong(remove_d, remove_d->GetNext());
-  }
-
-  /**
-   * @brief Remove a root node that has only one child node from this tree.
-   *
-   * @param head the head pointer of an expected root node.
-   * @param new_root a desired root node.
-   * @param root_lid the logical ID of an expected root node.
-   * @retval true if a root node is removed.
-   * @retval false otherwise.
-   */
   auto
   TryRemoveRoot(  //
-      const Delta_t *head,
-      const Node_t *new_root,
-      LogicalID *root_lid)  //
+      const Node_t *root,
+      LogicalID *old_lid,
+      std::vector<LogicalID *> &stack)  //
       -> bool
   {
-    // insert a remove-node delta to prevent other threads from modifying the root node
-    const auto *root_d = reinterpret_cast<const Delta_t *>(new_root);
-    auto *remove_d = new (GetRecPage()) Delta_t{DeltaType::kRemoveNode, root_d};
-    if (!root_lid->CASStrong(head, remove_d)) {
-      // retry from consolidation
-      tls_delta_page_.reset(remove_d);
-      return false;
-    }
+    // check a given node can be shrinked
+    if (!stack.empty() || root->GetRecordCount() > 1 || root->IsLeaf()) return false;
 
-    // shrink a tree by removing a useless root node
-    auto *new_lid = new_root->GetLeftmostChild();
-    auto *cur_lid = root_lid;
-    if (root_.compare_exchange_strong(cur_lid, new_lid, std::memory_order_relaxed)) {
-      // the old root node is removed
-      root_lid->Clear();
-    } else {
-      // removing a root is failed, but consolidation is succeeded
-      root_lid->Store(new_root);
-      remove_d->Abort();
-    }
-    AddToGC(remove_d);
-
+    // shrink the tree by removing a useless root node
+    auto *new_lid = root->GetLeftmostChild();
+    if (!root_.compare_exchange_strong(old_lid, new_lid, std::memory_order_relaxed)) return false;
+    AddToGC(root);
     return true;
   }
 
@@ -1860,13 +1709,15 @@ class BwTree
   NodeGC_t gc_{};
 
   /// the logical ID of a node to be consolidated.
-  inline static thread_local LogicalID *consol_page_{};  // NOLINT
+  inline static thread_local LogicalID *consol_lid_{};  // NOLINT
 
   /// a thread-local node page to reuse in SMOs
-  inline static thread_local std::unique_ptr<Node_t> tls_node_page_{nullptr};  // NOLINT
+  inline static thread_local std::unique_ptr<void, std::function<void(void *)>>  //
+      tls_node_page_{nullptr, std::function<void(void *)>(free)};                // NOLINT
 
   /// a thread-local delta-record page to reuse
-  inline static thread_local std::unique_ptr<Delta_t> tls_delta_page_{nullptr};  // NOLINT
+  inline static thread_local std::unique_ptr<void, std::function<void(void *)>>  //
+      tls_delta_page_{nullptr, std::function<void(void *)>(free)};               // NOLINT
 };
 
 /*######################################################################################

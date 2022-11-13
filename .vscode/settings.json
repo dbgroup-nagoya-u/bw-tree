@@ -82,7 +82,8 @@
     "struct",
     "Sugiura",
     "twxs",
-    "Wextra"
+    "Wextra",
+    "xmmintrin"
   ],
   "files.associations": {
     "*.tcc": "cpp",

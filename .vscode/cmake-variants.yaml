@@ -12,7 +12,7 @@ buildType:
         BW_TREE_BUILD_TESTS: ON
         BW_TREE_TEST_THREAD_NUM: 8
         BW_TREE_TEST_RANDOM_SEED: 10
-        BW_TREE_TEST_EXEC_NUM: 1E6
+        BW_TREE_TEST_EXEC_NUM: 1E5
         BW_TREE_TEST_OVERRIDE_MIMALLOC: OFF
     relWithDebInfo:
       short: RelWithDebInfo
@@ -24,7 +24,7 @@ buildType:
         BW_TREE_BUILD_TESTS: ON
         BW_TREE_TEST_THREAD_NUM: 8
         BW_TREE_TEST_RANDOM_SEED: 10
-        BW_TREE_TEST_EXEC_NUM: 1E6
+        BW_TREE_TEST_EXEC_NUM: 1E5
         BW_TREE_TEST_OVERRIDE_MIMALLOC: OFF
     release:
       short: Release
@@ -36,5 +36,5 @@ buildType:
         BW_TREE_BUILD_TESTS: ON
         BW_TREE_TEST_THREAD_NUM: 8
         BW_TREE_TEST_RANDOM_SEED: 10
-        BW_TREE_TEST_EXEC_NUM: 1E6
+        BW_TREE_TEST_EXEC_NUM: 1E5
         BW_TREE_TEST_OVERRIDE_MIMALLOC: OFF

@@ -304,7 +304,7 @@ class Node
   SearchRecord(const Key &key) const  //
       -> std::pair<DeltaRC, size_t>
   {
-    int64_t begin_pos = is_inner_;
+    int64_t begin_pos = is_inner_ & static_cast<size_t>(low_meta_.key_len == 0);
     int64_t end_pos = rec_count_ - 1;
     while (begin_pos <= end_pos) {
       const size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
@@ -329,14 +329,32 @@ class Node
    * position that is greater than the specified key.
    *
    * @param key a target key.
+   * @param closed a flag for including the same key.
    * @return the logical ID of searched child node.
    */
   [[nodiscard]] auto
-  SearchChild(const Key &key) const  //
+  SearchChild(  //
+      const Key &key,
+      const bool closed) const  //
       -> LogicalID *
   {
-    const auto [rc, pos] = SearchRecord(key);
-    return GetPayload<LogicalID *>((rc == kRecordFound) ? pos : pos - 1);
+    int64_t begin_pos = 1;
+    int64_t end_pos = rec_count_ - 1;
+    while (begin_pos <= end_pos) {
+      const size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
+      const auto &index_key = GetKey(meta_array_[pos]);
+
+      if (Comp{}(key, index_key)) {  // a target key is in a left side
+        end_pos = pos - 1;
+      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
+        begin_pos = pos + 1;
+      } else {  // find an equivalent key
+        begin_pos = pos + static_cast<size_t>(closed);
+        break;
+      }
+    }
+
+    return GetPayload<LogicalID *>(begin_pos - 1);
   }
 
   /**

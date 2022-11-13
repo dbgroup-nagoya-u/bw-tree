@@ -18,6 +18,7 @@
 #define BW_TREE_COMPONENT_VARLEN_DELTA_RECORD_HPP
 
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -109,23 +110,32 @@ class DeltaRecord
   /**
    * @brief Construct a new delta record for deleting an index-entry.
    *
-   * @param merge_d a child merge-delta record.
-   * @param left_lid the logical ID of a merged-left child.
+   * @param removed_child a removed child node.
+   * @param left_lid the logical ID of a merged-left child (dummy nullptr).
    */
   DeltaRecord(  //
-      const DeltaRecord *merge_d,
-      const LogicalID *left_lid)
-      : is_inner_{kInternal},
-        delta_type_{kDelete},
-        meta_{merge_d->meta_},
-        high_key_meta_{merge_d->high_key_meta_}
+      const DeltaRecord *removed_node,
+      [[maybe_unused]] const LogicalID *left_lid)
+      : is_inner_{kInternal}, delta_type_{kDelete}
   {
-    // copy contents of a merge delta
-    const auto rec_len = meta_.rec_len + high_key_meta_.key_len;
-    memcpy(&data_block_, &(merge_d->data_block_), rec_len);
+    // copy a lowest key
+    const auto low_meta = removed_node->meta_;
+    const auto low_key_len = low_meta.key_len;
+    auto offset = ((kHeaderLen + kWordAlign + low_key_len) & ~kWordAlign) - low_key_len;
+    meta_ = Metadata{offset, low_key_len, low_key_len + kPtrLen};
+    memcpy(ShiftAddr(this, offset), removed_node->GetKeyAddr(low_meta), low_key_len);
 
-    // update logical ID of a sibling node
-    SetPayload(kHeaderLen + meta_.key_len, left_lid);
+    // set a sibling node
+    offset += low_key_len;
+    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(ShiftAddr(this, offset));
+    payload->store(nullptr, std::memory_order_relaxed);
+    offset += kPtrLen;
+
+    // copy a highest key
+    const auto high_meta = removed_node->high_key_meta_;
+    const auto high_key_len = high_meta.key_len;
+    high_key_meta_ = Metadata{offset, high_key_len, high_key_len};
+    memcpy(ShiftAddr(this, offset), removed_node->GetKeyAddr(high_meta), high_key_len);
   }
 
   /*####################################################################################
@@ -137,17 +147,13 @@ class DeltaRecord
    *
    * @param delta_type a split or merge delta.
    * @param right_node a split/merged right node.
-   * @param right_lid the logical ID of a split/merged right node.
-   * @param next a pointer to the next delta record or base node.
+   * @param right_lid the address of a split/merged right node.
    */
   DeltaRecord(  //
       const DeltaType delta_type,
       const DeltaRecord *right_node,
-      const LogicalID *right_lid,
-      const DeltaRecord *next = nullptr)
-      : is_inner_{right_node->is_inner_},
-        delta_type_{delta_type},
-        next_{reinterpret_cast<uintptr_t>(next)}
+      const void *right_lid)
+      : is_inner_{right_node->is_inner_}, delta_type_{delta_type}
   {
     // copy a lowest key
     auto key_len = right_node->meta_.key_len;
@@ -166,15 +172,10 @@ class DeltaRecord
   /**
    * @brief Construct a new delta record for removing a node.
    *
-   * @param dummy a dummy delta type for distinguishing constructors.
    * @param removed_node a removed node.
    */
-  DeltaRecord(  //
-      [[maybe_unused]] const DeltaType dummy,
-      const DeltaRecord *removed_node)
-      : is_inner_{removed_node->is_inner_},
-        delta_type_{kRemoveNode},
-        next_{reinterpret_cast<uintptr_t>(removed_node)}
+  explicit DeltaRecord(const bool is_leaf)
+      : is_inner_{static_cast<uint16_t>(!is_leaf)}, delta_type_{kRemoveNode}
   {
   }
 
@@ -210,6 +211,17 @@ class DeltaRecord
   }
 
   /**
+   * @retval true if this node is leftmost in its tree level.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] constexpr auto
+  IsLeftmost() const  //
+      -> bool
+  {
+    return meta_.key_len == 0;
+  }
+
+  /**
    * @param key a target key to be compared.
    * @retval true if this record has the same key with a given one.
    * @retval false otherwise.
@@ -224,28 +236,45 @@ class DeltaRecord
 
   /**
    * @param key a target key to be compared.
+   * @param closed a flag for including the same key.
    * @retval true if the lowest key is less than or equal to a given key.
    * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
-  LowKeyIsLE(const Key &key) const  //
+  LowKeyIsLE(  //
+      const Key &key,
+      const bool closed) const  //
       -> bool
   {
     const auto &low_key = GetKey();
-    return Comp{}(low_key, key) || !Comp{}(key, low_key);
+    return Comp{}(low_key, key) || (closed && !Comp{}(key, low_key));
   }
 
   /**
    * @param key a target key to be compared.
+   * @param closed a flag for including the same key.
    * @retval true if the highest key is greater than a given key.
    * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
-  HighKeyIsGT(const Key &key) const  //
+  HighKeyIsGE(  //
+      const Key &key,
+      const bool closed) const  //
       -> bool
   {
     const auto &high_key = GetHighKey();
-    return !high_key || Comp{}(key, *high_key);
+    return !high_key || Comp{}(key, *high_key) || (closed && !Comp{}(*high_key, key));
+  }
+
+  /**
+   * @retval true if there is a delta chain.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] constexpr auto
+  NeedConsolidation() const  //
+      -> bool
+  {
+    return delta_type_ != kNotDelta && delta_type_ != kRemoveNode;
   }
 
   /**
@@ -255,7 +284,17 @@ class DeltaRecord
   GetDeltaType() const  //
       -> DeltaType
   {
-    return DeltaType{delta_type_};
+    return static_cast<DeltaType>(delta_type_);
+  }
+
+  /**
+   * @return the number of delta records in this chain.
+   */
+  [[nodiscard]] constexpr auto
+  GetRecordCount() const  //
+      -> size_t
+  {
+    return rec_count_;
   }
 
   /**
@@ -333,6 +372,26 @@ class DeltaRecord
   }
 
   /**
+   * @tparam T a class of expected payloads.
+   * @return a payload in this record.
+   */
+  [[nodiscard]] auto
+  GetPayloadAtomically() const  //
+      -> uintptr_t
+  {
+    const auto *payload_addr = reinterpret_cast<std::atomic_uintptr_t *>(GetPayloadAddr());
+    while (true) {
+      for (size_t i = 1; true; ++i) {
+        const auto payload = payload_addr->load(std::memory_order_relaxed);
+        if (payload != kNullPtr) return payload;
+        if (i >= kRetryNum) break;
+        BW_TREE_SPINLOCK_HINT
+      }
+      std::this_thread::sleep_for(kShortSleep);
+    }
+  }
+
+  /**
    * @brief Update the delta-modification type of this record with a given one.
    *
    * @param type a modification type to be updated.
@@ -351,6 +410,7 @@ class DeltaRecord
   void
   SetNext(const DeltaRecord *next)
   {
+    rec_count_ = (next->delta_type_ == kNotDelta) ? 1 : next->rec_count_ + 1;
     next_ = reinterpret_cast<uintptr_t>(next);
   }
 
@@ -362,6 +422,18 @@ class DeltaRecord
   Abort()
   {
     next_ = kNullPtr;
+  }
+
+  /**
+   * @brief Set a merged-left child node to complete deleting an index-entry.
+   *
+   * @param left_lid the LID of a mereged-left child node.
+   */
+  void
+  SetSiblingLID(LogicalID *left_lid)
+  {
+    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(GetPayloadAddr());
+    payload->store(left_lid, std::memory_order_relaxed);
   }
 
   /*####################################################################################
@@ -381,7 +453,7 @@ class DeltaRecord
   {
     constexpr auto kKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
     constexpr auto kPayLen = (sizeof(Payload) > kPtrLen) ? sizeof(Payload) : kPtrLen;
-    return kHeaderLen + 2 * kKeyLen + kPayLen;
+    return (kHeaderLen + 2 * kKeyLen + kPayLen + kCacheAlign) & ~kCacheAlign;
   }
 
   /**
@@ -392,7 +464,6 @@ class DeltaRecord
    * @param records a set of records to be inserted this delta record.
    * @return the difference of a node size.
    */
-  template <class T>
   [[nodiscard]] auto
   AddByInsertionSortTo(  //
       const std::optional<Key> &sep_key,
@@ -415,7 +486,7 @@ class DeltaRecord
       }
 
       // update the page size
-      const auto rec_size = meta_.key_len + sizeof(T) + kMetaLen;
+      const auto rec_size = meta_.rec_len + kMetaLen;
       if (delta_type_ == kInsert) return rec_size;
       if (delta_type_ == kDelete) return -rec_size;
     }
@@ -517,6 +588,12 @@ class DeltaRecord
 
   /// a flag for indicating the types of delta records.
   uint16_t delta_type_ : 3;
+
+  /// a blank block for alignment.
+  uint16_t : 0;
+
+  /// the number of delta records in this chain.
+  uint16_t rec_count_{0};
 
   /// a blank block for alignment.
   uint64_t : 0;

@@ -18,6 +18,7 @@
 #define BW_TREE_COMPONENT_FIXLEN_DELTA_RECORD_HPP
 
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -106,20 +107,22 @@ class DeltaRecord
   /**
    * @brief Construct a new delta record for deleting an index-entry.
    *
-   * @param merge_d a child merge-delta record.
-   * @param left_lid the logical ID of a merged-left child.
+   * @param removed_child a removed child node.
+   * @param left_lid the logical ID of a merged-left child (dummy nullptr).
    */
   DeltaRecord(  //
-      const DeltaRecord *merge_d,
-      const LogicalID *left_lid)
+      const DeltaRecord *removed_node,
+      [[maybe_unused]] const LogicalID *left_lid)
       : is_inner_{kInternal},
         delta_type_{kDelete},
         has_low_key_{1},
-        has_high_key_{merge_d->has_high_key_},
-        key_{merge_d->key_},
-        high_key_{merge_d->high_key_}
+        has_high_key_{removed_node->has_high_key_},
+        key_{removed_node->key_},
+        high_key_{removed_node->high_key_}
   {
-    SetPayload(left_lid);
+    // set a sibling node
+    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(ShiftAddr(this, kPayOffset));
+    payload->store(nullptr, std::memory_order_relaxed);
   }
 
   /*####################################################################################
@@ -131,19 +134,16 @@ class DeltaRecord
    *
    * @param delta_type a split or merge delta.
    * @param right_node a split/merged right node.
-   * @param right_lid the logical ID of a split/merged right node.
-   * @param next a pointer to the next delta record or base node.
+   * @param right_lid the address of a split/merged right node.
    */
   DeltaRecord(  //
       const DeltaType delta_type,
       const DeltaRecord *right_node,
-      const LogicalID *right_lid,
-      const DeltaRecord *next = nullptr)
+      const void *right_lid)
       : is_inner_{right_node->is_inner_},
         delta_type_{delta_type},
         has_low_key_{1},
         has_high_key_{right_node->has_high_key_},
-        next_{reinterpret_cast<uintptr_t>(next)},
         key_{right_node->key_},
         high_key_{right_node->high_key_}
   {
@@ -154,17 +154,13 @@ class DeltaRecord
   /**
    * @brief Construct a new delta record for removing a node.
    *
-   * @param dummy a dummy delta type for distinguishing constructors.
    * @param removed_node a removed node.
    */
-  DeltaRecord(  //
-      [[maybe_unused]] const DeltaType dummy,
-      const DeltaRecord *removed_node)
-      : is_inner_{removed_node->is_inner_},
+  explicit DeltaRecord(const bool is_leaf)
+      : is_inner_{static_cast<uint16_t>(!is_leaf)},
         delta_type_{kRemoveNode},
         has_low_key_{0},
-        has_high_key_{0},
-        next_{reinterpret_cast<uintptr_t>(removed_node)}
+        has_high_key_{0}
   {
   }
 
@@ -200,6 +196,17 @@ class DeltaRecord
   }
 
   /**
+   * @retval true if this node is leftmost in its tree level.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] constexpr auto
+  IsLeftmost() const  //
+      -> bool
+  {
+    return has_low_key_ == 0;
+  }
+
+  /**
    * @param key a target key to be compared.
    * @retval true if this record has the same key with a given one.
    * @retval false otherwise.
@@ -213,26 +220,43 @@ class DeltaRecord
 
   /**
    * @param key a target key to be compared.
+   * @param closed a flag for including the same key.
    * @retval true if the lowest key is less than or equal to a given key.
    * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
-  LowKeyIsLE(const Key &key) const  //
+  LowKeyIsLE(  //
+      const Key &key,
+      const bool closed) const  //
       -> bool
   {
-    return Comp{}(key_, key) || !Comp{}(key, key_);
+    return Comp{}(key_, key) || (closed && !Comp{}(key, key_));
   }
 
   /**
    * @param key a target key to be compared.
+   * @param closed a flag for including the same key.
    * @retval true if the highest key is greater than a given key.
    * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
-  HighKeyIsGT(const Key &key) const  //
+  HighKeyIsGE(  //
+      const Key &key,
+      const bool closed) const  //
       -> bool
   {
-    return !has_high_key_ || Comp{}(key, high_key_);
+    return !has_high_key_ || Comp{}(key, high_key_) || (closed && !Comp{}(high_key_, key));
+  }
+
+  /**
+   * @retval true if there is a delta chain.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] constexpr auto
+  NeedConsolidation() const  //
+      -> bool
+  {
+    return delta_type_ != kNotDelta && delta_type_ != kRemoveNode;
   }
 
   /**
@@ -242,7 +266,17 @@ class DeltaRecord
   GetDeltaType() const  //
       -> DeltaType
   {
-    return DeltaType{delta_type_};
+    return static_cast<DeltaType>(delta_type_);
+  }
+
+  /**
+   * @return the number of delta records in this chain.
+   */
+  [[nodiscard]] constexpr auto
+  GetRecordCount() const  //
+      -> size_t
+  {
+    return rec_count_;
   }
 
   /**
@@ -306,6 +340,26 @@ class DeltaRecord
   }
 
   /**
+   * @tparam T a class of expected payloads.
+   * @return a payload in this record.
+   */
+  [[nodiscard]] auto
+  GetPayloadAtomically() const  //
+      -> uintptr_t
+  {
+    const auto *pay_addr = reinterpret_cast<std::atomic_uintptr_t *>(ShiftAddr(this, kPayOffset));
+    while (true) {
+      for (size_t i = 1; true; ++i) {
+        const auto payload = pay_addr->load(std::memory_order_relaxed);
+        if (payload != kNullPtr) return payload;
+        if (i >= kRetryNum) break;
+        BW_TREE_SPINLOCK_HINT
+      }
+      std::this_thread::sleep_for(kShortSleep);
+    }
+  }
+
+  /**
    * @brief Update the delta-modification type of this record with a given one.
    *
    * @param type a modification type to be updated.
@@ -324,6 +378,7 @@ class DeltaRecord
   void
   SetNext(const DeltaRecord *next)
   {
+    rec_count_ = (next->delta_type_ == kNotDelta) ? 1 : next->rec_count_ + 1;
     next_ = reinterpret_cast<uintptr_t>(next);
   }
 
@@ -335,6 +390,18 @@ class DeltaRecord
   Abort()
   {
     next_ = kNullPtr;
+  }
+
+  /**
+   * @brief Set a merged-left child node to complete deleting an index-entry.
+   *
+   * @param left_lid the LID of a mereged-left child node.
+   */
+  void
+  SetSiblingLID(LogicalID *left_lid)
+  {
+    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(ShiftAddr(this, kPayOffset));
+    payload->store(left_lid, std::memory_order_relaxed);
   }
 
   /*####################################################################################
@@ -353,7 +420,7 @@ class DeltaRecord
       -> size_t
   {
     constexpr auto kPayLen = (sizeof(Payload) > kPtrLen) ? sizeof(Payload) : kPtrLen;
-    return kHeaderLen + kPayLen;
+    return (kHeaderLen + kPayLen + kCacheAlign) & ~kCacheAlign;
   }
 
   /**
@@ -364,7 +431,6 @@ class DeltaRecord
    * @param records a set of records to be inserted this delta record.
    * @return the difference of a record count.
    */
-  template <class T>
   [[nodiscard]] auto
   AddByInsertionSortTo(  //
       const std::optional<Key> &sep_key,
@@ -408,6 +474,8 @@ class DeltaRecord
   /// the length of child pointers.
   static constexpr size_t kPtrLen = sizeof(LogicalID *);
 
+  static constexpr size_t kPayOffset = (kHeaderLen + kWordAlign) & ~kWordAlign;
+
   /*####################################################################################
    * Internal getters/setters
    *##################################################################################*/
@@ -440,6 +508,12 @@ class DeltaRecord
 
   /// a flag for indicating whether this delta record has a highest-key.
   uint16_t has_high_key_ : 1;
+
+  /// a blank block for alignment.
+  uint16_t : 0;
+
+  /// the number of delta records in this chain.
+  uint16_t rec_count_{0};
 
   /// a blank block for alignment.
   uint64_t : 0;

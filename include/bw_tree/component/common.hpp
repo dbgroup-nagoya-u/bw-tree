@@ -17,6 +17,13 @@
 #ifndef BW_TREE_COMPONENT_COMMON_HPP
 #define BW_TREE_COMPONENT_COMMON_HPP
 
+#ifdef BW_TREE_HAS_SPINLOCK_HINT
+#include <xmmintrin.h>
+#define BW_TREE_SPINLOCK_HINT _mm_pause();  // NOLINT
+#else
+#define BW_TREE_SPINLOCK_HINT /* do nothing */
+#endif
+
 #include "bw_tree/utility.hpp"
 
 namespace dbgroup::index::bw_tree::component
@@ -30,13 +37,13 @@ namespace dbgroup::index::bw_tree::component
  *
  */
 enum DeltaRC {
+  kDummyRC = -1,
   kReachBaseNode = 0,
   kRecordFound,
   kRecordDeleted,
   kNodeRemoved,
   kKeyIsInSibling,
-  kPartialSplitMayExist,
-  kPartialMergeMayExist,
+  kAbortMerge,
 };
 
 /**
@@ -66,8 +73,11 @@ enum DeltaType : uint16_t {
  * Internal constants
  *####################################################################################*/
 
-/// Assumes that one word is represented by 8 bytes.
-constexpr size_t kWordSize = sizeof(uintptr_t);
+/// bits for word alignments.
+constexpr size_t kWordAlign = kWordSize - 1;
+
+/// bits for cache line alignments.
+constexpr size_t kCacheAlign = kCacheLineSize - 1;
 
 /// the NULL value for uintptr_t
 constexpr uintptr_t kNullPtr = 0;
