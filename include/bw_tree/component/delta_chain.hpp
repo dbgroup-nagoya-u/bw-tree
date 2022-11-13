@@ -58,11 +58,10 @@ class DeltaChain
    * @retval false otherwise.
    */
   [[nodiscard]] static auto
-  TraverseToGetLowKey(const void *delta_addr)  //
+  TraverseToGetLowKey(const DeltaRecord *delta)  //
       -> std::optional<Key>
   {
     // traverse to a base node
-    const auto *delta = reinterpret_cast<const DeltaRecord *>(delta_addr);
     while (delta->GetDeltaType() != kNotDelta) {
       delta = delta->GetNext();
     }

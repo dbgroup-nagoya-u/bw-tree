@@ -156,17 +156,13 @@ class MappingTable
         while (rec != nullptr && rec->GetDeltaType() != kNotDelta) {
           auto *next = rec->GetNext();
           if (rec->GetDeltaType() == kMerge) {
-            delete rec->template GetPayload<Node *>();
+            free(rec->template GetPayload<Node *>());
           }
 
-          delete rec;
+          free(rec);
           rec = next;
         }
-        if (rec == nullptr) continue;
-
-        // delete a base node
-        auto *node = reinterpret_cast<Node *>(rec);
-        delete node;
+        free(rec);
       }
     }
 
