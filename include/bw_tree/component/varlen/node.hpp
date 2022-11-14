@@ -21,7 +21,6 @@
 #include <utility>
 #include <vector>
 
-#include "bw_tree/component/consolidate_info.hpp"
 #include "bw_tree/component/logical_id.hpp"
 #include "metadata.hpp"
 
@@ -43,6 +42,7 @@ class Node
 
   using Record = std::pair<Key, const void *>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
+  using ConsolidateInfo = std::pair<const void *, const void *>;
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
   using NodeEntry = std::tuple<Key, LogicalID *, size_t>;
@@ -83,25 +83,8 @@ class Node
     offset -= key_len;
     memcpy(ShiftAddr(this, offset), split_d->GetKeyAddr(meta), key_len);
     meta_array_[1] = Metadata{offset, key_len, key_len + kPtrLen};
-  }
 
-  /**
-   * @brief Construct a consolidated base node object.
-   *
-   * Note that this construcor sets only header information.
-   *
-   * @param is_inner a flag for indicating whether a leaf or internal node is constructed.
-   * @param node_size the virtual size of this node.
-   * @param do_split a flag for skipping left-split records in consolidation.
-   */
-  Node(  //
-      const bool is_inner,
-      const size_t node_size,
-      const bool is_scan)
-      : is_inner_{static_cast<NodeType>(is_inner)},
-        delta_type_{kNotDelta},
-        node_size_{static_cast<uint32_t>((is_scan) ? node_size : kPageSize)}
-  {
+    node_size_ += 2 * kMetaLen + kPageSize - offset;
   }
 
   Node(const Node &) = delete;
@@ -153,7 +136,18 @@ class Node
   GetNodeSize() const  //
       -> size_t
   {
-    return (node_size_ < kPageSize) ? kPageSize : node_size_;
+    return node_size_;
+  }
+
+  /**
+   * @return the byte length to be modified by SMOs.
+   */
+  [[nodiscard]] constexpr auto
+  GetNodeDiff() const  //
+      -> size_t
+  {
+    const auto is_leaf = static_cast<size_t>(!static_cast<bool>(is_inner_));
+    return node_size_ - kHeaderLen - low_meta_.key_len * (1 + is_leaf);
   }
 
   /**
@@ -416,48 +410,6 @@ class Node
   }
 
   /**
-   * @brief Compute record counts to be consolidated and the total block size.
-   *
-   * This function modifies a given consol_info's third variable (i.e., record count)
-   * for the following consolidation procedure.
-   *
-   * @param consol_info the set of consolidated nodes.
-   * @return the total block size of a consolidated node.
-   */
-  [[nodiscard]] static auto
-  PreConsolidate(std::vector<ConsolidateInfo> &consol_info)  //
-      -> size_t
-  {
-    const auto end_pos = consol_info.size() - 1;
-    size_t size = 0;
-
-    for (size_t i = 0; i <= end_pos; ++i) {
-      auto &[n_ptr, d_ptr, rec_num] = consol_info.at(i);
-      const auto *node = reinterpret_cast<const Node *>(n_ptr);
-      const auto *split_d = reinterpret_cast<const Node *>(d_ptr);
-
-      // check the number of records to be consolidated
-      if (split_d == nullptr) {
-        rec_num = node->rec_count_;
-      } else {
-        const auto sep_meta = split_d->low_meta_;
-        const auto &sep_key = split_d->GetKey(sep_meta);
-        rec_num = node->SearchRecord(sep_key).second;
-      }
-
-      // compute the length of a data block
-      if (rec_num > 0) {
-        const auto end_meta = node->meta_array_[0];
-        const auto end_offset = end_meta.offset + end_meta.rec_len;
-        const auto begin_offset = node->meta_array_[rec_num - 1].offset;
-        size += sizeof(Metadata) * rec_num + (end_offset - begin_offset);
-      }
-    }
-
-    return size;
-  }
-
-  /**
    * @brief Copy a lowest key for consolidation or set an initial used page size for
    * splitting.
    *
@@ -488,7 +440,7 @@ class Node
       meta = meta_array_[0];
     } else {
       // this node is a consolidated node, and so the given node has the lowest key
-      node = reinterpret_cast<const Node *>(consol_info.node);
+      node = reinterpret_cast<const Node *>(consol_info.first);
       meta = node->low_meta_;
     }
 
@@ -497,6 +449,7 @@ class Node
     offset -= key_len;
     memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
     low_meta_ = Metadata{static_cast<size_t>(offset), key_len, key_len};
+    node_size_ += key_len;
 
     return offset;
   }
@@ -515,27 +468,24 @@ class Node
     // prepare a node that has the highest key, and copy the next logical ID
     const Node *node{};
     Metadata meta{};
-    if (consol_info.split_d == nullptr) {
+    if (consol_info.second == nullptr) {
       // an original or merged base node
-      node = reinterpret_cast<const Node *>(consol_info.node);
+      node = reinterpret_cast<const Node *>(consol_info.first);
       meta = node->high_meta_;
       next_ = node->next_;
     } else {
       // a split-delta record
-      node = reinterpret_cast<const Node *>(consol_info.split_d);
+      node = reinterpret_cast<const Node *>(consol_info.second);
       meta = node->low_meta_;
       next_ = node->template GetPayload<uintptr_t>(meta);
     }
 
     // copy the highest key
     const auto key_len = meta.key_len;
-    if (key_len > 0) {
-      offset -= key_len;
-      memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
-      high_meta_ = Metadata{static_cast<size_t>(offset), key_len, key_len};
-    } else {
-      high_meta_ = Metadata{0, 0, 0};
-    }
+    offset -= key_len;
+    memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
+    high_meta_ = Metadata{static_cast<size_t>(offset), key_len, key_len};
+    node_size_ += key_len;
   }
 
   /**
@@ -556,15 +506,17 @@ class Node
   {
     const auto meta = node->meta_array_[pos];
     const auto rec_len = meta.rec_len;
+    const auto total_len = kMetaLen + rec_len;
 
     if (offset > 0) {
       // copy a record from the given node
       offset -= rec_len;
       memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), rec_len);
       meta_array_[rec_count_++] = Metadata{static_cast<size_t>(offset), meta.key_len, rec_len};
+      node_size_ += total_len;
     } else {
       // calculate the skipped page size
-      offset += kMetaLen + rec_len;
+      offset += total_len;
       if (offset > 0) {
         // this record is the end one in a split-left node
         offset = kPageSize;
@@ -593,15 +545,17 @@ class Node
       // the target record is insert/modify delta
       const auto meta = rec->low_meta_;
       const auto rec_len = meta.rec_len;
+      const auto total_len = kMetaLen + rec_len;
 
       if (offset > 0) {
         // copy a record from the given node
         offset -= rec_len;
         memcpy(ShiftAddr(this, offset), rec->GetKeyAddr(meta), rec_len);
         meta_array_[rec_count_++] = Metadata{static_cast<size_t>(offset), meta.key_len, rec_len};
+        node_size_ += total_len;
       } else {
         // calculate the skipped page size
-        offset += kMetaLen + rec_len;
+        offset += total_len;
         if (offset > 0) {
           // this record is the end one in a split-left node
           offset = kPageSize;
@@ -638,27 +592,31 @@ class Node
     using Payload = std::tuple_element_t<1, Entry>;
 
     constexpr auto kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
+    constexpr auto kIsLeaf = (std::is_same_v<Payload, LogicalID *>) ? 0 : 1;
 
     // extract and insert entries into this node
     auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
-    auto node_size = kHeaderLen + kMaxKeyLen;
+    auto node_size = kHeaderLen + kMaxKeyLen + kIsLeaf * kMaxKeyLen;
     for (; iter < iter_end; ++iter) {
       const auto &[key, payload, key_len] = ParseEntry(*iter);
       const auto rec_len = key_len + sizeof(Payload);
+      const auto total_len = rec_len + kMetaLen;
 
       // check whether the node has sufficent space
-      node_size += rec_len + sizeof(Metadata);
+      node_size += total_len;
       if (node_size > kPageSize) break;
 
       // insert an entry into this node
       offset = SetPayload(offset, payload);
       offset = SetKey(offset, key, key_len);
       meta_array_[rec_count_++] = Metadata{offset, key_len, rec_len};
+      node_size_ += total_len;
     }
 
     // set a lowest key
     low_meta_ = meta_array_[0];
     low_meta_.rec_len = low_meta_.key_len;
+    node_size_ += kIsLeaf * low_meta_.key_len;
 
     // link the sibling nodes if exist
     if (prev_node != nullptr) {
@@ -901,6 +859,7 @@ class Node
     const auto offset = kPageSize - key_len;
     memcpy(ShiftAddr(this, offset), right_node->GetKeyAddr(low_meta), key_len);
     high_meta_ = Metadata{offset, key_len, key_len};
+    node_size_ += key_len;
   }
 
   /*####################################################################################
@@ -920,7 +879,7 @@ class Node
   uint16_t rec_count_{0};
 
   /// the size of this node in bytes.
-  uint32_t node_size_{kPageSize};
+  uint32_t node_size_{kHeaderLen};
 
   /// the pointer to a sibling node.
   uintptr_t next_{kNullPtr};

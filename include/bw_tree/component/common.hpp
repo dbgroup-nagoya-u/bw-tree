@@ -37,7 +37,6 @@ namespace dbgroup::index::bw_tree::component
  *
  */
 enum DeltaRC {
-  kDummyRC = -1,
   kReachBaseNode = 0,
   kRecordFound,
   kRecordDeleted,

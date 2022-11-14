@@ -301,19 +301,17 @@ class DeltaRecordFixture : public testing::Test
     }
     std::shuffle(ids.begin(), ids.end(), rand);
 
-    size_t diff = 0;
     for (const auto &id : ids) {
       auto &&delta = CreateLeafInsertModifyDelta(kDelete, keys_[id], payloads_[id]);
-      diff += delta->AddByInsertionSortTo(std::nullopt, records);
+      delta->AddByInsertionSortTo(std::nullopt, records);
       entities.emplace_back(std::move(delta));
     }
     for (const auto &id : ids) {
       auto &&delta = CreateLeafInsertModifyDelta(kInsert, keys_[id], payloads_[id]);
-      diff += delta->AddByInsertionSortTo(std::nullopt, records);
+      delta->AddByInsertionSortTo(std::nullopt, records);
       entities.emplace_back(std::move(delta));
     }
 
-    EXPECT_EQ(diff, 0);
     ASSERT_EQ(kKeyNumForTest, records.size());
     for (size_t i = 0; i < kKeyNumForTest - 1; ++i) {
       EXPECT_TRUE(LessThan(records.at(i), records.at(i + 1)));

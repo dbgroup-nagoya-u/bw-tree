@@ -256,7 +256,7 @@ class DeltaRecord
   NeedConsolidation() const  //
       -> bool
   {
-    return delta_type_ != kNotDelta && delta_type_ != kRemoveNode;
+    return delta_type_ != kNotDelta && rec_count_ >= kMaxDeltaRecordNum;
   }
 
   /**
@@ -280,6 +280,16 @@ class DeltaRecord
   }
 
   /**
+   * @return the byte length of this node.
+   */
+  [[nodiscard]] constexpr auto
+  GetNodeSize() const  //
+      -> size_t
+  {
+    return node_size_;
+  }
+
+  /**
    * @brief Get the next pointer of a delta record or a base node.
    *
    * @tparam T an expected class to be loaded.
@@ -291,6 +301,16 @@ class DeltaRecord
       -> T
   {
     return reinterpret_cast<T>(next_);
+  }
+
+  /**
+   * @return the length of a key in this record.
+   */
+  [[nodiscard]] constexpr auto
+  GetKeyLength() const  //
+      -> size_t
+  {
+    return kKeyLen;
   }
 
   /**
@@ -329,7 +349,7 @@ class DeltaRecord
    * @tparam T a class of expected payloads.
    * @return a payload in this record.
    */
-  template <class T>
+  template <class T = void *>
   [[nodiscard]] auto
   GetPayload() const  //
       -> T
@@ -376,9 +396,12 @@ class DeltaRecord
    * @param next a pointer to be set as the next one.
    */
   void
-  SetNext(const DeltaRecord *next)
+  SetNext(  //
+      const DeltaRecord *next,
+      const int64_t diff)
   {
     rec_count_ = (next->delta_type_ == kNotDelta) ? 1 : next->rec_count_ + 1;
+    node_size_ = next->node_size_ + diff;
     next_ = reinterpret_cast<uintptr_t>(next);
   }
 
@@ -431,11 +454,10 @@ class DeltaRecord
    * @param records a set of records to be inserted this delta record.
    * @return the difference of a record count.
    */
-  [[nodiscard]] auto
+  void
   AddByInsertionSortTo(  //
       const std::optional<Key> &sep_key,
-      std::vector<const void *> &records) const  //
-      -> int64_t
+      std::vector<const void *> &records) const
   {
     // check whether this record is in a target node
     if (!sep_key || Comp{}(key_, *sep_key)) {
@@ -454,13 +476,7 @@ class DeltaRecord
       } else if (Comp{}(key_, rec_key)) {
         records.insert(it, this);
       }
-
-      // update the page size
-      if (delta_type_ == kInsert) return 1;
-      if (delta_type_ == kDelete) return -1;
     }
-
-    return 0;
   }
 
  private:
@@ -470,6 +486,9 @@ class DeltaRecord
 
   /// Header length in bytes.
   static constexpr size_t kHeaderLen = sizeof(DeltaRecord);
+
+  /// the length of keys.
+  static constexpr size_t kKeyLen = sizeof(Key);
 
   /// the length of child pointers.
   static constexpr size_t kPtrLen = sizeof(LogicalID *);
@@ -515,8 +534,8 @@ class DeltaRecord
   /// the number of delta records in this chain.
   uint16_t rec_count_{0};
 
-  /// a blank block for alignment.
-  uint64_t : 0;
+  /// the size of this logical node in bytes.
+  uint32_t node_size_{0};
 
   /// the pointer to the next node.
   uintptr_t next_{kNullPtr};
