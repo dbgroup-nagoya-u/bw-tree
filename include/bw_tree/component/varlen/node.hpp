@@ -217,6 +217,10 @@ class Node
     return high_key;
   }
 
+  /*####################################################################################
+   * Public getters/setters for records
+   *##################################################################################*/
+
   /**
    * @param pos the position of a target record.
    * @return a key in a target record.
@@ -691,7 +695,7 @@ class Node
   static constexpr size_t kMetaLen = sizeof(Metadata);
 
   /*####################################################################################
-   * Internal getters setters
+   * Internal getters/setters
    *##################################################################################*/
 
   /**

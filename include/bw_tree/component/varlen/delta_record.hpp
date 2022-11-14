@@ -22,7 +22,6 @@
 #include <utility>
 #include <vector>
 
-#include "bw_tree/component/consolidate_info.hpp"
 #include "bw_tree/component/logical_id.hpp"
 #include "metadata.hpp"
 
@@ -196,7 +195,7 @@ class DeltaRecord
   ~DeltaRecord() = default;
 
   /*####################################################################################
-   * Public getters/setters
+   * Public getters/setters for a header
    *##################################################################################*/
 
   /**
@@ -322,32 +321,6 @@ class DeltaRecord
   }
 
   /**
-   * @return the length of a key in this record.
-   */
-  [[nodiscard]] constexpr auto
-  GetKeyLength() const  //
-      -> size_t
-  {
-    return meta_.key_len;
-  }
-
-  /**
-   * @return a key in this record.
-   */
-  [[nodiscard]] auto
-  GetKey() const  //
-      -> Key
-  {
-    if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(meta_));
-    } else {
-      Key key{};
-      memcpy(&key, GetKeyAddr(meta_), sizeof(Key));
-      return key;
-    }
-  }
-
-  /**
    * @return a lowest key in a target record if exist.
    */
   [[nodiscard]] constexpr auto
@@ -373,6 +346,62 @@ class DeltaRecord
     } else {
       Key key{};
       memcpy(&key, GetKeyAddr(high_key_meta_), sizeof(Key));
+      return key;
+    }
+  }
+
+  /**
+   * @brief Update the delta-modification type of this record with a given one.
+   *
+   * @param type a modification type to be updated.
+   */
+  void
+  SetDeltaType(const DeltaType type)
+  {
+    delta_type_ = type;
+  }
+
+  /**
+   * @brief Set a given pointer as the next one.
+   *
+   * @param next a pointer to be set as the next one.
+   */
+  void
+  SetNext(  //
+      const DeltaRecord *next,
+      const int64_t diff)
+  {
+    rec_count_ = (next->delta_type_ == kNotDelta) ? 1 : next->rec_count_ + 1;
+    node_size_ = next->node_size_ + diff;
+    next_ = reinterpret_cast<uintptr_t>(next);
+  }
+
+  /*####################################################################################
+   * Public getters/setters for records
+   *##################################################################################*/
+
+  /**
+   * @return the length of a key in this record.
+   */
+  [[nodiscard]] constexpr auto
+  GetKeyLength() const  //
+      -> size_t
+  {
+    return meta_.key_len;
+  }
+
+  /**
+   * @return a key in this record.
+   */
+  [[nodiscard]] auto
+  GetKey() const  //
+      -> Key
+  {
+    if constexpr (IsVarLenData<Key>()) {
+      return reinterpret_cast<Key>(GetKeyAddr(meta_));
+    } else {
+      Key key{};
+      memcpy(&key, GetKeyAddr(meta_), sizeof(Key));
       return key;
     }
   }
@@ -409,42 +438,6 @@ class DeltaRecord
       }
       std::this_thread::sleep_for(kShortSleep);
     }
-  }
-
-  /**
-   * @brief Update the delta-modification type of this record with a given one.
-   *
-   * @param type a modification type to be updated.
-   */
-  void
-  SetDeltaType(const DeltaType type)
-  {
-    delta_type_ = type;
-  }
-
-  /**
-   * @brief Set a given pointer as the next one.
-   *
-   * @param next a pointer to be set as the next one.
-   */
-  void
-  SetNext(  //
-      const DeltaRecord *next,
-      const int64_t diff)
-  {
-    rec_count_ = (next->delta_type_ == kNotDelta) ? 1 : next->rec_count_ + 1;
-    node_size_ = next->node_size_ + diff;
-    next_ = reinterpret_cast<uintptr_t>(next);
-  }
-
-  /**
-   * @brief Remove the next pointer from this record.
-   *
-   */
-  void
-  Abort()
-  {
-    next_ = kNullPtr;
   }
 
   /**

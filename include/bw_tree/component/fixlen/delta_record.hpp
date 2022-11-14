@@ -23,7 +23,6 @@
 #include <vector>
 
 #include "bw_tree/component/common.hpp"
-#include "bw_tree/component/consolidate_info.hpp"
 #include "bw_tree/component/logical_id.hpp"
 
 namespace dbgroup::index::bw_tree::component::fixlen
@@ -181,7 +180,7 @@ class DeltaRecord
   ~DeltaRecord() = default;
 
   /*####################################################################################
-   * Public getters/setters
+   * Public getters/setters for a header
    *##################################################################################*/
 
   /**
@@ -304,26 +303,6 @@ class DeltaRecord
   }
 
   /**
-   * @return the length of a key in this record.
-   */
-  [[nodiscard]] constexpr auto
-  GetKeyLength() const  //
-      -> size_t
-  {
-    return kKeyLen;
-  }
-
-  /**
-   * @return a key in this record.
-   */
-  [[nodiscard]] auto
-  GetKey() const  //
-      -> Key
-  {
-    return key_;
-  }
-
-  /**
    * @return a lowest key in a target record if exist.
    */
   [[nodiscard]] constexpr auto
@@ -343,6 +322,56 @@ class DeltaRecord
   {
     if (!has_high_key_) return std::nullopt;
     return high_key_;
+  }
+
+  /**
+   * @brief Update the delta-modification type of this record with a given one.
+   *
+   * @param type a modification type to be updated.
+   */
+  void
+  SetDeltaType(const DeltaType type)
+  {
+    delta_type_ = type;
+  }
+
+  /**
+   * @brief Set a given pointer as the next one.
+   *
+   * @param next a pointer to be set as the next one.
+   */
+  void
+  SetNext(  //
+      const DeltaRecord *next,
+      const int64_t diff)
+  {
+    rec_count_ = (next->delta_type_ == kNotDelta) ? 1 : next->rec_count_ + 1;
+    node_size_ = next->node_size_ + diff;
+    next_ = reinterpret_cast<uintptr_t>(next);
+  }
+
+  /*####################################################################################
+   * Public getters/setters for records
+   *##################################################################################*/
+
+  /**
+   * @return the length of a key in this record.
+   */
+  [[nodiscard]] constexpr auto
+  GetKeyLength() const  //
+      -> size_t
+  {
+    return kKeyLen;
+  }
+
+  /**
+   * @return a key in this record.
+   */
+  [[nodiscard]] auto
+  GetKey() const  //
+      -> Key
+  {
+    return key_;
   }
 
   /**
@@ -377,42 +406,6 @@ class DeltaRecord
       }
       std::this_thread::sleep_for(kShortSleep);
     }
-  }
-
-  /**
-   * @brief Update the delta-modification type of this record with a given one.
-   *
-   * @param type a modification type to be updated.
-   */
-  void
-  SetDeltaType(const DeltaType type)
-  {
-    delta_type_ = type;
-  }
-
-  /**
-   * @brief Set a given pointer as the next one.
-   *
-   * @param next a pointer to be set as the next one.
-   */
-  void
-  SetNext(  //
-      const DeltaRecord *next,
-      const int64_t diff)
-  {
-    rec_count_ = (next->delta_type_ == kNotDelta) ? 1 : next->rec_count_ + 1;
-    node_size_ = next->node_size_ + diff;
-    next_ = reinterpret_cast<uintptr_t>(next);
-  }
-
-  /**
-   * @brief Remove the next pointer from this record.
-   *
-   */
-  void
-  Abort()
-  {
-    next_ = kNullPtr;
   }
 
   /**
@@ -452,7 +445,6 @@ class DeltaRecord
    * @tparam T a class of payloads.
    * @param sep_key an optional separator key.
    * @param records a set of records to be inserted this delta record.
-   * @return the difference of a record count.
    */
   void
   AddByInsertionSortTo(  //
@@ -493,6 +485,7 @@ class DeltaRecord
   /// the length of child pointers.
   static constexpr size_t kPtrLen = sizeof(LogicalID *);
 
+  /// an offset value for atomic operations.
   static constexpr size_t kPayOffset = (kHeaderLen + kWordAlign) & ~kWordAlign;
 
   /*####################################################################################

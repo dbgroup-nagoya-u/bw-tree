@@ -1226,8 +1226,8 @@ class BwTree
       auto *new_node = reinterpret_cast<Node_t *>(GetNodePage());
       switch (TryConsolidate(head, new_node)) {
         case kTrySplit:
-          if (TrySplit(head, new_node, stack)) return;
-          break;  // retry from consolidation
+          if (TrySplit(head, new_node, stack)) continue;  // consolidate the split-left node
+          break;                                          // retry from consolidation
 
         case kTryMerge:
           if (TryMerge(head, new_node, stack)) return;
@@ -1246,7 +1246,6 @@ class BwTree
 
       // if consolidation is failed, keep the allocated page to reuse
       tls_node_page_.reset(new_node);
-      if (head->GetRecordCount() < kMaxDeltaRecordNum * 4) return;
     }
   }
 
@@ -1266,6 +1265,7 @@ class BwTree
       const bool is_scan = false)  //
       -> SMOsRC
   {
+    constexpr size_t kPageAlign = kPageSize - 1;
     constexpr auto kMaxBlockSize = kPageSize - kHeaderLen - 2 * kMaxKeyLen;
     thread_local std::vector<Record> records(kMaxDeltaRecordNum * 4);
     thread_local std::vector<ConsolidateInfo> nodes(kMaxDeltaRecordNum);
@@ -1277,7 +1277,6 @@ class BwTree
     void *page = consol_node;
     if (is_scan) {
       // use dynamic page sizes for scanning
-      constexpr size_t kPageAlign = kPageSize - 1;
       const auto cur_size = (consol_node->GetNodeSize() + kPageAlign) & ~kPageAlign;
       page_size = (node_size + kPageAlign) & ~kPageAlign;
       if (page_size > cur_size) {
@@ -1382,7 +1381,7 @@ class BwTree
   TrySplit(  //
       const Delta_t *head,
       Node_t *split_node,
-      std::vector<LogicalID *> &stack)  //
+      std::vector<LogicalID *> stack)  //
       -> bool
   {
     const auto *split_node_d = reinterpret_cast<Delta_t *>(split_node);
