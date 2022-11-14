@@ -21,7 +21,6 @@
 #include <utility>
 #include <vector>
 
-#include "bw_tree/component/consolidate_info.hpp"
 #include "bw_tree/component/logical_id.hpp"
 
 namespace dbgroup::index::bw_tree::component
@@ -42,6 +41,7 @@ class DeltaChain
   using Key = typename DeltaRecord::Key;
   using Comp = typename DeltaRecord::Comp;
   using Record = typename DeltaRecord::Record;
+  using ConsolidateInfo = std::pair<const void *, const void *>;
 
   /*####################################################################################
    * Public utilities
@@ -401,48 +401,51 @@ class DeltaChain
    * @tparam T a class of expected payloads.
    * @param delta the head record in a delta-chain.
    * @param records a vector for storing sorted records.
-   * @param consol_info a vector for storing base nodes and corresponding separator keys.
-   * @retval 1st: true if this node has been already consolidated.
-   * @retval 2nd: the difference of node size in bytes.
+   * @param nodes a vector for storing base nodes and corresponding separator keys.
    */
-  static auto
+  static void
   Sort(  //
       const DeltaRecord *delta,
       std::vector<Record> &records,
-      std::vector<ConsolidateInfo> &consol_info)  //
-      -> int64_t
+      std::vector<ConsolidateInfo> &nodes)
   {
     std::optional<Key> sep_key = std::nullopt;
-    const DeltaRecord *split_d = nullptr;
+    const DeltaRecord *smo_d = nullptr;
 
     // traverse and sort a delta chain
-    for (int64_t size_diff = 0; true; delta = delta->GetNext()) {
+    for (; true; delta = delta->GetNext()) {
       switch (delta->GetDeltaType()) {
         case kInsert:
         case kModify:
         case kDelete:
-          size_diff += delta->AddByInsertionSortTo(sep_key, records);
+          delta->AddByInsertionSortTo(sep_key, records);
           break;
 
         case kSplit: {
-          const auto &cur_key = delta->GetKey();
-          if (!sep_key || Comp{}(cur_key, *sep_key)) {
-            // keep a separator key to exclude out-of-range records
-            sep_key = cur_key;
-            split_d = delta;
+          // keep a separator key to exclude out-of-range records
+          if (!sep_key) {
+            sep_key = delta->GetKey();
+            smo_d = delta;
           }
           break;
         }
 
-        case kMerge:
+        case kMerge: {
           // keep the merged node and the corresponding separator key
-          consol_info.emplace_back(delta->template GetPayload<DeltaRecord *>(), split_d);
+          nodes.emplace_back(delta->GetPayload(), smo_d);
+
+          // keep a separator key to exclude out-of-range records
+          if (const auto &key = delta->GetKey(); !sep_key || Comp{}(key, *sep_key)) {
+            sep_key = std::move(key);
+            smo_d = delta;
+          }
           break;
+        }
 
         case kNotDelta:
         default:
-          consol_info.emplace_back(delta, split_d);
-          return size_diff;
+          nodes.emplace_back(delta, smo_d);
+          return;
       }
     }
   }

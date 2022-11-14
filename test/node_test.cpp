@@ -112,19 +112,6 @@ class NodeFixture : public testing::Test
     EXPECT_FALSE(node->GetLowKey());
   }
 
-  void
-  VerifyNewNodeConstructor()
-  {
-    constexpr bool kDummyFlag = false;
-    auto *raw_p = new (GetPage()) Node_t{kLeaf, kPageSize, kDummyFlag};
-    std::unique_ptr<Node_t> node{raw_p};
-
-    EXPECT_TRUE(node->IsLeaf());
-    EXPECT_EQ(0, node->GetRecordCount());
-    EXPECT_EQ(nullptr, node->GetNext());
-    EXPECT_FALSE(node->GetLowKey());
-  }
-
   /*####################################################################################
    * Internal member variables
    *##################################################################################*/
@@ -175,11 +162,6 @@ TYPED_TEST_SUITE(NodeFixture, TestTargets);
 TYPED_TEST(NodeFixture, ConstructedInitialRootHasExpectedValues)
 {  //
   TestFixture::VerifyInitialRootConstructor();
-}
-
-TYPED_TEST(NodeFixture, ConstructedNewNodeHasExpectedValues)
-{  //
-  TestFixture::VerifyNewNodeConstructor();
 }
 
 }  // namespace dbgroup::index::bw_tree::component::test

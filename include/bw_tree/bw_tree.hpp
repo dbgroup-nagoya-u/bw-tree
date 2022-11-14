@@ -28,7 +28,6 @@
 #include "memory/epoch_based_gc.hpp"
 
 // local sources
-#include "component/consolidate_info.hpp"
 #include "component/delta_chain.hpp"
 #include "component/fixlen/delta_record.hpp"
 #include "component/fixlen/node.hpp"
@@ -59,7 +58,6 @@ class BwTree
 
   using DeltaRC = component::DeltaRC;
   using DeltaType = component::DeltaType;
-  using ConsolidateInfo = component::ConsolidateInfo;
   using LogicalID = component::LogicalID;
   using NodeVarLen_t = component::varlen::Node<Key, Comp>;
   using NodeFixLen_t = component::fixlen::Node<Key, Comp>;
@@ -70,6 +68,7 @@ class BwTree
   using Record = typename Delta_t::Record;
   using MappingTable_t = component::MappingTable<Node_t, Delta_t>;
   using DC = component::DeltaChain<Delta_t>;
+  using ConsolidateInfo = std::pair<const void *, const void *>;
   using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t, Delta_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
 
@@ -445,15 +444,20 @@ class BwTree
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
+    const auto rec_len = key_len + kPayLen + kMetaLen;
     auto *write_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload};
     while (true) {
       // check whether the target node includes incomplete SMOs
       const auto [head, rc] = GetHeadWithKeyCheck(key, stack);
 
       // try to insert the delta record
-      const auto type = (rc == DeltaRC::kRecordFound) ? DeltaType::kModify : DeltaType::kInsert;
-      write_d->SetDeltaType(type);
-      write_d->SetNext(head);
+      if (rc == DeltaRC::kRecordFound) {
+        write_d->SetDeltaType(DeltaType::kModify);
+        write_d->SetNext(head, 0);
+      } else {
+        write_d->SetDeltaType(DeltaType::kInsert);
+        write_d->SetNext(head, rec_len);
+      }
       if (stack.back()->CASWeak(head, write_d)) break;
     }
 
@@ -491,6 +495,7 @@ class BwTree
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
+    const auto rec_len = key_len + kPayLen + kMetaLen;
     auto *insert_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, key, key_len, payload};
     auto rc = kSuccess;
     while (true) {
@@ -503,7 +508,7 @@ class BwTree
       }
 
       // try to insert the delta record
-      insert_d->SetNext(head);
+      insert_d->SetNext(head, rec_len);
       if (stack.back()->CASWeak(head, insert_d)) break;
     }
 
@@ -553,7 +558,7 @@ class BwTree
       }
 
       // try to insert the delta record
-      modify_d->SetNext(head);
+      modify_d->SetNext(head, 0);
       if (stack.back()->CASWeak(head, modify_d)) break;
     }
 
@@ -588,6 +593,7 @@ class BwTree
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
+    const auto rec_len = key_len + kPayLen + kMetaLen;
     auto *delete_d = new (GetRecPage()) Delta_t{key, key_len};
     auto rc = kSuccess;
     while (true) {
@@ -600,7 +606,7 @@ class BwTree
       }
 
       // try to insert the delta record
-      delete_d->SetNext(head);
+      delete_d->SetNext(head, -rec_len);
       if (stack.back()->CASWeak(head, delete_d)) break;
     }
 
@@ -883,7 +889,7 @@ class BwTree
         }
       }
 
-      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
+      if (head->NeedConsolidation()) {
         consol_lid_ = stack.back();
       }
       return;
@@ -1007,7 +1013,7 @@ class BwTree
           break;  // do nothing
       }
 
-      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
+      if (head->NeedConsolidation()) {
         consol_lid_ = stack.back();
       }
 
@@ -1057,7 +1063,7 @@ class BwTree
         }
       }
 
-      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
+      if (head->NeedConsolidation()) {
         consol_lid_ = stack.back();
       }
 
@@ -1122,7 +1128,7 @@ class BwTree
         }
       }
 
-      if (head->GetRecordCount() >= kMaxDeltaRecordNum) {
+      if (head->NeedConsolidation()) {
         consol_lid_ = stack.back();
       }
 
@@ -1220,8 +1226,8 @@ class BwTree
       auto *new_node = reinterpret_cast<Node_t *>(GetNodePage());
       switch (TryConsolidate(head, new_node)) {
         case kTrySplit:
-          if (TrySplit(head, new_node, stack)) return;
-          break;  // retry from consolidation
+          if (TrySplit(head, new_node, stack)) continue;  // consolidate the split-left node
+          break;                                          // retry from consolidation
 
         case kTryMerge:
           if (TryMerge(head, new_node, stack)) return;
@@ -1240,7 +1246,6 @@ class BwTree
 
       // if consolidation is failed, keep the allocated page to reuse
       tls_node_page_.reset(new_node);
-      if (head->GetRecordCount() < kMaxDeltaRecordNum * 4) return;
     }
   }
 
@@ -1260,60 +1265,49 @@ class BwTree
       const bool is_scan = false)  //
       -> SMOsRC
   {
-    constexpr auto kSepKeyLen = (kIsVarLen) ? kMaxKeyLen : 0;
-    constexpr auto kMaxBlockSize = kPageSize - kHeaderLen - 2 * kSepKeyLen;
-    size_t size{};
-
-    // sort delta records
+    constexpr size_t kPageAlign = kPageSize - 1;
+    constexpr auto kMaxBlockSize = kPageSize - kHeaderLen - 2 * kMaxKeyLen;
     thread_local std::vector<Record> records(kMaxDeltaRecordNum * 4);
-    thread_local std::vector<ConsolidateInfo> consol_info(kMaxDeltaRecordNum);
-    records.clear();
-    consol_info.clear();
-    const auto diff = DC::Sort(head, records, consol_info);
-
-    // calculate the size of a consolidated node
-    if constexpr (kIsVarLen) {
-      size = Node_t::PreConsolidate(consol_info) + diff;
-    } else {
-      const auto rec_len = sizeof(Key) + (head->IsLeaf() ? kPayLen : kPtrLen);
-      size = (Node_t::PreConsolidate(consol_info) + diff) * rec_len;
-    }
+    thread_local std::vector<ConsolidateInfo> nodes(kMaxDeltaRecordNum);
 
     // check whether splitting is needed
-    void *page = consol_node;
-    bool do_split = false;
+    const auto node_size = head->GetNodeSize();
+    const auto do_split = !is_scan && node_size > kPageSize;
     auto page_size = kPageSize;
+    void *page = consol_node;
     if (is_scan) {
       // use dynamic page sizes for scanning
-      page_size = ((size + kHeaderLen + 2 * kSepKeyLen) / kPageSize + 1) * kPageSize;
-      if (page_size > consol_node->GetNodeSize()) {
+      const auto cur_size = (consol_node->GetNodeSize() + kPageAlign) & ~kPageAlign;
+      page_size = (node_size + kPageAlign) & ~kPageAlign;
+      if (page_size > cur_size) {
         free(page);
         page = aligned_alloc(kCacheLineSize, page_size);
       }
-    } else if (size > kMaxBlockSize) {
+    } else if (do_split) {
       // perform splitting
-      do_split = true;
-      if (auto sep_size = size / 2; sep_size > kMaxBlockSize) {
-        page_size = size - kMaxBlockSize;
+      if (auto sep_size = (node_size - kHeaderLen) / 2; sep_size > kMaxBlockSize) {
+        page_size = node_size - kMaxBlockSize;
       } else {
         page_size = sep_size;
       }
-    } else {
-      // perform consolidation
-      page_size = kPageSize;
     }
+
+    // sort delta records
+    records.clear();
+    nodes.clear();
+    DC::Sort(head, records, nodes);
 
     // consolidate a target node
     if (head->IsLeaf()) {
-      consol_node = new (page) Node_t{kIsLeaf, page_size, is_scan};
-      Consolidate<Payload>(consol_node, consol_info, records, do_split, page_size);
+      consol_node = new (page) Node_t{kIsLeaf};
+      Consolidate<Payload>(consol_node, nodes, records, do_split, page_size);
     } else {
-      consol_node = new (page) Node_t{!kIsLeaf, page_size, is_scan};
-      Consolidate<LogicalID *>(consol_node, consol_info, records, do_split, page_size);
+      consol_node = new (page) Node_t{!kIsLeaf};
+      Consolidate<LogicalID *>(consol_node, nodes, records, do_split, page_size);
     }
 
     if (do_split) return kTrySplit;
-    if (size <= kMinNodeSize) return kTryMerge;
+    if (node_size <= kMinNodeSize) return kTryMerge;
     return kConsolidate;
   }
 
@@ -1322,14 +1316,14 @@ class BwTree
    *
    * @tparam T a class of expected payloads.
    * @param consol_node a node page to store consolidated records.
-   * @param consol_info the set of leaf nodes to be consolidated.
+   * @param nodes the set of leaf nodes to be consolidated.
    * @param records insert/modify/delete-delta records.
    */
   template <class T>
   void
   Consolidate(  //
       Node_t *consol_node,
-      const std::vector<ConsolidateInfo> &consol_info,
+      const std::vector<ConsolidateInfo> &nodes,
       const std::vector<Record> &records,
       const bool do_split,
       const size_t size)
@@ -1339,14 +1333,18 @@ class BwTree
     // perform merge-sort to consolidate a node
     int64_t offset = (do_split) ? -size : size;
     size_t j = 0;
-    for (int64_t k = consol_info.size() - 1; k >= 0; --k) {
-      const auto *node = reinterpret_cast<const Node_t *>(consol_info[k].node);
-      const auto base_rec_num = consol_info[k].rec_num;
+    for (int64_t k = nodes.size() - 1; k >= 0; --k) {
+      const auto *node = reinterpret_cast<const Node_t *>(nodes[k].first);
+      const auto *smo_d = reinterpret_cast<const Delta_t *>(nodes[k].second);
+      const auto node_rec_num = (smo_d == nullptr) ? node->GetRecordCount()  //
+                                                   : node->SearchRecord(smo_d->GetKey()).second;
+
+      // check a null key for inner nodes
       size_t i = 0;
       if (!node->IsLeaf() && node->IsLeftmost()) {
         offset = consol_node->template CopyRecordFrom<T>(node, i++, offset);
       }
-      for (; i < base_rec_num; ++i) {
+      for (; i < node_rec_num; ++i) {
         // copy new records
         const auto &node_key = node->GetKey(i);
         for (; j < new_rec_num && Node_t::LT(records[j], node_key); ++j) {
@@ -1368,8 +1366,8 @@ class BwTree
     }
 
     // copy the lowest/highest keys
-    offset = consol_node->CopyLowKeyFrom(consol_info.back(), offset, do_split);
-    consol_node->CopyHighKeyFrom(consol_info.front(), offset);
+    offset = consol_node->CopyLowKeyFrom(nodes.back(), offset, do_split);
+    consol_node->CopyHighKeyFrom(nodes.front(), offset);
   }
 
   /**
@@ -1383,7 +1381,7 @@ class BwTree
   TrySplit(  //
       const Delta_t *head,
       Node_t *split_node,
-      std::vector<LogicalID *> &stack)  //
+      std::vector<LogicalID *> stack)  //
       -> bool
   {
     const auto *split_node_d = reinterpret_cast<Delta_t *>(split_node);
@@ -1392,7 +1390,7 @@ class BwTree
     auto *sib_lid = mapping_table_.GetNewLogicalID();
     sib_lid->Store(split_node);
     auto *split_d = new (GetRecPage()) Delta_t{DeltaType::kSplit, split_node_d, sib_lid};
-    split_d->SetNext(head);
+    split_d->SetNext(head, -(split_node->GetNodeDiff()));
 
     // install the delta record for splitting a child node
     if (!stack.back()->CASStrong(head, split_d)) {
@@ -1429,13 +1427,14 @@ class BwTree
     // create an index-entry delta record to complete split
     auto *entry_d = new (GetRecPage()) Delta_t{split_d};
     const auto &sep_key = split_d->GetKey();
+    const auto rec_len = split_d->GetKeyLength() + kPtrLen + kMetaLen;
 
     // insert the delta record into a parent node
     stack.pop_back();  // remove the split child node to modify its parent node
     while (true) {
       // try to insert the index-entry delta record
       const auto *head = GetHead(sep_key, kClosed, stack);
-      entry_d->SetNext(head);
+      entry_d->SetNext(head, rec_len);
       if (stack.back()->CASWeak(head, entry_d)) break;
     }
   }
@@ -1524,9 +1523,10 @@ class BwTree
 
       // insert a merge delta into the left sibling node
       auto *merge_d = new (GetRecPage()) Delta_t{DeltaType::kMerge, removed_node_d, removed_node};
+      const auto diff = removed_node->GetNodeDiff();
       while (true) {  // continue until insertion succeeds
         const auto *sib_head = GetHead(sep_key, kOpen, stack);
-        merge_d->SetNext(sib_head);
+        merge_d->SetNext(sib_head, diff);
         if (stack.back()->CASWeak(sib_head, merge_d)) break;
       }
       delete_d->SetSiblingLID(stack.back());
@@ -1559,6 +1559,7 @@ class BwTree
 
     // insert the delta record into a parent node
     auto *delete_d = new (GetRecPage()) Delta_t{removed_node, nullptr};
+    const auto rec_len = delete_d->GetKeyLength() + kPtrLen + kMetaLen;
     const auto &key = *low_key;
     const auto &sib_key = removed_node->GetHighKey();
     while (true) {
@@ -1571,7 +1572,7 @@ class BwTree
       }
 
       // try to insert the index-delete delta record
-      delete_d->SetNext(head);
+      delete_d->SetNext(head, -rec_len);
       if (stack.back()->CASWeak(head, delete_d)) return delete_d;
     }
   }
