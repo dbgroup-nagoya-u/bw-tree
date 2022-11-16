@@ -1577,7 +1577,10 @@ class BwTree
 
     // shrink the tree by removing a useless root node
     auto *new_lid = root->GetLeftmostChild();
-    if (!root_.compare_exchange_strong(old_lid, new_lid, std::memory_order_relaxed)) return false;
+    if (new_lid->template Load<Node_t *>()->IsLeaf()
+        || !root_.compare_exchange_strong(old_lid, new_lid, std::memory_order_relaxed)) {
+      return false;
+    }
     AddToGC(root);
     return true;
   }
