@@ -201,6 +201,27 @@ class Node
     return high_key_;
   }
 
+  /**
+   * @brief Set the size of this node for scanning.
+   *
+   */
+  void
+  SetNodeSizeForScan()
+  {
+    node_size_ = 2 * kPageSize;
+  }
+
+  /**
+   * @brief Set the logical node ID.
+   *
+   * @param lid the logical node ID to be set.
+   */
+  void
+  SetNext(const LogicalID *lid)
+  {
+    next_ = reinterpret_cast<uintptr_t>(lid);
+  }
+
   /*####################################################################################
    * Public getters/setters for records
    *##################################################################################*/
@@ -408,25 +429,22 @@ class Node
    * @return an initial offset.
    */
   auto
-  CopyLowKeyFrom(  //
-      const ConsolidateInfo &consol_info,
-      int64_t offset,
-      const bool do_split)  //
-      -> int64_t
+  CopyLowKeyFrom(const void *node_addr)  //
+      -> size_t
   {
     // prepare a node that has the lowest key
-    if (do_split) {
+    if (node_addr == this) {
       // this node is a split-right node, and so the leftmost record has the lowest key
       has_low_key_ = 1;
       low_key_ = keys_[0];
     } else {
       // this node is a consolidated node, and so the given node has the lowest key
-      const auto *node = reinterpret_cast<const Node *>(consol_info.first);
+      const auto *node = reinterpret_cast<const Node *>(node_addr);
       has_low_key_ = node->has_low_key_;
       low_key_ = node->low_key_;
     }
 
-    return offset;
+    return kPageSize;  // dummy value
   }
 
   /**
@@ -437,26 +455,19 @@ class Node
    */
   void
   CopyHighKeyFrom(  //
-      const ConsolidateInfo &consol_info,
-      [[maybe_unused]] const int64_t offset)
+      const void *node_addr,
+      [[maybe_unused]] size_t offset,
+      const bool is_split_left = false)
   {
     // prepare a node that has the highest key, and copy the next logical ID
-    if (consol_info.second == nullptr) {
-      // an original or merged base node
-      const auto *node = reinterpret_cast<const Node *>(consol_info.first);
-      if (node->has_high_key_) {
-        has_high_key_ = 1;
-        high_key_ = node->high_key_;
-      }
-      next_ = node->next_;
+    const auto *node = reinterpret_cast<const Node *>(node_addr);
+    if (is_split_left) {
+      has_high_key_ = 1;
+      high_key_ = node->keys_[0];
     } else {
-      // a split-delta record
-      const auto *split_d = reinterpret_cast<const Node *>(consol_info.second);
-      if (split_d->has_low_key_) {
-        has_high_key_ = 1;
-        high_key_ = split_d->low_key_;
-      }
-      memcpy(&next_, split_d->keys_, kPtrLen);
+      has_high_key_ = node->has_high_key_;
+      high_key_ = node->high_key_;
+      next_ = node->next_;
     }
   }
 
@@ -469,28 +480,28 @@ class Node
    * @return an offset to the copied record.
    */
   template <class T>
-  auto
+  static auto
   CopyRecordFrom(  //
-      const Node *node,
+      Node *&node,
+      const Node *orig_node,
       const size_t pos,
-      int64_t offset)  //
-      -> int64_t
+      size_t offset,
+      Node *&r_node)  //
+      -> size_t
   {
     constexpr auto kRecLen = sizeof(Key) + sizeof(T);
 
-    if (offset > 0) {
-      // copy a record from the given node
-      keys_[rec_count_++] = node->keys_[pos];
-      offset -= sizeof(T);
-      memcpy(ShiftAddr(this, offset), node->template GetPayloadAddr<T>(pos), sizeof(T));
-      node_size_ += kRecLen;
-    } else {
-      // calculate the skipped page size
-      offset += kRecLen;
-      if (offset > 0) {
-        // this record is the end one in a split-left node
-        offset = kPageSize;
-      }
+    // copy a record from the given node
+    node->keys_[node->rec_count_++] = orig_node->keys_[pos];
+    offset -= sizeof(T);
+    memcpy(ShiftAddr(node, offset), orig_node->template GetPayloadAddr<T>(pos), sizeof(T));
+    node->node_size_ += kRecLen;
+
+    if (r_node != nullptr && node->node_size_ > (kPageSize - kHeaderLen) / 2) {
+      // switch to the split-right node
+      node = r_node;
+      r_node = nullptr;
+      offset = kPageSize;
     }
 
     return offset;
@@ -504,29 +515,29 @@ class Node
    * @return an offset to the copied record.
    */
   template <class T>
-  auto
+  static auto
   CopyRecordFrom(  //
-      const Record rec_ptr,
-      int64_t offset)  //
-      -> int64_t
+      Node *&node,
+      const Record &rec_ptr,
+      size_t offset,
+      Node *&r_node)  //
+      -> size_t
   {
     constexpr auto kRecLen = sizeof(Key) + sizeof(T);
 
     const auto *rec = reinterpret_cast<const Node *>(rec_ptr);
-    if (rec->delta_type_ != kDelete) {  // the target record is insert/modify delta
-      if (offset > 0) {
-        // copy a record from the given node
-        keys_[rec_count_++] = rec->low_key_;
-        offset -= sizeof(T);
-        memcpy(ShiftAddr(this, offset), rec->keys_, sizeof(T));
-        node_size_ += kRecLen;
-      } else {
-        // calculate the skipped page size
-        offset += kRecLen;
-        if (offset > 0) {
-          // this record is the end one in a split-left node
-          offset = kPageSize;
-        }
+    if (rec->delta_type_ != kDelete) {
+      // copy a record from the given node
+      node->keys_[node->rec_count_++] = rec->low_key_;
+      offset -= sizeof(T);
+      memcpy(ShiftAddr(node, offset), rec->keys_, sizeof(T));
+      node->node_size_ += kRecLen;
+
+      if (r_node != nullptr && node->node_size_ > (kPageSize - kHeaderLen) / 2) {
+        // switch to the split-right node
+        node = r_node;
+        r_node = nullptr;
+        offset = kPageSize;
       }
     }
 

@@ -83,24 +83,29 @@ class DeltaRecord
   }
 
   /*####################################################################################
-   * Public constructors for inserting/deleting records in internal nodes
+   * Public constructors for performing SMOs
    *##################################################################################*/
 
   /**
-   * @brief Construct a new delta record for inserting an index-entry.
+   * @brief Construct a new delta record for splitting/merging a node.
    *
-   * @param split_d a child split-delta record.
+   * @param d_type a split or merge delta.
+   * @param r_node a split/merged right node.
+   * @param r_addr the address of a split/merged right node.
    */
-  explicit DeltaRecord(const DeltaRecord *split_d)
-      : is_inner_{kInternal},
-        delta_type_{kInsert},
+  DeltaRecord(  //
+      const DeltaType d_type,
+      const DeltaRecord *r_node,
+      const void *r_addr)
+      : is_inner_{d_type == kInsert ? static_cast<uint16_t>(kInternal) : r_node->is_inner_},
+        delta_type_{d_type},
         has_low_key_{1},
-        has_high_key_{split_d->has_high_key_},
-        key_{split_d->key_},
-        high_key_{split_d->high_key_}
+        has_high_key_{r_node->has_high_key_},
+        key_{r_node->key_},
+        high_key_{r_node->high_key_}
   {
-    // copy contents of a split delta
-    memcpy(payload_, (split_d->payload_), kPtrLen);
+    // set a sibling node
+    SetPayload(r_addr);
   }
 
   /**
@@ -109,9 +114,7 @@ class DeltaRecord
    * @param removed_child a removed child node.
    * @param left_lid the logical ID of a merged-left child (dummy nullptr).
    */
-  DeltaRecord(  //
-      const DeltaRecord *removed_node,
-      [[maybe_unused]] const LogicalID *left_lid)
+  explicit DeltaRecord(const DeltaRecord *removed_node)
       : is_inner_{kInternal},
         delta_type_{kDelete},
         has_low_key_{1},
@@ -122,32 +125,6 @@ class DeltaRecord
     // set a sibling node
     auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(ShiftAddr(this, kPayOffset));
     payload->store(nullptr, std::memory_order_relaxed);
-  }
-
-  /*####################################################################################
-   * Public constructors for performing SMOs
-   *##################################################################################*/
-
-  /**
-   * @brief Construct a new delta record for splitting/merging a node.
-   *
-   * @param delta_type a split or merge delta.
-   * @param right_node a split/merged right node.
-   * @param right_lid the address of a split/merged right node.
-   */
-  DeltaRecord(  //
-      const DeltaType delta_type,
-      const DeltaRecord *right_node,
-      const void *right_lid)
-      : is_inner_{right_node->is_inner_},
-        delta_type_{delta_type},
-        has_low_key_{1},
-        has_high_key_{right_node->has_high_key_},
-        key_{right_node->key_},
-        high_key_{right_node->high_key_}
-  {
-    // set a sibling node
-    SetPayload(right_lid);
   }
 
   /**
@@ -255,7 +232,7 @@ class DeltaRecord
   NeedConsolidation() const  //
       -> bool
   {
-    return delta_type_ != kNotDelta && rec_count_ >= kMaxDeltaRecordNum;
+    return delta_type_ != kNotDelta && (rec_count_ >= kMaxDeltaRecordNum || node_size_ > kPageSize);
   }
 
   /**
@@ -447,27 +424,22 @@ class DeltaRecord
    * @param records a set of records to be inserted this delta record.
    */
   void
-  AddByInsertionSortTo(  //
-      const std::optional<Key> &sep_key,
-      std::vector<const void *> &records) const
+  AddByInsertionSortTo(std::vector<Record> &records) const
   {
-    // check whether this record is in a target node
-    if (!sep_key || Comp{}(key_, *sep_key)) {
-      // check uniqueness
-      auto it = records.cbegin();
-      const auto it_end = records.cend();
-      Key rec_key{};
-      while (it != it_end) {
-        // skip smaller keys
-        rec_key = reinterpret_cast<const DeltaRecord *>(*it)->key_;
-        if (!Comp{}(rec_key, key_)) break;
-        ++it;
-      }
-      if (it == it_end) {
-        records.emplace_back(this);
-      } else if (Comp{}(key_, rec_key)) {
-        records.insert(it, this);
-      }
+    // check uniqueness
+    auto it = records.cbegin();
+    const auto it_end = records.cend();
+    Key rec_key{};
+    while (it != it_end) {
+      // skip smaller keys
+      rec_key = reinterpret_cast<const DeltaRecord *>(*it)->key_;
+      if (!Comp{}(rec_key, key_)) break;
+      ++it;
+    }
+    if (it == it_end) {
+      records.emplace_back(this);
+    } else if (Comp{}(key_, rec_key)) {
+      records.insert(it, this);
     }
   }
 

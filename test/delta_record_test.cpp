@@ -276,7 +276,7 @@ class DeltaRecordFixture : public testing::Test
     const auto &dummy_d2 = CreateSplitMergeDelta(kSplit, dummy_d, dummy_lid);
 
     dummy_lid = nullptr;
-    auto *raw_p = new (GetPage()) Delta_t{dummy_d2.get(), dummy_lid};
+    auto *raw_p = new (GetPage()) Delta_t{dummy_d2.get()};
     std::unique_ptr<Delta_t> delta{raw_p};
 
     EXPECT_FALSE(delta->IsLeaf());
@@ -303,12 +303,12 @@ class DeltaRecordFixture : public testing::Test
 
     for (const auto &id : ids) {
       auto &&delta = CreateLeafInsertModifyDelta(kDelete, keys_[id], payloads_[id]);
-      delta->AddByInsertionSortTo(std::nullopt, records);
+      delta->AddByInsertionSortTo(records);
       entities.emplace_back(std::move(delta));
     }
     for (const auto &id : ids) {
       auto &&delta = CreateLeafInsertModifyDelta(kInsert, keys_[id], payloads_[id]);
-      delta->AddByInsertionSortTo(std::nullopt, records);
+      delta->AddByInsertionSortTo(records);
       entities.emplace_back(std::move(delta));
     }
 
