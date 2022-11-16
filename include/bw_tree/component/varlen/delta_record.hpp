@@ -87,23 +87,35 @@ class DeltaRecord
   }
 
   /*####################################################################################
-   * Public constructors for inserting/deleting records in internal nodes
+   * Public constructors for performing SMOs
    *##################################################################################*/
 
   /**
-   * @brief Construct a new delta record for inserting an index-entry.
+   * @brief Construct a new delta record for insert-entry/merging a node.
    *
-   * @param split_d a child split-delta record.
+   * @param d_type a insert-entry or merge delta.
+   * @param r_node a split/merged right node.
+   * @param r_addr the address of a split/merged right node.
    */
-  explicit DeltaRecord(const DeltaRecord *split_d)
-      : is_inner_{kInternal},
-        delta_type_{kInsert},
-        meta_{split_d->meta_},
-        high_key_meta_{split_d->high_key_meta_}
+  DeltaRecord(  //
+      const DeltaType d_type,
+      const DeltaRecord *r_node,
+      const void *r_addr)
+      : is_inner_{d_type == kInsert ? static_cast<uint16_t>(kInner) : r_node->is_inner_},
+        delta_type_{d_type}
   {
-    // copy contents of a split delta
-    const auto rec_len = meta_.rec_len + high_key_meta_.key_len;
-    memcpy(&data_block_, &(split_d->data_block_), rec_len);
+    // copy a lowest key
+    auto key_len = r_node->meta_.key_len;
+    meta_ = Metadata{kHeaderLen, key_len, key_len + kPtrLen};
+    memcpy(&data_block_, r_node->GetKeyAddr(r_node->meta_), key_len);
+
+    // set a sibling node
+    const auto offset = SetPayload(kHeaderLen + key_len, r_addr);
+
+    // copy a highest key
+    key_len = r_node->high_key_meta_.key_len;
+    high_key_meta_ = Metadata{offset, key_len, key_len};
+    memcpy(ShiftAddr(this, offset), r_node->GetKeyAddr(r_node->high_key_meta_), key_len);
   }
 
   /**
@@ -112,10 +124,7 @@ class DeltaRecord
    * @param removed_child a removed child node.
    * @param left_lid the logical ID of a merged-left child (dummy nullptr).
    */
-  DeltaRecord(  //
-      const DeltaRecord *removed_node,
-      [[maybe_unused]] const LogicalID *left_lid)
-      : is_inner_{kInternal}, delta_type_{kDelete}
+  explicit DeltaRecord(const DeltaRecord *removed_node) : is_inner_{kInner}, delta_type_{kDelete}
   {
     // copy a lowest key
     const auto low_meta = removed_node->meta_;
@@ -135,37 +144,6 @@ class DeltaRecord
     const auto high_key_len = high_meta.key_len;
     high_key_meta_ = Metadata{offset, high_key_len, high_key_len};
     memcpy(ShiftAddr(this, offset), removed_node->GetKeyAddr(high_meta), high_key_len);
-  }
-
-  /*####################################################################################
-   * Public constructors for performing SMOs
-   *##################################################################################*/
-
-  /**
-   * @brief Construct a new delta record for splitting/merging a node.
-   *
-   * @param delta_type a split or merge delta.
-   * @param right_node a split/merged right node.
-   * @param right_lid the address of a split/merged right node.
-   */
-  DeltaRecord(  //
-      const DeltaType delta_type,
-      const DeltaRecord *right_node,
-      const void *right_lid)
-      : is_inner_{right_node->is_inner_}, delta_type_{delta_type}
-  {
-    // copy a lowest key
-    auto key_len = right_node->meta_.key_len;
-    meta_ = Metadata{kHeaderLen, key_len, key_len + kPtrLen};
-    memcpy(&data_block_, right_node->GetKeyAddr(right_node->meta_), key_len);
-
-    // set a sibling node
-    const auto offset = SetPayload(kHeaderLen + key_len, right_lid);
-
-    // copy a highest key
-    key_len = right_node->high_key_meta_.key_len;
-    high_key_meta_ = Metadata{offset, key_len, key_len};
-    memcpy(ShiftAddr(this, offset), right_node->GetKeyAddr(right_node->high_key_meta_), key_len);
   }
 
   /**
@@ -273,7 +251,7 @@ class DeltaRecord
   NeedConsolidation() const  //
       -> bool
   {
-    return delta_type_ != kNotDelta && rec_count_ >= kMaxDeltaRecordNum;
+    return delta_type_ != kNotDelta && (rec_count_ >= kMaxDeltaRecordNum || node_size_ > kPageSize);
   }
 
   /**
@@ -481,24 +459,19 @@ class DeltaRecord
    * @return the difference of a node size.
    */
   void
-  AddByInsertionSortTo(  //
-      const std::optional<Key> &sep_key,
-      std::vector<std::pair<Key, const void *>> &records) const
+  AddByInsertionSortTo(std::vector<Record> &records) const
   {
-    // check whether this record is in a target node
+    // check uniqueness
     const auto &rec_key = GetKey();
-    if (!sep_key || Comp{}(rec_key, *sep_key)) {
-      // check uniqueness
-      auto it = records.cbegin();
-      const auto it_end = records.cend();
-      for (; it != it_end && Comp{}(it->first, rec_key); ++it) {
-        // skip smaller keys
-      }
-      if (it == it_end) {
-        records.emplace_back(std::move(rec_key), this);
-      } else if (Comp{}(rec_key, it->first)) {
-        records.insert(it, std::make_pair(std::move(rec_key), this));
-      }
+    auto it = records.cbegin();
+    const auto it_end = records.cend();
+    for (; it != it_end && Comp{}(it->first, rec_key); ++it) {
+      // skip smaller keys
+    }
+    if (it == it_end) {
+      records.emplace_back(std::move(rec_key), this);
+    } else if (Comp{}(rec_key, it->first)) {
+      records.insert(it, std::make_pair(std::move(rec_key), this));
     }
   }
 

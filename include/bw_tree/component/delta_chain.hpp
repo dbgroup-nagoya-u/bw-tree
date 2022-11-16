@@ -109,16 +109,6 @@ class DeltaChain
           }
           break;
 
-        case kSplit: {
-          if (!has_smo && delta->LowKeyIsLE(key, closed)) {
-            // a sibling node includes a target key
-            out_ptr = delta->template GetPayload<uintptr_t>();
-            return kKeyIsInSibling;
-          }
-          has_smo = true;
-          break;
-        }
-
         case kRemoveNode:
           return kNodeRemoved;
 
@@ -188,16 +178,7 @@ class DeltaChain
 
         case kDelete:
           // check whether a target record is deleted
-          if (delta->HasSameKey(key)) return kRecordDeleted;
-          break;
-
-        case kSplit:
-          // check whether the right-sibling node contains a target key
-          if (!has_smo && delta->LowKeyIsLE(key, kClosed)) {
-            out_ptr = delta->template GetPayload<uintptr_t>();
-            return kKeyIsInSibling;
-          }
-          has_smo = true;
+          if (delta->HasSameKey(key)) return kRecordNotFound;
           break;
 
         case kRemoveNode:
@@ -279,21 +260,6 @@ class DeltaChain
           if (!sib_key_found && delta->HasSameKey(*sib_key)) return kAbortMerge;  // merged node
           break;
 
-        case kSplit:
-          // check whether the right-sibling node contains a target key
-          if (!has_smo) {
-            if (!key_found && delta->LowKeyIsLE(key, kClosed)) {
-              out_ptr = delta->template GetPayload<uintptr_t>();
-              return kKeyIsInSibling;
-            }
-            if (!sib_key_found && delta->HasSameKey(*sib_key)) {
-              sib_key_found = true;
-              if (key_found) return kRecordFound;
-            }
-            has_smo = true;
-          }
-          break;
-
         case kRemoveNode:
           return kNodeRemoved;
 
@@ -355,26 +321,15 @@ class DeltaChain
       uintptr_t &out_ptr)  //
       -> DeltaRC
   {
-    auto has_smo = false;
-
     // traverse a delta chain
     for (; true; delta = delta->GetNext()) {
       switch (delta->GetDeltaType()) {
-        case kSplit:
-          // check whether the right-sibling node contains a target key
-          if (!has_smo && delta->LowKeyIsLE(key, closed)) {
-            out_ptr = delta->template GetPayload<uintptr_t>();
-            return kKeyIsInSibling;
-          }
-          has_smo = true;
-          break;
-
         case kRemoveNode:
           return kNodeRemoved;
 
         case kMerge:
           // check whether the node contains a target key
-          if (!has_smo && !delta->HighKeyIsGE(key, !closed)) {
+          if (!delta->HighKeyIsGE(key, !closed)) {
             const auto *merged_node = delta->template GetPayload<DeltaRecord *>();
             out_ptr = merged_node->template GetNext<uintptr_t>();
             return kKeyIsInSibling;
@@ -383,7 +338,7 @@ class DeltaChain
 
         case kNotDelta:
           // check whether the node contains a target key
-          if (!has_smo && !delta->HighKeyIsGE(key, !closed)) {
+          if (!delta->HighKeyIsGE(key, !closed)) {
             out_ptr = delta->template GetNext<uintptr_t>();
             return kKeyIsInSibling;
           }
@@ -407,44 +362,26 @@ class DeltaChain
   Sort(  //
       const DeltaRecord *delta,
       std::vector<Record> &records,
-      std::vector<ConsolidateInfo> &nodes)
+      std::vector<const void *> &nodes)
   {
-    std::optional<Key> sep_key = std::nullopt;
-    const DeltaRecord *smo_d = nullptr;
-
     // traverse and sort a delta chain
     for (; true; delta = delta->GetNext()) {
       switch (delta->GetDeltaType()) {
         case kInsert:
         case kModify:
         case kDelete:
-          delta->AddByInsertionSortTo(sep_key, records);
+          delta->AddByInsertionSortTo(records);
           break;
-
-        case kSplit: {
-          // keep a separator key to exclude out-of-range records
-          if (!sep_key) {
-            sep_key = delta->GetKey();
-            smo_d = delta;
-          }
-          break;
-        }
 
         case kMerge: {
           // keep the merged node and the corresponding separator key
-          nodes.emplace_back(delta->GetPayload(), smo_d);
-
-          // keep a separator key to exclude out-of-range records
-          if (const auto &key = delta->GetKey(); !sep_key || Comp{}(key, *sep_key)) {
-            sep_key = std::move(key);
-            smo_d = delta;
-          }
+          nodes.emplace_back(delta->GetPayload());
           break;
         }
 
         case kNotDelta:
         default:
-          nodes.emplace_back(delta, smo_d);
+          nodes.emplace_back(delta);
           return;
       }
     }

@@ -39,7 +39,7 @@ namespace dbgroup::index::bw_tree::component
 enum DeltaRC {
   kReachBaseNode = 0,
   kRecordFound,
-  kRecordDeleted,
+  kRecordNotFound,
   kNodeRemoved,
   kKeyIsInSibling,
   kAbortMerge,
@@ -51,7 +51,7 @@ enum DeltaRC {
  */
 enum NodeType : uint16_t {
   kLeaf = 0,
-  kInternal,
+  kInner,
 };
 
 /**
@@ -63,7 +63,6 @@ enum DeltaType : uint16_t {
   kInsert,
   kModify,
   kDelete,
-  kSplit,
   kRemoveNode,
   kMerge,
 };
@@ -80,9 +79,6 @@ constexpr size_t kCacheAlign = kCacheLineSize - 1;
 
 /// the NULL value for uintptr_t
 constexpr uintptr_t kNullPtr = 0;
-
-/// a flag for indicating the next target is a lowest key.
-constexpr int64_t kCopyLowKey = -100;
 
 /// the capacity of each mapping table.
 constexpr size_t kMappingTableCapacity = (kPageSize - kWordSize) / kWordSize;
