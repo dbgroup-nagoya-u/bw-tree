@@ -101,7 +101,7 @@ class DeltaRecord
       const DeltaType d_type,
       const DeltaRecord *r_node,
       const void *r_addr)
-      : is_inner_{d_type == kInsert ? static_cast<uint16_t>(kInternal) : r_node->is_inner_},
+      : is_inner_{d_type == kInsert ? static_cast<uint16_t>(kInner) : r_node->is_inner_},
         delta_type_{d_type}
   {
     // copy a lowest key
@@ -124,7 +124,7 @@ class DeltaRecord
    * @param removed_child a removed child node.
    * @param left_lid the logical ID of a merged-left child (dummy nullptr).
    */
-  explicit DeltaRecord(const DeltaRecord *removed_node) : is_inner_{kInternal}, delta_type_{kDelete}
+  explicit DeltaRecord(const DeltaRecord *removed_node) : is_inner_{kInner}, delta_type_{kDelete}
   {
     // copy a lowest key
     const auto low_meta = removed_node->meta_;

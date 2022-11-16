@@ -246,49 +246,6 @@ class DeltaRecordFixture : public testing::Test
   }
 
   void
-  VerifyInsertIndexEntryConstructor()
-  {
-    const auto &key = keys_[0];
-    const auto &payload = payloads_[0];
-    LogicalID *dummy_lid = nullptr;
-    const auto &dummy_d = CreateLeafInsertModifyDelta(kInsert, key, payload);
-    const auto &dummy_d2 = CreateSplitMergeDelta(kSplit, dummy_d, dummy_lid);
-
-    auto *raw_p = new (GetPage()) Delta_t{dummy_d2.get()};
-    std::unique_ptr<Delta_t> delta{raw_p};
-
-    EXPECT_FALSE(delta->IsLeaf());
-    EXPECT_EQ(kInsert, delta->GetDeltaType());
-    EXPECT_EQ(nullptr, delta->GetNext());
-    EXPECT_EQ(dummy_lid, delta->template GetPayload<LogicalID *>());
-
-    CheckLowKey(delta, key);
-    EXPECT_FALSE(delta->GetHighKey());
-  }
-
-  void
-  VerifyDeleteIndexEntryConstructor()
-  {
-    const auto &key = keys_[0];
-    const auto &payload = payloads_[0];
-    LogicalID *dummy_lid{};
-    const auto &dummy_d = CreateLeafInsertModifyDelta(kInsert, key, payload);
-    const auto &dummy_d2 = CreateSplitMergeDelta(kSplit, dummy_d, dummy_lid);
-
-    dummy_lid = nullptr;
-    auto *raw_p = new (GetPage()) Delta_t{dummy_d2.get()};
-    std::unique_ptr<Delta_t> delta{raw_p};
-
-    EXPECT_FALSE(delta->IsLeaf());
-    EXPECT_EQ(kDelete, delta->GetDeltaType());
-    EXPECT_EQ(nullptr, delta->GetNext());
-    EXPECT_EQ(dummy_lid, delta->template GetPayload<LogicalID *>());
-
-    CheckLowKey(delta, key);
-    EXPECT_FALSE(delta->GetHighKey());
-  }
-
-  void
   VerifyAddByInsertionSortTo()
   {
     std::vector<size_t> ids{};
@@ -384,23 +341,12 @@ TYPED_TEST(DeltaRecordFixture, ConstructedLeafDeleteDeltasHaveExpectedValues)
 
 TYPED_TEST(DeltaRecordFixture, ConstructedSplitMergeDeltasHaveExpectedValues)
 {
-  TestFixture::VerifySplitMergeConstructor(kSplit);
   TestFixture::VerifySplitMergeConstructor(kMerge);
 }
 
 TYPED_TEST(DeltaRecordFixture, ConstructedRemoveNodeDeltasHaveExpectedValues)
 {
   TestFixture::VerifyRemoveNodeConstructor();
-}
-
-TYPED_TEST(DeltaRecordFixture, ConstructedInsertIndexEntryDeltasHaveExpectedValues)
-{
-  TestFixture::VerifyInsertIndexEntryConstructor();
-}
-
-TYPED_TEST(DeltaRecordFixture, ConstructedDeleteIndexEntryDeltasHaveExpectedValues)
-{
-  TestFixture::VerifyDeleteIndexEntryConstructor();
 }
 
 /*--------------------------------------------------------------------------------------

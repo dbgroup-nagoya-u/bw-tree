@@ -69,7 +69,7 @@ class Node
   Node(  //
       const Node *split_d,
       const LogicalID *left_lid)
-      : is_inner_{kInternal}, delta_type_{kNotDelta}, rec_count_{2}
+      : is_inner_{kInner}, delta_type_{kNotDelta}, rec_count_{2}
   {
     // set a split-left page
     auto offset = SetPayload(kPageSize, left_lid);
@@ -338,7 +338,7 @@ class Node
       }
     }
 
-    return {kRecordDeleted, begin_pos};
+    return {kRecordNotFound, begin_pos};
   }
 
   /**

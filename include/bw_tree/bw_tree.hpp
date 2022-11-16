@@ -328,7 +328,6 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // check whether the leaf node has a target key
-    consol_lid_ = nullptr;
     auto &&stack = SearchLeafNode(key, kClosed);
 
     for (Payload payload{}; true;) {
@@ -342,7 +341,7 @@ class BwTree
           payload = reinterpret_cast<Delta_t *>(out_ptr)->template GetPayload<Payload>();
           break;
 
-        case DeltaRC::kRecordDeleted:
+        case DeltaRC::kRecordNotFound:
           break;
 
         case DeltaRC::kKeyIsInSibling:
@@ -368,7 +367,7 @@ class BwTree
         }
       }
 
-      if (rc == DeltaRC::kRecordDeleted) return std::nullopt;
+      if (rc == DeltaRC::kRecordNotFound) return std::nullopt;
       return payload;
     }
   }
@@ -442,7 +441,6 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    consol_lid_ = nullptr;
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
@@ -493,7 +491,6 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    consol_lid_ = nullptr;
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
@@ -545,7 +542,6 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    consol_lid_ = nullptr;
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
@@ -554,7 +550,7 @@ class BwTree
     while (true) {
       // check target record's existence and get a head pointer
       const auto [head, existence] = GetHeadWithKeyCheck(key, stack);
-      if (existence == DeltaRC::kRecordDeleted) {
+      if (existence == DeltaRC::kRecordNotFound) {
         rc = kKeyNotExist;
         tls_delta_page_.reset(modify_d);
         break;
@@ -593,7 +589,6 @@ class BwTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     // traverse to a target leaf node
-    consol_lid_ = nullptr;
     auto &&stack = SearchLeafNode(key, kClosed);
 
     // insert a delta record
@@ -603,7 +598,7 @@ class BwTree
     while (true) {
       // check target record's existence and get a head pointer
       auto [head, existence] = GetHeadWithKeyCheck(key, stack);
-      if (existence == DeltaRC::kRecordDeleted) {
+      if (existence == DeltaRC::kRecordNotFound) {
         rc = kKeyNotExist;
         tls_delta_page_.reset(delete_d);
         break;
@@ -792,8 +787,6 @@ class BwTree
   GetNodePage()  //
       -> void *
   {
-    if (tls_node_page_) return tls_node_page_.release();
-
     auto *page = gc_.template GetPageIfPossible<Node_t>();
     return (page == nullptr) ? (aligned_alloc(kCacheLineSize, kPageSize)) : page;
   }
@@ -1066,7 +1059,7 @@ class BwTree
       auto rc = DC::SearchRecord(head, key, out_ptr);
       switch (rc) {
         case DeltaRC::kRecordFound:
-        case DeltaRC::kRecordDeleted:
+        case DeltaRC::kRecordNotFound:
           break;
 
         case DeltaRC::kKeyIsInSibling:
@@ -1188,7 +1181,7 @@ class BwTree
     // check the begin position for scanning
     const auto [rc, pos] = node->SearchRecord(begin_key);
 
-    return (rc == DeltaRC::kRecordDeleted || closed) ? pos : pos + 1;
+    return (rc == DeltaRC::kRecordNotFound || closed) ? pos : pos + 1;
   }
 
   /**
@@ -1242,11 +1235,11 @@ class BwTree
     auto *new_node = reinterpret_cast<Node_t *>(GetNodePage());
     switch (TryConsolidate(head, new_node, r_node)) {
       case kTrySplit:
-        TrySplit(new_node, r_node, stack);
+        Split(new_node, r_node, stack);
         break;
 
       case kTryMerge:
-        TryMerge(new_node, stack);
+        Merge(new_node, stack);
         break;
 
       case kConsolidate:
@@ -1384,7 +1377,7 @@ class BwTree
    * @param stack a stack of traversed nodes.
    */
   void
-  TrySplit(  //
+  Split(  //
       Node_t *l_node,
       const Node_t *r_node,
       std::vector<LogicalID *> &stack)
@@ -1405,7 +1398,8 @@ class BwTree
 
     while (true) {
       // check the current node is a root node
-      if (stack.empty() && RootSplit(entry_d, l_lid, l_node, stack)) {
+      if (stack.empty()) {
+        if (!TryRootSplit(entry_d, l_lid, l_node, stack)) continue;
         tls_delta_page_.reset(entry_d);
         return;
       }
@@ -1436,7 +1430,7 @@ class BwTree
    * @retval false otherwise.
    */
   auto
-  RootSplit(  //
+  TryRootSplit(  //
       const Delta_t *entry_d,
       const LogicalID *old_lid,
       const Node_t *l_node,
@@ -1471,7 +1465,7 @@ class BwTree
    * @retval false otherwise.
    */
   void
-  TryMerge(  //
+  Merge(  //
       Node_t *removed_node,
       std::vector<LogicalID *> &stack)
   {
@@ -1501,17 +1495,20 @@ class BwTree
     const auto diff = removed_node->GetNodeDiff();
     const auto &sep_key = *low_key;
     while (true) {
+      if (stack.empty()) {
+        // concurrent SMOs have modified the tree structure, so reconstruct a stack
+        SearchTargetNode(stack, sep_key, removed_lid);
+        stack.pop_back();
+        continue;
+      }
+
       // search a left sibling node
       SearchChildNode(sep_key, kOpen, stack, kIsSMO);
+      if (stack.empty()) continue;
 
       while (true) {  // continue until insertion succeeds
         const auto *sib_head = GetHead(sep_key, kOpen, stack, kIsSMO);
-        if (sib_head == nullptr) {
-          // concurrent SMOs have modified the tree structure, so reconstruct a stack
-          SearchTargetNode(stack, sep_key, removed_lid);
-          stack.pop_back();
-          break;  // retry from searching the left sibling node
-        }
+        if (sib_head == nullptr) break;  // retry from searching the left sibling node
 
         // try to insert the merge-delta record
         merge_d->SetNext(sib_head, diff);
@@ -1699,13 +1696,6 @@ class BwTree
 
   /// a garbage collector of base nodes and delta records.
   NodeGC_t gc_{};
-
-  /// the logical ID of a node to be consolidated.
-  inline static thread_local LogicalID *consol_lid_{};  // NOLINT
-
-  /// a thread-local node page to reuse in SMOs
-  inline static thread_local std::unique_ptr<void, std::function<void(void *)>>  //
-      tls_node_page_{nullptr, std::function<void(void *)>(free)};                // NOLINT
 
   /// a thread-local delta-record page to reuse
   inline static thread_local std::unique_ptr<void, std::function<void(void *)>>  //

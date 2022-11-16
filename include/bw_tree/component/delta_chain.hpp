@@ -178,7 +178,7 @@ class DeltaChain
 
         case kDelete:
           // check whether a target record is deleted
-          if (delta->HasSameKey(key)) return kRecordDeleted;
+          if (delta->HasSameKey(key)) return kRecordNotFound;
           break;
 
         case kRemoveNode:

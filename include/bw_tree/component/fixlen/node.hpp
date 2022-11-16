@@ -72,7 +72,7 @@ class Node
   Node(  //
       const Node *split_d,
       const LogicalID *left_lid)
-      : is_inner_{kInternal},
+      : is_inner_{kInner},
         delta_type_{kNotDelta},
         has_low_key_{0},
         has_high_key_{0},
@@ -323,7 +323,7 @@ class Node
       }
     }
 
-    return {kRecordDeleted, begin_pos};
+    return {kRecordNotFound, begin_pos};
   }
 
   /**
