@@ -26,7 +26,7 @@ CHECK_INCLUDE_FILE_CXX("xmmintrin.h" BW_TREE_HAS_SPINLOCK_HINT)
 #--------------------------------------------------------------------------------------#
 
 set(BW_TREE_PAGE_SIZE "1024" CACHE STRING " Page size in bytes.")
-set(BW_TREE_MAX_DELTA_RECORD_NUM "(2 * Log2(kPageSize / 256))" CACHE STRING " Invoking consolidation if the number of delta records exceeds this threshold.")
+set(BW_TREE_MAX_DELTA_RECORD_NUM "(4 + 2 * Log2(kPageSize / 256))" CACHE STRING " Invoking consolidation if the number of delta records exceeds this threshold.")
 set(BW_TREE_MIN_NODE_SIZE "(kPageSize / 16)" CACHE STRING " Invoking a merge-operation if the size of a node becomes lower than this threshold.")
 set(BW_TREE_MAX_VARIABLE_DATA_SIZE "128" CACHE STRING " The expected maximum size of a variable-length data.")
 set(BW_TREE_RETRY_THRESHOLD "10" CACHE STRING "The maximum number of retries for preventing busy loops.")
