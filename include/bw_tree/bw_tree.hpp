@@ -985,7 +985,7 @@ class BwTree
     while (true) {
       for (size_t i = 1; true; ++i) {
         const auto *head = lid->template Load<Delta_t *>();
-        if (!head->NeedConsolidation()) return head;
+        if (!head->NeedWaitSMOs()) return head;
         if (i >= kRetryNum) break;
         BW_TREE_SPINLOCK_HINT
       }
@@ -1229,23 +1229,35 @@ class BwTree
       Delta_t *head,
       std::vector<LogicalID *> &stack)
   {
+    thread_local std::unique_ptr<void, std::function<void(void *)>>  //
+        tls_node{nullptr, std::function<void(void *)>(free)};
     Node_t *r_node = nullptr;
 
+    // recheck other threads have modifed this delta chain
+    if (head != stack.back()->template Load<Delta_t *>()) return;
+
     // prepare a consolidated node
-    auto *new_node = reinterpret_cast<Node_t *>(GetNodePage());
+    auto *new_node = reinterpret_cast<Node_t *>((tls_node) ? tls_node.release() : GetNodePage());
     switch (TryConsolidate(head, new_node, r_node)) {
       case kTrySplit:
+        // we use fixed-length pages, and so splitting a node must succeed
         Split(new_node, r_node, stack);
         break;
 
       case kTryMerge:
-        Merge(new_node, stack);
+        if (!TryMerge(head, new_node, stack)) {
+          tls_node.reset(new_node);
+          return;
+        }
         break;
 
       case kConsolidate:
       default:
         // install a consolidated node
-        stack.back()->Store(new_node);
+        if (!stack.back()->CASStrong(head, new_node)) {
+          tls_node.reset(new_node);
+          return;
+        }
         break;
     }
     AddToGC(head);
@@ -1268,12 +1280,14 @@ class BwTree
       const bool is_scan = false)  //
       -> SMOsRC
   {
-    thread_local std::vector<Record> records(kMaxDeltaRecordNum * 4);
-    thread_local std::vector<const void *> nodes(kMaxDeltaRecordNum);
-
-    // sort delta records
+    thread_local std::vector<Record> records{};
+    thread_local std::vector<const void *> nodes{};
+    records.reserve(kMaxDeltaRecordNum);
+    nodes.reserve(kDeltaRecordThreshold);
     records.clear();
     nodes.clear();
+
+    // sort delta records
     DC::Sort(head, records, nodes);
 
     // check whether splitting is needed
@@ -1464,17 +1478,22 @@ class BwTree
    * @retval true if partial merging succeeds.
    * @retval false otherwise.
    */
-  void
-  Merge(  //
+  auto
+  TryMerge(  //
+      const Delta_t *head,
       Node_t *removed_node,
-      std::vector<LogicalID *> &stack)
+      std::vector<LogicalID *> &stack)  //
+      -> bool
   {
     auto *removed_node_d = reinterpret_cast<Delta_t *>(removed_node);
 
     // insert a remove-node delta to prevent other threads from modifying this node
     auto *remove_d = new (GetRecPage()) Delta_t{removed_node->IsLeaf()};
     auto *removed_lid = stack.back();
-    removed_lid->Store(remove_d);
+    if (!removed_lid->CASStrong(head, remove_d)) {
+      tls_delta_page_.reset(remove_d);
+      return false;
+    }
     stack.pop_back();  // remove the child node
 
     // remove the index entry before merging
@@ -1487,7 +1506,7 @@ class BwTree
         removed_lid->Store(removed_node);
         AddToGC(remove_d);
       }
-      return;
+      return true;
     }
 
     // insert a merge delta into the left sibling node
@@ -1517,7 +1536,7 @@ class BwTree
           if (merge_d->NeedConsolidation()) {
             TrySMOs(merge_d, stack);
           }
-          return;
+          return true;
         }
       }
     }

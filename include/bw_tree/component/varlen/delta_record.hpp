@@ -251,6 +251,18 @@ class DeltaRecord
   NeedConsolidation() const  //
       -> bool
   {
+    return delta_type_ != kNotDelta
+           && (rec_count_ >= kDeltaRecordThreshold || node_size_ > kPageSize);
+  }
+
+  /**
+   * @retval true if there is a delta chain.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] constexpr auto
+  NeedWaitSMOs() const  //
+      -> bool
+  {
     return delta_type_ != kNotDelta && (rec_count_ >= kMaxDeltaRecordNum || node_size_ > kPageSize);
   }
 

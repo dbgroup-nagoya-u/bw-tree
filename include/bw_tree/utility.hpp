@@ -112,7 +112,10 @@ Log2(const size_t val)  //
 constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
 
 /// The number of delta records for invoking consolidation
-constexpr size_t kMaxDeltaRecordNum = BW_TREE_MAX_DELTA_RECORD_NUM;
+constexpr size_t kDeltaRecordThreshold = 4;
+
+/// The number of delta records for invoking consolidation
+constexpr size_t kMaxDeltaRecordNum = 64;
 
 /// The minimum size of nodes for invoking merging
 constexpr size_t kMinNodeSize = BW_TREE_MIN_NODE_SIZE;
