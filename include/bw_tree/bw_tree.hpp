@@ -277,8 +277,8 @@ class BwTree
   /**
    * @brief Construct a new BwTree object.
    *
-   * @param gc_interval_microsec GC internal [us]
-   * @param gc_thread_num the number of GC threads.
+   * @param gc_interval_microsec GC internal [us] (default: 10ms).
+   * @param gc_thread_num the number of GC threads (default: 1).
    */
   explicit BwTree(  //
       const size_t gc_interval_microsec = kDefaultGCTime,
@@ -848,14 +848,15 @@ class BwTree
    * @param key a search key.
    * @param closed a flag for indicating closed/open-interval.
    * @param stack a stack of traversed nodes.
-   * @param targe_lid a logical ID for stopping a child search.
+   * @param is_smo a flag for indicating this function is called in SMOs.
    */
-  void
+  auto
   SearchChildNode(  //
       const Key &key,
       const bool closed,
       std::vector<LogicalID *> &stack,
-      const bool is_smo = false) const
+      const LogicalID *target_lid = nullptr) const  //
+      -> bool
   {
     for (uintptr_t out_ptr{}; true;) {
       const auto *head = stack.back()->template Load<Delta_t *>();
@@ -864,20 +865,23 @@ class BwTree
           stack.emplace_back(reinterpret_cast<LogicalID *>(out_ptr));
           break;
 
-        case DeltaRC::kKeyIsInSibling:
+        case DeltaRC::kKeyIsInSibling: {
           // swap a current node in a stack and retry
-          stack.back() = reinterpret_cast<LogicalID *>(out_ptr);
+          auto *sib_lid = reinterpret_cast<LogicalID *>(out_ptr);
+          if (sib_lid == target_lid) return true;
+          stack.back() = sib_lid;
           continue;
+        }
 
         case DeltaRC::kNodeRemoved:
           // retry from the parent node
           stack.pop_back();
           if (stack.empty()) {
-            if (is_smo) return;
+            if (target_lid != nullptr) return false;
             stack.emplace_back(root_.load(std::memory_order_relaxed));
           } else {
-            SearchChildNode(key, closed, stack, is_smo);
-            if (stack.empty()) return;  // the tree structure has modified
+            if (SearchChildNode(key, closed, stack, target_lid)) return true;
+            if (stack.empty()) return false;  // the tree structure has modified
           }
           continue;
 
@@ -890,7 +894,7 @@ class BwTree
         }
       }
 
-      return;
+      return false;
     }
   }
 
@@ -952,7 +956,7 @@ class BwTree
   void
   SearchTargetNode(  //
       std::vector<LogicalID *> &stack,
-      const std::optional<Key> &key,
+      const Key &key,
       const LogicalID *target_lid)
   {
     while (true) {
@@ -960,24 +964,25 @@ class BwTree
       const auto *cur_node = cur_lid->template Load<Node_t *>();
       stack.emplace_back(cur_lid);
 
-      if (key) {
-        while (!cur_node->IsLeaf() && stack.back() != target_lid) {
-          SearchChildNode(*key, kClosed, stack, target_lid);
-          cur_node = stack.back()->template Load<Node_t *>();
-        }
-      } else {
-        while (!cur_node->IsLeaf() && stack.back() != target_lid) {
-          cur_lid = cur_node->GetLeftmostChild();
-          cur_node = cur_lid->template Load<Node_t *>();
-          stack.emplace_back(cur_lid);
-        }
+      while (!cur_node->IsLeaf()) {
+        if (SearchChildNode(key, kClosed, stack, target_lid)) return;
+        if (stack.empty()) break;
+        cur_node = stack.back()->template Load<Node_t *>();
       }
 
-      if (stack.back() == target_lid && stack.size() > 1) return;
-      stack.clear();
+      if (stack.empty()) continue;
+      return;
     }
   }
 
+  /**
+   * @brief Load a head of a delta chain in a given logical node.
+   *
+   * This function waits for other threads if the given logical node in SMOs.
+   *
+   * @param lid a logical node ID.
+   * @return a head of a delta chain.
+   */
   auto
   LoadValidHead(const LogicalID *lid)  //
       -> const Delta_t *
@@ -985,7 +990,7 @@ class BwTree
     while (true) {
       for (size_t i = 1; true; ++i) {
         const auto *head = lid->template Load<Delta_t *>();
-        if (!head->NeedConsolidation()) return head;
+        if (!head->NeedWaitSMOs()) return head;
         if (i >= kRetryNum) break;
         BW_TREE_SPINLOCK_HINT
       }
@@ -999,6 +1004,7 @@ class BwTree
    * @param key a search key.
    * @param closed a flag for indicating closed/open-interval.
    * @param stack a stack of traversed nodes.
+   * @param is_smo a flag for indicating this function is called in SMOs.
    * @return the head of this logical node.
    */
   auto
@@ -1006,26 +1012,29 @@ class BwTree
       const Key &key,
       const bool closed,
       std::vector<LogicalID *> &stack,
-      const bool is_smo = false)  //
+      const LogicalID *target_lid = nullptr)  //
       -> const Delta_t *
   {
     for (uintptr_t out_ptr{}; true;) {
       // check whether the node is active and can include a target key
       const auto *head = LoadValidHead(stack.back());
       switch (DC::Validate(head, key, closed, out_ptr)) {
-        case DeltaRC::kKeyIsInSibling:
+        case DeltaRC::kKeyIsInSibling: {
           // swap a current node in a stack and retry
-          stack.back() = reinterpret_cast<LogicalID *>(out_ptr);
+          auto *sib_lid = reinterpret_cast<LogicalID *>(out_ptr);
+          if (sib_lid == target_lid) return head;
+          stack.back() = sib_lid;
           continue;
+        }
 
         case DeltaRC::kNodeRemoved:
           // retry from the parent node
           stack.pop_back();
           if (stack.empty()) {
-            if (is_smo) return nullptr;
+            if (target_lid != nullptr) return nullptr;
             stack = SearchLeafNode(key, closed);
           } else {
-            SearchChildNode(key, closed, stack, is_smo);
+            SearchChildNode(key, closed, stack, target_lid);
             if (stack.empty()) return nullptr;
           }
           continue;
@@ -1090,9 +1099,10 @@ class BwTree
   }
 
   /**
-   * @brief Get the head pointer of a logical node and check key existence.
+   * @brief Get the head pointer of a logical node and check keys existence.
    *
    * @param key a search key.
+   * @param sib_key a separator key of a right-sibling node.
    * @param stack a stack of traversed nodes.
    * @retval 1st: the head of this logical node.
    * @retval 2nd: key existence.
@@ -1221,7 +1231,7 @@ class BwTree
    *
    * This function will perform splitting/merging if needed.
    *
-   * @param target_lid the logical ID of a target node.
+   * @param head a head delta record of a target delta chain.
    * @param stack a stack of traversed nodes.
    */
   void
@@ -1229,23 +1239,35 @@ class BwTree
       Delta_t *head,
       std::vector<LogicalID *> &stack)
   {
+    thread_local std::unique_ptr<void, std::function<void(void *)>>  //
+        tls_node{nullptr, std::function<void(void *)>(free)};
     Node_t *r_node = nullptr;
 
+    // recheck other threads have modifed this delta chain
+    if (head != stack.back()->template Load<Delta_t *>()) return;
+
     // prepare a consolidated node
-    auto *new_node = reinterpret_cast<Node_t *>(GetNodePage());
+    auto *new_node = reinterpret_cast<Node_t *>((tls_node) ? tls_node.release() : GetNodePage());
     switch (TryConsolidate(head, new_node, r_node)) {
       case kTrySplit:
+        // we use fixed-length pages, and so splitting a node must succeed
         Split(new_node, r_node, stack);
         break;
 
       case kTryMerge:
-        Merge(new_node, stack);
+        if (!TryMerge(head, new_node, stack)) {
+          tls_node.reset(new_node);
+          return;
+        }
         break;
 
       case kConsolidate:
       default:
         // install a consolidated node
-        stack.back()->Store(new_node);
+        if (!stack.back()->CASStrong(head, new_node)) {
+          tls_node.reset(new_node);
+          return;
+        }
         break;
     }
     AddToGC(head);
@@ -1256,7 +1278,8 @@ class BwTree
    *
    * @tparam T a class of expected payloads.
    * @param head the head pointer of a terget node.
-   * @param consol_node a node page to store consolidated records.
+   * @param new_node a node page to store consolidated records.
+   * @param r_node a node page to store split-right records.
    * @param is_scan a flag to prevent a split-operation.
    * @return the status of a consolidation result.
    */
@@ -1268,12 +1291,14 @@ class BwTree
       const bool is_scan = false)  //
       -> SMOsRC
   {
-    thread_local std::vector<Record> records(kMaxDeltaRecordNum * 4);
-    thread_local std::vector<const void *> nodes(kMaxDeltaRecordNum);
-
-    // sort delta records
+    thread_local std::vector<Record> records{};
+    thread_local std::vector<const void *> nodes{};
+    records.reserve(kMaxDeltaRecordNum);
+    nodes.reserve(kDeltaRecordThreshold);
     records.clear();
     nodes.clear();
+
+    // sort delta records
     DC::Sort(head, records, nodes);
 
     // check whether splitting is needed
@@ -1301,9 +1326,11 @@ class BwTree
    * @brief Consolidate given leaf nodes and delta records.
    *
    * @tparam T a class of expected payloads.
-   * @param consol_node a node page to store consolidated records.
+   * @param new_node a node page to store consolidated records.
+   * @param r_node a node page to store split-right records.
    * @param nodes the set of leaf nodes to be consolidated.
    * @param records insert/modify/delete-delta records.
+   * @param is_scan a flag to prevent a split-operation.
    */
   template <class T>
   void
@@ -1372,8 +1399,8 @@ class BwTree
   /**
    * @brief Try splitting a target node.
    *
-   * @param head the head pointer of a terget node.
-   * @param split_node a split-right node to be inserted to this tree.
+   * @param l_node a split-left node to be updated.
+   * @param r_node a split-right node to be inserted to this tree.
    * @param stack a stack of traversed nodes.
    */
   void
@@ -1399,14 +1426,18 @@ class BwTree
     while (true) {
       // check the current node is a root node
       if (stack.empty()) {
-        if (!TryRootSplit(entry_d, l_lid, l_node, stack)) continue;
-        tls_delta_page_.reset(entry_d);
-        return;
+        if (TryRootSplit(entry_d, l_lid)) {
+          tls_delta_page_.reset(entry_d);
+          return;
+        }
+        SearchTargetNode(stack, key, r_lid);
+        stack.pop_back();  // remove the split node
+        continue;
       }
 
       // insert the delta record into a parent node
       while (true) {
-        const auto *head = GetHead(key, kClosed, stack, kIsSMO);
+        const auto *head = GetHead(key, kClosed, stack, r_lid);
         if (head == nullptr) break;  // the tree structure has modified, so retry
 
         // try to insert the index-entry delta record
@@ -1424,25 +1455,18 @@ class BwTree
   /**
    * @brief Perform splitting a root node.
    *
-   * @param split_d a split-delta record.
-   * @param stack a stack of traversed nodes.
+   * @param entry_d a insert-entry delta record.
+   * @param old_lid a logical node ID of an old root node.
    * @retval true if splitting succeeds.
    * @retval false otherwise.
    */
   auto
   TryRootSplit(  //
       const Delta_t *entry_d,
-      const LogicalID *old_lid,
-      const Node_t *l_node,
-      std::vector<LogicalID *> &stack)  //
+      const LogicalID *old_lid)  //
       -> bool
   {
-    if (root_.load(std::memory_order_relaxed) != old_lid) {
-      // concurrent SMOs have modified the tree structure
-      SearchTargetNode(stack, l_node->GetLowKey(), old_lid);
-      stack.pop_back();  // remove the split node
-      return false;
-    }
+    if (root_.load(std::memory_order_relaxed) != old_lid) return false;
 
     // create a new root node
     const auto *entry_delta_n = reinterpret_cast<const Node_t *>(entry_d);
@@ -1464,17 +1488,22 @@ class BwTree
    * @retval true if partial merging succeeds.
    * @retval false otherwise.
    */
-  void
-  Merge(  //
+  auto
+  TryMerge(  //
+      const Delta_t *head,
       Node_t *removed_node,
-      std::vector<LogicalID *> &stack)
+      std::vector<LogicalID *> &stack)  //
+      -> bool
   {
     auto *removed_node_d = reinterpret_cast<Delta_t *>(removed_node);
 
     // insert a remove-node delta to prevent other threads from modifying this node
     auto *remove_d = new (GetRecPage()) Delta_t{removed_node->IsLeaf()};
     auto *removed_lid = stack.back();
-    removed_lid->Store(remove_d);
+    if (!removed_lid->CASStrong(head, remove_d)) {
+      tls_delta_page_.reset(remove_d);
+      return false;
+    }
     stack.pop_back();  // remove the child node
 
     // remove the index entry before merging
@@ -1487,7 +1516,7 @@ class BwTree
         removed_lid->Store(removed_node);
         AddToGC(remove_d);
       }
-      return;
+      return true;
     }
 
     // insert a merge delta into the left sibling node
@@ -1498,16 +1527,13 @@ class BwTree
       if (stack.empty()) {
         // concurrent SMOs have modified the tree structure, so reconstruct a stack
         SearchTargetNode(stack, sep_key, removed_lid);
-        stack.pop_back();
-        continue;
+      } else {
+        SearchChildNode(sep_key, kOpen, stack, removed_lid);
+        if (stack.empty()) continue;
       }
 
-      // search a left sibling node
-      SearchChildNode(sep_key, kOpen, stack, kIsSMO);
-      if (stack.empty()) continue;
-
       while (true) {  // continue until insertion succeeds
-        const auto *sib_head = GetHead(sep_key, kOpen, stack, kIsSMO);
+        const auto *sib_head = GetHead(sep_key, kOpen, stack, removed_lid);
         if (sib_head == nullptr) break;  // retry from searching the left sibling node
 
         // try to insert the merge-delta record
@@ -1517,7 +1543,7 @@ class BwTree
           if (merge_d->NeedConsolidation()) {
             TrySMOs(merge_d, stack);
           }
-          return;
+          return true;
         }
       }
     }
@@ -1526,7 +1552,8 @@ class BwTree
   /**
    * @brief Complete partial merging by deleting index-entry from this tree.
    *
-   * @param merge_d a merge-delta record.
+   * @param removed_node a consolidated node to be removed.
+   * @param low_key a lowest key of a removed node.
    * @param stack a copied stack of traversed nodes.
    */
   auto
@@ -1565,6 +1592,15 @@ class BwTree
     return delete_d;
   }
 
+  /**
+   * @brief Remove a root node and shrink a tree.
+   *
+   * @param root an old root node to be removed.
+   * @param old_lid a logical node ID of an old root node.
+   * @param stack a stack of ancestor nodes.
+   * @retval true if a root node is removed.
+   * @return false otherwise.
+   */
   auto
   TryRemoveRoot(  //
       const Node_t *root,
