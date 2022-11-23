@@ -277,8 +277,8 @@ class BwTree
   /**
    * @brief Construct a new BwTree object.
    *
-   * @param gc_interval_microsec GC internal [us]
-   * @param gc_thread_num the number of GC threads.
+   * @param gc_interval_microsec GC internal [us] (default: 10ms).
+   * @param gc_thread_num the number of GC threads (default: 1).
    */
   explicit BwTree(  //
       const size_t gc_interval_microsec = kDefaultGCTime,
@@ -848,7 +848,7 @@ class BwTree
    * @param key a search key.
    * @param closed a flag for indicating closed/open-interval.
    * @param stack a stack of traversed nodes.
-   * @param targe_lid a logical ID for stopping a child search.
+   * @param is_smo a flag for indicating this function is called in SMOs.
    */
   void
   SearchChildNode(  //
@@ -978,6 +978,14 @@ class BwTree
     }
   }
 
+  /**
+   * @brief Load a head of a delta chain in a given logical node.
+   *
+   * This function waits for other threads if the given logical node in SMOs.
+   *
+   * @param lid a logical node ID.
+   * @return a head of a delta chain.
+   */
   auto
   LoadValidHead(const LogicalID *lid)  //
       -> const Delta_t *
@@ -999,6 +1007,7 @@ class BwTree
    * @param key a search key.
    * @param closed a flag for indicating closed/open-interval.
    * @param stack a stack of traversed nodes.
+   * @param is_smo a flag for indicating this function is called in SMOs.
    * @return the head of this logical node.
    */
   auto
@@ -1090,9 +1099,10 @@ class BwTree
   }
 
   /**
-   * @brief Get the head pointer of a logical node and check key existence.
+   * @brief Get the head pointer of a logical node and check keys existence.
    *
    * @param key a search key.
+   * @param sib_key a separator key of a right-sibling node.
    * @param stack a stack of traversed nodes.
    * @retval 1st: the head of this logical node.
    * @retval 2nd: key existence.
@@ -1221,7 +1231,7 @@ class BwTree
    *
    * This function will perform splitting/merging if needed.
    *
-   * @param target_lid the logical ID of a target node.
+   * @param head a head delta record of a target delta chain.
    * @param stack a stack of traversed nodes.
    */
   void
@@ -1268,7 +1278,8 @@ class BwTree
    *
    * @tparam T a class of expected payloads.
    * @param head the head pointer of a terget node.
-   * @param consol_node a node page to store consolidated records.
+   * @param new_node a node page to store consolidated records.
+   * @param r_node a node page to store split-right records.
    * @param is_scan a flag to prevent a split-operation.
    * @return the status of a consolidation result.
    */
@@ -1315,9 +1326,11 @@ class BwTree
    * @brief Consolidate given leaf nodes and delta records.
    *
    * @tparam T a class of expected payloads.
-   * @param consol_node a node page to store consolidated records.
+   * @param new_node a node page to store consolidated records.
+   * @param r_node a node page to store split-right records.
    * @param nodes the set of leaf nodes to be consolidated.
    * @param records insert/modify/delete-delta records.
+   * @param is_scan a flag to prevent a split-operation.
    */
   template <class T>
   void
@@ -1386,8 +1399,8 @@ class BwTree
   /**
    * @brief Try splitting a target node.
    *
-   * @param head the head pointer of a terget node.
-   * @param split_node a split-right node to be inserted to this tree.
+   * @param l_node a split-left node to be updated.
+   * @param r_node a split-right node to be inserted to this tree.
    * @param stack a stack of traversed nodes.
    */
   void
@@ -1438,7 +1451,9 @@ class BwTree
   /**
    * @brief Perform splitting a root node.
    *
-   * @param split_d a split-delta record.
+   * @param entry_d a insert-entry delta record.
+   * @param old_lid a logical node ID of an old root node.
+   * @param l_node a split-left root node to be updated.
    * @param stack a stack of traversed nodes.
    * @retval true if splitting succeeds.
    * @retval false otherwise.
@@ -1545,7 +1560,8 @@ class BwTree
   /**
    * @brief Complete partial merging by deleting index-entry from this tree.
    *
-   * @param merge_d a merge-delta record.
+   * @param removed_node a consolidated node to be removed.
+   * @param low_key a lowest key of a removed node.
    * @param stack a copied stack of traversed nodes.
    */
   auto
@@ -1584,6 +1600,15 @@ class BwTree
     return delete_d;
   }
 
+  /**
+   * @brief Remove a root node and shrink a tree.
+   *
+   * @param root an old root node to be removed.
+   * @param old_lid a logical node ID of an old root node.
+   * @param stack a stack of ancestor nodes.
+   * @retval true if a root node is removed.
+   * @return false otherwise.
+   */
   auto
   TryRemoveRoot(  //
       const Node_t *root,

@@ -48,14 +48,10 @@ class DeltaChain
    *##################################################################################*/
 
   /**
-   * @brief Check the lowest key of this node is equivalent with a given key.
-   *
-   * Note that this function traverses a delta-chain and use a base node for check.
+   * @brief Get a lowest key of this logical node.
    *
    * @param delta the head record in a delta-chain.
-   * @param key a target key to be compared.
-   * @retval true if the keys are same.
-   * @retval false otherwise.
+   * @return a lowest key.
    */
   [[nodiscard]] static auto
   TraverseToGetLowKey(const DeltaRecord *delta)  //
@@ -217,11 +213,14 @@ class DeltaChain
   }
 
   /**
-   * @brief Traverse a delta-chain to search a record with a given key.
+   * @brief Traverse a delta-chain to search a record with given keys.
    *
    * @param delta the head record in a delta-chain.
    * @param key a target key to be searched.
+   * @param sib_key a sibling key to be searched.
    * @param out_ptr an output pointer if needed.
+   * @param key_found a flag for indicating a target key has been found.
+   * @param sib_key_found a flag for indicating a sibling key has been found.
    * @retval kRecordFound if a delta record (in out_ptr) has the given key.
    * @retval kReachBaseNode if a base node (in out_ptr) may have the given key.
    * @retval kKeyIsInSibling if the target key is not in this node due to other SMOs.
@@ -353,7 +352,6 @@ class DeltaChain
   /**
    * @brief Sort delta records for consolidation.
    *
-   * @tparam T a class of expected payloads.
    * @param delta the head record in a delta-chain.
    * @param records a vector for storing sorted records.
    * @param nodes a vector for storing base nodes and corresponding separator keys.

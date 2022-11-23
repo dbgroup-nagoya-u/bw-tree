@@ -108,16 +108,16 @@ Log2(const size_t val)  //
  * Tuning parameters for Bw-tree
  *####################################################################################*/
 
-/// The default page size of each node
+/// The default page size of each node.
 constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
 
-/// The number of delta records for invoking consolidation
+/// The number of delta records for invoking consolidation.
 constexpr size_t kDeltaRecordThreshold = BW_TREE_DELTA_RECORD_NUM_THRESHOLD;
 
-/// The number of delta records for invoking consolidation
+/// The number of delta records for invoking consolidation.
 constexpr size_t kMaxDeltaRecordNum = BW_TREE_MAX_DELTA_RECORD_NUM;
 
-/// The minimum size of nodes for invoking merging
+/// Waiting for other threads if the number of delta records exceeds this threshold.
 constexpr size_t kMinNodeSize = BW_TREE_MIN_NODE_SIZE;
 
 /// The maximun size of variable-length data
