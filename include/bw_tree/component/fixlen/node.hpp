@@ -17,10 +17,12 @@
 #ifndef BW_TREE_COMPONENT_FIXLEN_NODE_HPP
 #define BW_TREE_COMPONENT_FIXLEN_NODE_HPP
 
+// C++ standard libraries
 #include <optional>
 #include <utility>
 #include <vector>
 
+// local sources
 #include "bw_tree/component/common.hpp"
 #include "bw_tree/component/logical_id.hpp"
 

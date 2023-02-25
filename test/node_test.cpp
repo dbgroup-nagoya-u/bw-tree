@@ -14,14 +14,13 @@
  * limitations under the License.
  */
 
+// C++ standard libraries
 #include <memory>
 #include <vector>
 
-// external libraries
-#include "gtest/gtest.h"
-
-// our libraries
+// external sources
 #include "external/index-fixtures/common.hpp"
+#include "gtest/gtest.h"
 
 // local sources
 #include "bw_tree/component/fixlen/node.hpp"

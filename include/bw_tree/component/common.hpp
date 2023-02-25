@@ -17,16 +17,23 @@
 #ifndef BW_TREE_COMPONENT_COMMON_HPP
 #define BW_TREE_COMPONENT_COMMON_HPP
 
+// C++ standard libraries
 #include <functional>
 
+// external system libraries
 #ifdef BW_TREE_HAS_SPINLOCK_HINT
 #include <xmmintrin.h>
+#endif
+
+// local sources
+#include "bw_tree/utility.hpp"
+
+// macro definitions
+#ifdef BW_TREE_HAS_SPINLOCK_HINT
 #define BW_TREE_SPINLOCK_HINT _mm_pause();  // NOLINT
 #else
 #define BW_TREE_SPINLOCK_HINT /* do nothing */
 #endif
-
-#include "bw_tree/utility.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {

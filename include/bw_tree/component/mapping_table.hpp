@@ -17,12 +17,14 @@
 #ifndef BW_TREE_COMPONENT_MAPPING_TABLE_HPP
 #define BW_TREE_COMPONENT_MAPPING_TABLE_HPP
 
+// C++ standard libraries
 #include <array>
 #include <atomic>
 #include <mutex>
 #include <vector>
 
-#include "logical_id.hpp"
+// local sources
+#include "bw_tree/component/logical_id.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {

@@ -17,6 +17,7 @@
 #ifndef BW_TREE_BW_TREE_HPP
 #define BW_TREE_BW_TREE_HPP
 
+// C++ standard libraries
 #include <functional>
 #include <future>
 #include <memory>
@@ -24,17 +25,17 @@
 #include <utility>
 #include <vector>
 
-// organization libraries
+// external sources
 #include "memory/epoch_based_gc.hpp"
 
 // local sources
-#include "component/delta_chain.hpp"
-#include "component/fixlen/delta_record.hpp"
-#include "component/fixlen/node.hpp"
-#include "component/logical_id.hpp"
-#include "component/mapping_table.hpp"
-#include "component/varlen/delta_record.hpp"
-#include "component/varlen/node.hpp"
+#include "bw_tree/component/delta_chain.hpp"
+#include "bw_tree/component/fixlen/delta_record.hpp"
+#include "bw_tree/component/fixlen/node.hpp"
+#include "bw_tree/component/logical_id.hpp"
+#include "bw_tree/component/mapping_table.hpp"
+#include "bw_tree/component/varlen/delta_record.hpp"
+#include "bw_tree/component/varlen/node.hpp"
 
 namespace dbgroup::index::bw_tree
 {

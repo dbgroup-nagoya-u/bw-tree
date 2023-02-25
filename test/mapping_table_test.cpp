@@ -16,12 +16,13 @@
 
 #include "bw_tree/component/mapping_table.hpp"
 
+// C++ standard libraries
 #include <algorithm>
 #include <future>
 #include <memory>
 #include <thread>
 
-// external libraries
+// external sources
 #include "gtest/gtest.h"
 
 // local sources
