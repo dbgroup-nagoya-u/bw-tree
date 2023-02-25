@@ -17,6 +17,8 @@
 #ifndef BW_TREE_COMPONENT_COMMON_HPP
 #define BW_TREE_COMPONENT_COMMON_HPP
 
+#include <functional>
+
 #ifdef BW_TREE_HAS_SPINLOCK_HINT
 #include <xmmintrin.h>
 #define BW_TREE_SPINLOCK_HINT _mm_pause();  // NOLINT
@@ -82,6 +84,44 @@ constexpr uintptr_t kNullPtr = 0;
 
 /// the capacity of each mapping table.
 constexpr size_t kMappingTableCapacity = (kPageSize - kWordSize) / kWordSize;
+
+/*######################################################################################
+ * Internal utility classes
+ *####################################################################################*/
+
+/**
+ * @brief A struct for representing GG node pages.
+ *
+ */
+struct NodePage {
+  // do not call destructor
+  using T = void;
+
+  // reuse pages
+  static constexpr bool kReusePages = true;
+
+  // use the standard delete function to release garbage
+  static const inline std::function<void(void *)> deleter = [](void *ptr) {
+    ::operator delete(ptr);
+  };
+};
+
+/**
+ * @brief A struct for representing GC delta pages.
+ *
+ */
+struct DeltaPage {
+  // do not call destructor
+  using T = void;
+
+  // reuse pages
+  static constexpr bool kReusePages = true;
+
+  // use the standard delete function to release garbage
+  static const inline std::function<void(void *)> deleter = [](void *ptr) {
+    ::operator delete(ptr);
+  };
+};
 
 /*######################################################################################
  * Internal utility functions

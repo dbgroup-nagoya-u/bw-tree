@@ -56,6 +56,8 @@ class BwTree
    * Type aliases
    *##################################################################################*/
 
+  using NodePage = component::NodePage;
+  using DeltaPage = component::DeltaPage;
   using DeltaRC = component::DeltaRC;
   using DeltaType = component::DeltaType;
   using LogicalID = component::LogicalID;
@@ -69,7 +71,7 @@ class BwTree
   using MappingTable_t = component::MappingTable<Node_t, Delta_t>;
   using DC = component::DeltaChain<Delta_t>;
   using ConsolidateInfo = std::pair<const void *, const void *>;
-  using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t, Delta_t>;
+  using NodeGC_t = ::dbgroup::memory::EpochBasedGC<NodePage, DeltaPage>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
 
   template <class Entry>
@@ -283,13 +285,15 @@ class BwTree
   explicit BwTree(  //
       const size_t gc_interval_microsec = kDefaultGCTime,
       const size_t gc_thread_num = kDefaultGCThreadNum)
-      : gc_{gc_interval_microsec, gc_thread_num, true}
+      : gc_{gc_interval_microsec, gc_thread_num}
   {
     // create an empty Bw-tree
     auto *root_node = new (GetNodePage()) Node_t{};
     auto *root_lid = mapping_table_.GetNewLogicalID();
     root_lid->Store(root_node);
     root_.store(root_lid, std::memory_order_relaxed);
+
+    gc_.StartGC();
   }
 
   BwTree(const BwTree &) = delete;
@@ -705,7 +709,7 @@ class BwTree
 
     // set a new root
     auto *old_root = root_.exchange(new_root, std::memory_order_release);
-    gc_.AddGarbage(old_root->template Load<Delta_t *>());
+    gc_.AddGarbage<NodePage>(old_root->template Load<Delta_t *>());
     old_root->Clear();
 
     return ReturnCode::kSuccess;
@@ -787,7 +791,7 @@ class BwTree
   GetNodePage()  //
       -> void *
   {
-    auto *page = gc_.template GetPageIfPossible<Node_t>();
+    auto *page = gc_.template GetPageIfPossible<NodePage>();
     return (page == nullptr) ? (aligned_alloc(kCacheLineSize, kPageSize)) : page;
   }
 
@@ -802,7 +806,7 @@ class BwTree
   {
     if (tls_delta_page_) return tls_delta_page_.release();
 
-    auto *page = gc_.template GetPageIfPossible<Delta_t>();
+    auto *page = gc_.template GetPageIfPossible<DeltaPage>();
     return (page == nullptr) ? (aligned_alloc(kCacheLineSize, kDeltaRecSize)) : page;
   }
 
@@ -825,12 +829,12 @@ class BwTree
     const auto *garbage = reinterpret_cast<const Delta_t *>(head);
     while (garbage->GetDeltaType() != DeltaType::kNotDelta) {
       // register this delta record with GC
-      gc_.AddGarbage(garbage);
+      gc_.AddGarbage<DeltaPage>(garbage);
 
       // if the delta record is merge-delta, delete the merged sibling node
       if (garbage->GetDeltaType() == DeltaType::kMerge) {
         auto *removed_node = garbage->template GetPayload<Node_t *>();
-        gc_.AddGarbage(removed_node);
+        gc_.AddGarbage<NodePage>(removed_node);
       }
 
       // check the next delta record or base node
@@ -839,7 +843,7 @@ class BwTree
     }
 
     // register a base node with GC
-    gc_.AddGarbage(reinterpret_cast<const Node_t *>(garbage));
+    gc_.AddGarbage<NodePage>(reinterpret_cast<const Node_t *>(garbage));
   }
 
   /**

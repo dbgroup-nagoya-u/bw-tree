@@ -10,10 +10,10 @@ buildType:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
         BW_TREE_PAGE_SIZE: 1024
         BW_TREE_BUILD_TESTS: ON
-        BW_TREE_TEST_THREAD_NUM: 8
-        BW_TREE_TEST_RANDOM_SEED: 10
-        BW_TREE_TEST_EXEC_NUM: 1E5
-        BW_TREE_TEST_OVERRIDE_MIMALLOC: OFF
+        DBGROUP_TEST_THREAD_NUM: 8
+        DBGROUP_TEST_RANDOM_SEED: 10
+        DBGROUP_TEST_EXEC_NUM: 1E5
+        DBGROUP_TEST_OVERRIDE_MIMALLOC: OFF
     relWithDebInfo:
       short: RelWithDebInfo
       long: Perform optimizations and include debugging informatin
@@ -22,10 +22,10 @@ buildType:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
         BW_TREE_PAGE_SIZE: 1024
         BW_TREE_BUILD_TESTS: ON
-        BW_TREE_TEST_THREAD_NUM: 8
-        BW_TREE_TEST_RANDOM_SEED: 10
-        BW_TREE_TEST_EXEC_NUM: 1E5
-        BW_TREE_TEST_OVERRIDE_MIMALLOC: OFF
+        DBGROUP_TEST_THREAD_NUM: 8
+        DBGROUP_TEST_RANDOM_SEED: 10
+        DBGROUP_TEST_EXEC_NUM: 1E5
+        DBGROUP_TEST_OVERRIDE_MIMALLOC: OFF
     release:
       short: Release
       long: Perform optimizations and omit debugging informatin
@@ -34,7 +34,7 @@ buildType:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
         BW_TREE_PAGE_SIZE: 1024
         BW_TREE_BUILD_TESTS: ON
-        BW_TREE_TEST_THREAD_NUM: 8
-        BW_TREE_TEST_RANDOM_SEED: 10
-        BW_TREE_TEST_EXEC_NUM: 1E5
-        BW_TREE_TEST_OVERRIDE_MIMALLOC: OFF
+        DBGROUP_TEST_THREAD_NUM: 8
+        DBGROUP_TEST_RANDOM_SEED: 10
+        DBGROUP_TEST_EXEC_NUM: 1E5
+        DBGROUP_TEST_OVERRIDE_MIMALLOC: OFF

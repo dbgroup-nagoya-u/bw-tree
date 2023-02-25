@@ -89,7 +89,7 @@ class DeltaRecordFixture : public testing::Test
 
   static constexpr bool kUseVarLen = Target::kUseVarLen;
   static constexpr size_t kKeyNumForTest = 64;
-  static constexpr size_t kRandomSeed = BW_TREE_TEST_RANDOM_SEED;
+  static constexpr size_t kRandomSeed = DBGROUP_TEST_RANDOM_SEED;
 
   /*####################################################################################
    * Setup/Teardown

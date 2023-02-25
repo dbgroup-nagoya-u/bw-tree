@@ -35,7 +35,7 @@ namespace dbgroup::index::bw_tree::component::test
  *####################################################################################*/
 
 constexpr size_t kMultipleTableCapacity = kMappingTableCapacity * 10;
-constexpr size_t kThreadNum = BW_TREE_TEST_THREAD_NUM;
+constexpr size_t kThreadNum = DBGROUP_TEST_THREAD_NUM;
 
 /*######################################################################################
  * Fixture class definition

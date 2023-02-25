@@ -13,10 +13,6 @@ project(
   LANGUAGES "CXX"
 )
 
-# define source directories
-set(BW_TREE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-set(MEMORY_MANAGER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/memory-manager")
-
 # check SSE support for spinlock hints
 include(CheckIncludeFileCXX)
 CHECK_INCLUDE_FILE_CXX("xmmintrin.h" BW_TREE_HAS_SPINLOCK_HINT)
@@ -38,19 +34,19 @@ set(BW_TREE_SLEEP_TIME "10" CACHE STRING "A sleep time for preventing busy loops
 #--------------------------------------------------------------------------------------#
 
 # configure GC
-add_subdirectory("${MEMORY_MANAGER_SOURCE_DIR}")
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/memory-manager")
 
 #--------------------------------------------------------------------------------------#
 # Build targets
 #--------------------------------------------------------------------------------------#
 
-if(NOT TARGET bw_tree::bw_tree)
-  add_library(bw_tree INTERFACE)
-  add_library(bw_tree::bw_tree ALIAS bw_tree)
-  target_compile_features(bw_tree INTERFACE
+if(NOT TARGET dbgroup::${PROJECT_NAME})
+  add_library(${PROJECT_NAME} INTERFACE)
+  add_library(dbgroup::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
+  target_compile_features(${PROJECT_NAME} INTERFACE
     "cxx_std_17"
   )
-  target_compile_definitions(bw_tree INTERFACE
+  target_compile_definitions(${PROJECT_NAME} INTERFACE
     BW_TREE_PAGE_SIZE=${BW_TREE_PAGE_SIZE}
     BW_TREE_DELTA_RECORD_NUM_THRESHOLD=${BW_TREE_DELTA_RECORD_NUM_THRESHOLD}
     BW_TREE_MAX_DELTA_RECORD_NUM=${BW_TREE_MAX_DELTA_RECORD_NUM}
@@ -60,11 +56,11 @@ if(NOT TARGET bw_tree::bw_tree)
     BW_TREE_SLEEP_TIME=${BW_TREE_SLEEP_TIME}
     $<$<BOOL:${BW_TREE_HAS_SPINLOCK_HINT}>:BW_TREE_HAS_SPINLOCK_HINT>
   )
-  target_include_directories(bw_tree INTERFACE
-    ${BW_TREE_SOURCE_DIR}/include
+  target_include_directories(${PROJECT_NAME} INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
-  target_link_libraries(bw_tree INTERFACE
-    memory_manager::memory_manager
+  target_link_libraries(${PROJECT_NAME} INTERFACE
+    dbgroup::memory_manager
   )
 endif()
 
