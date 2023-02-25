@@ -260,6 +260,16 @@ class DeltaRecord
   }
 
   /**
+   * @return the byte length of this node.
+   */
+  [[nodiscard]] constexpr auto
+  GetNodeSize() const  //
+      -> size_t
+  {
+    return node_size_;
+  }
+
+  /**
    * @return the number of delta records in this chain.
    */
   [[nodiscard]] constexpr auto
@@ -270,13 +280,20 @@ class DeltaRecord
   }
 
   /**
-   * @return the byte length of this node.
+   * @retval 1st: the data usage of this node.
+   * @retval 2nd: the number of delta records in this node.
    */
   [[nodiscard]] constexpr auto
-  GetNodeSize() const  //
-      -> size_t
+  GetNodeUsage() const  //
+      -> std::pair<size_t, size_t>
   {
-    return node_size_;
+    size_t delta_num = 0;
+    const auto *cur = this;
+    for (; cur->delta_type_ != kNotDelta; cur = cur->GetNext()) {
+      ++delta_num;
+    }
+
+    return {cur->node_size_, delta_num};
   }
 
   /**

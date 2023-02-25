@@ -299,6 +299,23 @@ class DeltaRecord
   }
 
   /**
+   * @retval 1st: the data usage of this node.
+   * @retval 2nd: the number of delta records in this node.
+   */
+  [[nodiscard]] constexpr auto
+  GetNodeUsage() const  //
+      -> std::pair<size_t, size_t>
+  {
+    size_t delta_num = 0;
+    const auto *cur = this;
+    for (; cur->delta_type_ != kNotDelta; cur = cur->GetNext()) {
+      ++delta_num;
+    }
+
+    return {cur->node_size_, delta_num};
+  }
+
+  /**
    * @brief Get the next pointer of a delta record or a base node.
    *
    * @tparam T an expected class to be loaded.
