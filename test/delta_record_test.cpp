@@ -14,16 +14,15 @@
  * limitations under the License.
  */
 
+// C++ standard libraries
 #include <algorithm>
 #include <memory>
 #include <random>
 #include <vector>
 
-// external libraries
-#include "gtest/gtest.h"
-
-// our libraries
+// external sources
 #include "external/index-fixtures/common.hpp"
+#include "gtest/gtest.h"
 
 // local sources
 #include "bw_tree/component/fixlen/delta_record.hpp"
@@ -89,7 +88,7 @@ class DeltaRecordFixture : public testing::Test
 
   static constexpr bool kUseVarLen = Target::kUseVarLen;
   static constexpr size_t kKeyNumForTest = 64;
-  static constexpr size_t kRandomSeed = BW_TREE_TEST_RANDOM_SEED;
+  static constexpr size_t kRandomSeed = DBGROUP_TEST_RANDOM_SEED;
 
   /*####################################################################################
    * Setup/Teardown

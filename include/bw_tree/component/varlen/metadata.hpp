@@ -17,6 +17,7 @@
 #ifndef BW_TREE_COMPONENT_VARLEN_METADATA_HPP
 #define BW_TREE_COMPONENT_VARLEN_METADATA_HPP
 
+// local sources
 #include "bw_tree/component/common.hpp"
 
 namespace dbgroup::index::bw_tree::component::varlen

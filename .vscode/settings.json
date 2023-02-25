@@ -161,6 +161,7 @@
     "typeindex": "cpp",
     "valarray": "cpp",
     "*.ipp": "cpp",
-    "core": "cpp"
+    "core": "cpp",
+    "source_location": "cpp"
   }
 }

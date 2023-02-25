@@ -17,12 +17,14 @@
 #ifndef BW_TREE_COMPONENT_MAPPING_TABLE_HPP
 #define BW_TREE_COMPONENT_MAPPING_TABLE_HPP
 
+// C++ standard libraries
 #include <array>
 #include <atomic>
 #include <mutex>
 #include <vector>
 
-#include "logical_id.hpp"
+// local sources
+#include "bw_tree/component/logical_id.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {
@@ -105,6 +107,28 @@ class MappingTable
     return new_id;
   }
 
+  /*####################################################################################
+   * Public utilities
+   *##################################################################################*/
+
+  /**
+   * @brief Collect statistical data of this tree.
+   *
+   * @retval 1st: the number of nodes (always zero).
+   * @retval 2nd: the actual usage in bytes.
+   * @retval 3rd: the virtual usage in bytes.
+   */
+  auto
+  CollectStatisticalData()  //
+      -> std::tuple<size_t, size_t, size_t>
+  {
+    const auto *table = table_.load(std::memory_order_acquire);
+    const auto virtual_size = tables_.size() * sizeof(BufferedMap);
+    const auto actual_size = virtual_size - sizeof(BufferedMap) + table->GetPageUsage();
+
+    return {0, actual_size, virtual_size};
+  }
+
  private:
   /*####################################################################################
    * Internal classes
@@ -185,6 +209,17 @@ class MappingTable
 
       if (current_id >= kMappingTableCapacity) return nullptr;
       return &logical_ids_[current_id];
+    }
+
+    /**
+     * @return the usage of this buffer.
+     */
+    [[nodiscard]] auto
+    GetPageUsage() const  //
+        -> size_t
+    {
+      const auto reserved_num = head_pos_.load(std::memory_order_relaxed);
+      return sizeof(std::atomic_size_t) + (reserved_num * sizeof(LogicalID));
     }
 
    private:

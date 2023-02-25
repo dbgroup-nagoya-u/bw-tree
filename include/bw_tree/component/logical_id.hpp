@@ -17,9 +17,11 @@
 #ifndef BW_TREE_COMPONENT_LOGICAL_ID_HPP
 #define BW_TREE_COMPONENT_LOGICAL_ID_HPP
 
+// C++ standard libraries
 #include <atomic>
 
-#include "common.hpp"
+// local sources
+#include "bw_tree/component/common.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {

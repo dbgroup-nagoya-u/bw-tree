@@ -16,7 +16,7 @@
 
 #include "bw_tree/bw_tree.hpp"
 
-// our libraries
+// external sources
 #include "external/index-fixtures/index_fixture_multi_thread.hpp"
 
 namespace dbgroup::index::test

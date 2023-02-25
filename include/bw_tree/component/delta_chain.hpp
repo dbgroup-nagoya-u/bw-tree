@@ -17,10 +17,12 @@
 #ifndef BW_TREE_COMPONENT_DELTA_CHAIN_HPP
 #define BW_TREE_COMPONENT_DELTA_CHAIN_HPP
 
+// C++ standard libraries
 #include <optional>
 #include <utility>
 #include <vector>
 
+// local sources
 #include "bw_tree/component/logical_id.hpp"
 
 namespace dbgroup::index::bw_tree::component

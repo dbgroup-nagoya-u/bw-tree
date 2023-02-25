@@ -17,6 +17,7 @@
 #ifndef BW_TREE_BW_TREE_HPP
 #define BW_TREE_BW_TREE_HPP
 
+// C++ standard libraries
 #include <functional>
 #include <future>
 #include <memory>
@@ -24,17 +25,17 @@
 #include <utility>
 #include <vector>
 
-// organization libraries
+// external sources
 #include "memory/epoch_based_gc.hpp"
 
 // local sources
-#include "component/delta_chain.hpp"
-#include "component/fixlen/delta_record.hpp"
-#include "component/fixlen/node.hpp"
-#include "component/logical_id.hpp"
-#include "component/mapping_table.hpp"
-#include "component/varlen/delta_record.hpp"
-#include "component/varlen/node.hpp"
+#include "bw_tree/component/delta_chain.hpp"
+#include "bw_tree/component/fixlen/delta_record.hpp"
+#include "bw_tree/component/fixlen/node.hpp"
+#include "bw_tree/component/logical_id.hpp"
+#include "bw_tree/component/mapping_table.hpp"
+#include "bw_tree/component/varlen/delta_record.hpp"
+#include "bw_tree/component/varlen/node.hpp"
 
 namespace dbgroup::index::bw_tree
 {
@@ -56,6 +57,8 @@ class BwTree
    * Type aliases
    *##################################################################################*/
 
+  using NodePage = component::NodePage;
+  using DeltaPage = component::DeltaPage;
   using DeltaRC = component::DeltaRC;
   using DeltaType = component::DeltaType;
   using LogicalID = component::LogicalID;
@@ -69,7 +72,7 @@ class BwTree
   using MappingTable_t = component::MappingTable<Node_t, Delta_t>;
   using DC = component::DeltaChain<Delta_t>;
   using ConsolidateInfo = std::pair<const void *, const void *>;
-  using NodeGC_t = ::dbgroup::memory::EpochBasedGC<Node_t, Delta_t>;
+  using NodeGC_t = ::dbgroup::memory::EpochBasedGC<NodePage, DeltaPage>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
 
   template <class Entry>
@@ -283,13 +286,15 @@ class BwTree
   explicit BwTree(  //
       const size_t gc_interval_microsec = kDefaultGCTime,
       const size_t gc_thread_num = kDefaultGCThreadNum)
-      : gc_{gc_interval_microsec, gc_thread_num, true}
+      : gc_{gc_interval_microsec, gc_thread_num}
   {
     // create an empty Bw-tree
     auto *root_node = new (GetNodePage()) Node_t{};
     auto *root_lid = mapping_table_.GetNewLogicalID();
     root_lid->Store(root_node);
     root_.store(root_lid, std::memory_order_relaxed);
+
+    gc_.StartGC();
   }
 
   BwTree(const BwTree &) = delete;
@@ -705,10 +710,34 @@ class BwTree
 
     // set a new root
     auto *old_root = root_.exchange(new_root, std::memory_order_release);
-    gc_.AddGarbage(old_root->template Load<Delta_t *>());
+    gc_.AddGarbage<NodePage>(old_root->template Load<Delta_t *>());
     old_root->Clear();
 
     return ReturnCode::kSuccess;
+  }
+
+  /*####################################################################################
+   * Public utilities
+   *##################################################################################*/
+
+  /**
+   * @brief Collect statistical data of this tree.
+   *
+   * @retval 1st: the number of nodes.
+   * @retval 2nd: the actual usage in bytes.
+   * @retval 3rd: the virtual usage in bytes.
+   */
+  auto
+  CollectStatisticalData()  //
+      -> std::vector<std::tuple<size_t, size_t, size_t>>
+  {
+    std::vector<std::tuple<size_t, size_t, size_t>> stat_data{};
+    auto *lid = root_.load(std::memory_order_acquire);
+
+    CollectStatisticalData(lid, 0, stat_data);
+    stat_data.emplace_back(mapping_table_.CollectStatisticalData());
+
+    return stat_data;
   }
 
  private:
@@ -787,7 +816,7 @@ class BwTree
   GetNodePage()  //
       -> void *
   {
-    auto *page = gc_.template GetPageIfPossible<Node_t>();
+    auto *page = gc_.template GetPageIfPossible<NodePage>();
     return (page == nullptr) ? (aligned_alloc(kCacheLineSize, kPageSize)) : page;
   }
 
@@ -802,7 +831,7 @@ class BwTree
   {
     if (tls_delta_page_) return tls_delta_page_.release();
 
-    auto *page = gc_.template GetPageIfPossible<Delta_t>();
+    auto *page = gc_.template GetPageIfPossible<DeltaPage>();
     return (page == nullptr) ? (aligned_alloc(kCacheLineSize, kDeltaRecSize)) : page;
   }
 
@@ -825,12 +854,12 @@ class BwTree
     const auto *garbage = reinterpret_cast<const Delta_t *>(head);
     while (garbage->GetDeltaType() != DeltaType::kNotDelta) {
       // register this delta record with GC
-      gc_.AddGarbage(garbage);
+      gc_.AddGarbage<DeltaPage>(garbage);
 
       // if the delta record is merge-delta, delete the merged sibling node
       if (garbage->GetDeltaType() == DeltaType::kMerge) {
         auto *removed_node = garbage->template GetPayload<Node_t *>();
-        gc_.AddGarbage(removed_node);
+        gc_.AddGarbage<NodePage>(removed_node);
       }
 
       // check the next delta record or base node
@@ -839,7 +868,55 @@ class BwTree
     }
 
     // register a base node with GC
-    gc_.AddGarbage(reinterpret_cast<const Node_t *>(garbage));
+    gc_.AddGarbage<NodePage>(reinterpret_cast<const Node_t *>(garbage));
+  }
+
+  /**
+   * @brief Collect statistical data recursively.
+   *
+   * @param node a target node.
+   * @param level the current level in the tree.
+   * @param stat_data an output statistical data.
+   */
+  void
+  CollectStatisticalData(  //
+      const LogicalID *lid,
+      const size_t level,
+      std::vector<std::tuple<size_t, size_t, size_t>> &stat_data)
+  {
+    // add an element for a new level
+    if (stat_data.size() <= level) {
+      stat_data.emplace_back(0, 0, 0);
+    }
+
+    // get the head of the current logical ID
+    const auto *head = LoadValidHead(lid);
+    while (head->GetDeltaType() == DeltaType::kRemoveNode) {
+      head = LoadValidHead(lid);
+    }
+
+    // add statistical data of this node
+    auto &[node_num, actual_usage, virtual_usage] = stat_data.at(level);
+    const auto [node_size, delta_num] = head->GetNodeUsage();
+    const auto delta_size = delta_num * kDeltaRecSize;
+    ++node_num;
+    actual_usage += node_size + delta_size;
+    virtual_usage += kPageSize + delta_size;
+
+    // collect data recursively
+    if (!head->IsLeaf()) {
+      // consolidate the node to traverse child nodes
+      auto *consolidated = new (aligned_alloc(kCacheLineSize, 2 * kPageSize)) Node_t{!kIsLeaf};
+      Node_t *dummy_node = nullptr;
+      TryConsolidate(head, consolidated, dummy_node, kIsScan);
+
+      for (size_t i = 0; i < consolidated->GetRecordCount(); ++i) {
+        const auto *child = consolidated->template GetPayload<LogicalID *>(i);
+        CollectStatisticalData(child, level + 1, stat_data);
+      }
+
+      delete consolidated;
+    }
   }
 
   /**

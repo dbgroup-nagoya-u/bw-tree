@@ -16,7 +16,7 @@
 
 #include "bw_tree/component/logical_id.hpp"
 
-// external libraries
+// external sources
 #include "gtest/gtest.h"
 
 namespace dbgroup::index::bw_tree::component::test
