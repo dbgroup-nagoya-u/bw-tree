@@ -608,7 +608,7 @@ class Node
 
       // check whether the node has sufficent space
       node_size += total_len;
-      if (node_size > kPageSize) break;
+      if (node_size > kNodeCapacityForBulkLoading) break;
 
       // insert an entry into this node
       offset = SetPayload(offset, payload);

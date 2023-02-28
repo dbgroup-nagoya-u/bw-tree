@@ -577,7 +577,7 @@ class Node
     auto offset = kPageSize;
     for (; iter < iter_end; ++iter) {
       // check whether the node has sufficent space
-      if (node_size_ + kRecLen > kPageSize) break;
+      if (node_size_ + kRecLen > kNodeCapacityForBulkLoading) break;
       node_size_ += kRecLen;
 
       // insert an entry into this node
