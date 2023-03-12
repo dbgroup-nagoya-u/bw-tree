@@ -392,7 +392,8 @@ class BwTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
     thread_local std::unique_ptr<void, std::function<void(void *)>>  //
-        page{aligned_alloc(kCacheLineSize, 2 * kPageSize), std::function<void(void *)>(free)};
+        page{::operator new(2 * kPageSize, component::kCacheAlignVal),
+             std::function<void(void *)>{component::DeleteAlignedPtr}};
 
     auto *node = new (page.get()) Node_t{};
     size_t begin_pos{};
@@ -817,7 +818,7 @@ class BwTree
       -> void *
   {
     auto *page = gc_.template GetPageIfPossible<NodePage>();
-    return (page == nullptr) ? (aligned_alloc(kCacheLineSize, kPageSize)) : page;
+    return (page == nullptr) ? (::operator new(kPageSize, component::kCacheAlignVal)) : page;
   }
 
   /**
@@ -832,7 +833,7 @@ class BwTree
     if (tls_delta_page_) return tls_delta_page_.release();
 
     auto *page = gc_.template GetPageIfPossible<DeltaPage>();
-    return (page == nullptr) ? (aligned_alloc(kCacheLineSize, kDeltaRecSize)) : page;
+    return (page == nullptr) ? (::operator new(kDeltaRecSize, component::kCacheAlignVal)) : page;
   }
 
   /**
@@ -906,7 +907,8 @@ class BwTree
     // collect data recursively
     if (!head->IsLeaf()) {
       // consolidate the node to traverse child nodes
-      auto *consolidated = new (aligned_alloc(kCacheLineSize, 2 * kPageSize)) Node_t{!kIsLeaf};
+      auto *page = ::operator new(2 * kPageSize, component::kCacheAlignVal);
+      auto *consolidated = new (page) Node_t{!kIsLeaf};
       Node_t *dummy_node = nullptr;
       TryConsolidate(head, consolidated, dummy_node, kIsScan);
 
@@ -915,7 +917,7 @@ class BwTree
         CollectStatisticalData(child, level + 1, stat_data);
       }
 
-      delete consolidated;
+      ::operator delete(consolidated, component::kCacheAlignVal);
     }
   }
 
@@ -1317,7 +1319,7 @@ class BwTree
       std::vector<LogicalID *> &stack)
   {
     thread_local std::unique_ptr<void, std::function<void(void *)>>  //
-        tls_node{nullptr, std::function<void(void *)>(free)};
+        tls_node{nullptr, std::function<void(void *)>{component::DeleteAlignedPtr}};
     Node_t *r_node = nullptr;
 
     // recheck other threads have modifed this delta chain
@@ -1814,8 +1816,8 @@ class BwTree
   NodeGC_t gc_{};
 
   /// a thread-local delta-record page to reuse
-  inline static thread_local std::unique_ptr<void, std::function<void(void *)>>  //
-      tls_delta_page_{nullptr, std::function<void(void *)>(free)};               // NOLINT
+  inline static thread_local std::unique_ptr<void, std::function<void(void *)>>            //
+      tls_delta_page_{nullptr, std::function<void(void *)>{component::DeleteAlignedPtr}};  // NOLINT
 };
 
 /*######################################################################################

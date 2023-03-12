@@ -86,6 +86,9 @@ constexpr size_t kWordAlign = kWordSize - 1;
 /// bits for cache line alignments.
 constexpr size_t kCacheAlign = kCacheLineSize - 1;
 
+/// the chacheline size for memory alignment.
+constexpr std::align_val_t kCacheAlignVal = static_cast<std::align_val_t>(kCacheLineSize);
+
 /// the NULL value for uintptr_t
 constexpr uintptr_t kNullPtr = 0;
 
@@ -100,6 +103,17 @@ constexpr size_t kNodeCapacityForBulkLoading = kPageSize * 0.9;
  *####################################################################################*/
 
 /**
+ * @brief A deleter function to release aligned pages.
+ *
+ * @param ptr the address of pages to be released.
+ */
+inline void
+DeleteAlignedPtr(void *ptr)
+{
+  ::operator delete(ptr, kCacheAlignVal);
+}
+
+/**
  * @brief A struct for representing GG node pages.
  *
  */
@@ -111,9 +125,7 @@ struct NodePage {
   static constexpr bool kReusePages = true;
 
   // use the standard delete function to release garbage
-  static const inline std::function<void(void *)> deleter = [](void *ptr) {
-    ::operator delete(ptr);
-  };
+  static const inline std::function<void(void *)> deleter{DeleteAlignedPtr};
 };
 
 /**
@@ -128,9 +140,7 @@ struct DeltaPage {
   static constexpr bool kReusePages = true;
 
   // use the standard delete function to release garbage
-  static const inline std::function<void(void *)> deleter = [](void *ptr) {
-    ::operator delete(ptr);
-  };
+  static const inline std::function<void(void *)> deleter{DeleteAlignedPtr};
 };
 
 /*######################################################################################

@@ -180,13 +180,13 @@ class MappingTable
         while (rec != nullptr && rec->GetDeltaType() != kNotDelta) {
           auto *next = rec->GetNext();
           if (rec->GetDeltaType() == kMerge) {
-            free(rec->template GetPayload<Node *>());
+            DeleteAlignedPtr(rec->template GetPayload<Node *>());
           }
 
-          free(rec);
+          DeleteAlignedPtr(rec);
           rec = next;
         }
-        free(rec);
+        DeleteAlignedPtr(rec);
       }
     }
 
