@@ -123,8 +123,7 @@ class DeltaRecord
   /**
    * @brief Construct a new delta record for deleting an index-entry.
    *
-   * @param removed_child a removed child node.
-   * @param left_lid the logical ID of a merged-left child (dummy nullptr).
+   * @param removed_node a removed node.
    */
   explicit DeltaRecord(const DeltaRecord *removed_node) : is_inner_{kInner}, delta_type_{kDelete}
   {
@@ -151,7 +150,7 @@ class DeltaRecord
   /**
    * @brief Construct a new delta record for removing a node.
    *
-   * @param removed_node a removed node.
+   * @param is_leaf a flag for indicating leaf nodes.
    */
   explicit DeltaRecord(const bool is_leaf)
       : is_inner_{static_cast<uint16_t>(!is_leaf)}, delta_type_{kRemoveNode}
@@ -374,6 +373,7 @@ class DeltaRecord
    * @brief Set a given pointer as the next one.
    *
    * @param next a pointer to be set as the next one.
+   * @param diff the difference in node sizes.
    */
   void
   SetNext(  //
@@ -430,7 +430,6 @@ class DeltaRecord
   }
 
   /**
-   * @tparam T a class of expected payloads.
    * @return a payload in this record.
    */
   [[nodiscard]] auto
@@ -484,10 +483,7 @@ class DeltaRecord
   /**
    * @brief Insert this delta record to a given container.
    *
-   * @tparam T a class of payloads.
-   * @param sep_key an optional separator key.
    * @param records a set of records to be inserted this delta record.
-   * @return the difference of a node size.
    */
   void
   AddByInsertionSortTo(std::vector<Record> &records) const
@@ -496,7 +492,7 @@ class DeltaRecord
     const auto &rec_key = GetKey();
     auto it = records.cbegin();
     const auto it_end = records.cend();
-    for (; it != it_end && Comp{}(it->first, rec_key); ++it) {
+    for (; it != it_end &&Comp{}(it->first, rec_key); ++it) {
       // skip smaller keys
     }
     if (it == it_end) {

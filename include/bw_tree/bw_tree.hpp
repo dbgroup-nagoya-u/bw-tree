@@ -45,6 +45,7 @@ namespace dbgroup::index::bw_tree
  * @tparam Key a class of stored keys.
  * @tparam Payload a class of stored payloads (only fixed-length data for simplicity).
  * @tparam Comp a class for ordering keys.
+ * @tparam kIsVarLen a flag for using a general node layout.
  */
 template <class Key,
           class Payload,
@@ -321,6 +322,7 @@ class BwTree
    * @brief Read the payload corresponding to a given key if it exists.
    *
    * @param key a target key.
+   * @param key_len the length of the target key.
    * @retval the payload of a given key wrapped with std::optional if it is in this tree.
    * @retval std::nullopt otherwise.
    */
@@ -428,13 +430,12 @@ class BwTree
   /**
    * @brief Write (i.e., put) a given key/payload pair.
    *
-   * If a given key does not exist in this tree, this function performs an insert
-   * operation. If a given key has been already inserted, this function perfroms an
-   * update operation. Thus, this function always returns kSuccess as a return code.
+   * This function always overwrites a payload and can be optimized for that purpose;
+   * the procedure may omit the key uniqueness check.
    *
-   * @param key a target key to be written.
-   * @param payload a target payload to be written.
-   * @param key_len the length of a target key.
+   * @param key a target key.
+   * @param payload a target payload.
+   * @param key_len the length of the target key.
    * @return kSuccess.
    */
   auto
@@ -477,15 +478,14 @@ class BwTree
   /**
    * @brief Insert a given key/payload pair.
    *
-   * This function performs a uniqueness check in its processing. If a given key does
-   * not exist in this tree, this function inserts a target payload to this tree. If
-   * there is a given key in this tree, this function does nothing and returns kKeyExist
-   * as a return code.
+   * This function performs a uniqueness check on its processing. If the given key does
+   * not exist in this tree, this function inserts a target payload into this tree. If
+   * the given key exists in this tree, this function does nothing and returns kKeyExist.
    *
-   * @param key a target key to be inserted.
-   * @param payload a target payload to be inserted.
-   * @param key_len the length of a target key.
-   * @retval.kSuccess if inserted.
+   * @param key a target key.
+   * @param payload a target payload.
+   * @param key_len the length of the target key.
+   * @retval kSuccess if inserted.
    * @retval kKeyExist otherwise.
    */
   auto
@@ -528,14 +528,14 @@ class BwTree
   /**
    * @brief Update the record corresponding to a given key with a given payload.
    *
-   * This function performs a uniqueness check in its processing. If there is a given
-   * key in this tree, this function updates the corresponding record. If a given key
-   * does not exist in this tree, this function does nothing and returns kKeyNotExist as
-   * a return code.
+   * This function performs a uniqueness check on its processing. If the given key
+   * exists in this tree, this function updates the corresponding payload. If the given
+   * key does not exist in this tree, this function does nothing and returns
+   * kKeyNotExist.
    *
-   * @param key a target key to be updated.
-   * @param payload a payload for updating.
-   * @param key_len the length of a target key.
+   * @param key a target key.
+   * @param payload a target payload.
+   * @param key_len the length of the target key.
    * @retval kSuccess if updated.
    * @retval kKeyNotExist otherwise.
    */
@@ -578,12 +578,12 @@ class BwTree
   /**
    * @brief Delete the record corresponding to a given key from this tree.
    *
-   * This function performs a uniqueness check in its processing. If there is a given
-   * key in this tree, this function deletes it. If a given key does not exist in this
-   * tree, this function does nothing and returns kKeyNotExist as a return code.
+   * This function performs a uniqueness check on its processing. If the given key
+   * exists in this tree, this function deletes it. If the given key does not exist in
+   * this tree, this function does nothing and returns kKeyNotExist.
    *
-   * @param key a target key to be deleted.
-   * @param key_len the length of a target key.
+   * @param key a target key.
+   * @param key_len the length of the target key.
    * @retval kSuccess if deleted.
    * @retval kKeyNotExist otherwise.
    */
@@ -630,13 +630,14 @@ class BwTree
   /**
    * @brief Bulkload specified kay/payload pairs.
    *
-   * This function bulkloads given entries into this index. The entries are assumed to
-   * be given as a vector of pairs of Key and Payload (or key/payload/key-length for
-   * variable-length keys). Note that keys in records are assumed to be unique and
+   * This function loads the given entries into this index, assuming that the entries
+   * are given as a vector of key/payload pairs (or the tuples key/payload/key-length
+   * for variable-length keys). Note that keys in records are assumed to be unique and
    * sorted.
    *
-   * @param entries vector of entries to be bulkloaded.
-   * @param thread_num the number of threads to perform bulkloading.
+   * @tparam Entry a container of a key/payload pair.
+   * @param entries the vector of entries to be bulkloaded.
+   * @param thread_num the number of threads used for bulk loading.
    * @return kSuccess.
    */
   template <class Entry>
@@ -726,7 +727,7 @@ class BwTree
    *
    * @retval 1st: the number of nodes.
    * @retval 2nd: the actual usage in bytes.
-   * @retval 3rd: the virtual usage in bytes.
+   * @retval 3rd: the virtual usage (i.e., reserved memory) in bytes.
    */
   auto
   CollectStatisticalData()  //
@@ -810,7 +811,6 @@ class BwTree
   /**
    * @brief Allocate or reuse a memory region for a base node.
    *
-   * @param size the desired page size.
    * @returns the reserved memory page.
    */
   [[nodiscard]] auto
@@ -875,7 +875,7 @@ class BwTree
   /**
    * @brief Collect statistical data recursively.
    *
-   * @param node a target node.
+   * @param lid a target node.
    * @param level the current level in the tree.
    * @param stat_data an output statistical data.
    */
@@ -927,7 +927,9 @@ class BwTree
    * @param key a search key.
    * @param closed a flag for indicating closed/open-interval.
    * @param stack a stack of traversed nodes.
-   * @param is_smo a flag for indicating this function is called in SMOs.
+   * @param target_lid an optional node to prevent this function from searching a child.
+   * @retval true if the search for the target node is successful.
+   * @retval false otherwise.
    */
   auto
   SearchChildNode(  //
@@ -1083,7 +1085,7 @@ class BwTree
    * @param key a search key.
    * @param closed a flag for indicating closed/open-interval.
    * @param stack a stack of traversed nodes.
-   * @param is_smo a flag for indicating this function is called in SMOs.
+   * @param target_lid an optional node to prevent this function from searching a head.
    * @return the head of this logical node.
    */
   auto
@@ -1355,7 +1357,6 @@ class BwTree
   /**
    * @brief Consolidate a given node.
    *
-   * @tparam T a class of expected payloads.
    * @param head the head pointer of a terget node.
    * @param new_node a node page to store consolidated records.
    * @param r_node a node page to store split-right records.
@@ -1634,6 +1635,8 @@ class BwTree
    * @param removed_node a consolidated node to be removed.
    * @param low_key a lowest key of a removed node.
    * @param stack a copied stack of traversed nodes.
+   * @retval the delete-delta record if successful.
+   * @retval nullptr otherwise.
    */
   auto
   TryDeleteIndexEntry(  //
@@ -1710,6 +1713,7 @@ class BwTree
    * Note that this function does not create a root node. The main process must create a
    * root node by using the nodes constructed by this function.
    *
+   * @tparam Entry a container of a key/payload pair.
    * @param iter the begin position of target records.
    * @param n the number of entries to be bulkloaded.
    * @retval 1st: the height of a constructed tree.
@@ -1738,6 +1742,7 @@ class BwTree
   /**
    * @brief Construct nodes based on given entries.
    *
+   * @tparam Entry a container of a key/payload pair.
    * @param iter the begin position of target records.
    * @param n the number of entries to be bulkloaded.
    * @return constructed nodes.

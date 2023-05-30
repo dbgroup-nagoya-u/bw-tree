@@ -427,7 +427,7 @@ class Node
    * @brief Copy a lowest key for consolidation or set an initial used page size for
    * splitting.
    *
-   * @param consol_info an original node that has a lowest key.
+   * @param node_addr an original node that has a lowest key.
    * @return an initial offset.
    */
   auto
@@ -452,8 +452,9 @@ class Node
   /**
    * @brief Copy a highest key from a given consolidated node.
    *
-   * @param consol_info a consolidated node and a corresponding split-delta record.
+   * @param node_addr an original node that has a highest key.
    * @param offset an offset to the bottom of free space.
+   * @param is_split_left a flag for indicating this node is a split-left one.
    */
   void
   CopyHighKeyFrom(  //
@@ -476,9 +477,11 @@ class Node
   /**
    * @brief Copy a record from a base node in the leaf level.
    *
-   * @param node an original base node.
-   * @param offset an offset to the bottom of free space.
+   * @param node a target base node.
+   * @param orig_node an original base node.
    * @param pos the position of a target record.
+   * @param offset an offset to the bottom of free space.
+   * @param r_node a split-right node for switching.
    * @return an offset to the copied record.
    */
   template <class T>
@@ -512,8 +515,10 @@ class Node
   /**
    * @brief Copy a record from a delta record in the leaf level.
    *
+   * @param node a target base node.
    * @param rec_ptr an original delta record.
    * @param offset an offset to the bottom of free space.
+   * @param r_node a split-right node for switching.
    * @return an offset to the copied record.
    */
   template <class T>
@@ -576,7 +581,7 @@ class Node
     // extract and insert entries into this node
     auto offset = kPageSize;
     for (; iter < iter_end; ++iter) {
-      // check whether the node has sufficent space
+      // check whether the node has sufficient space
       if (node_size_ + kRecLen > kNodeCapacityForBulkLoading) break;
       node_size_ += kRecLen;
 
@@ -718,7 +723,6 @@ class Node
   /**
    * @brief Parse an entry of bulkload according to key's type.
    *
-   * @tparam Payload a payload type.
    * @tparam Entry std::pair or std::tuple for containing entries.
    * @param entry a bulkload entry.
    * @retval 1st: a target key.
@@ -745,7 +749,6 @@ class Node
    * @brief Link this node to a right sibling node.
    *
    * @param right_lid the logical ID of a right sibling node.
-   * @return an offset to a lowest key in a right sibling node.
    */
   void
   LinkNext(const LogicalID *right_lid)
