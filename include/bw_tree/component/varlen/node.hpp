@@ -472,8 +472,9 @@ class Node
   /**
    * @brief Copy a highest key from a given consolidated node.
    *
-   * @param consol_info a consolidated node and a corresponding split-delta record.
+   * @param node_addr an original node that has a lowest key.
    * @param offset an offset to the bottom of free space.
+   * @param is_split_left a flag for indicating this node is a split-left one.
    */
   void
   CopyHighKeyFrom(  //
@@ -498,8 +499,10 @@ class Node
    * @brief Copy a record from a base node in the leaf level.
    *
    * @param node an original base node.
+   * @param orig_node an original base node.
    * @param pos the position of a target record.
    * @param offset an offset to the bottom of free space.
+   * @param r_node a split-right node for switching.
    * @return an offset to the copied record.
    */
   template <class T>
@@ -534,8 +537,10 @@ class Node
   /**
    * @brief Copy a record from a delta record in the leaf level.
    *
+   * @param node a target base node.
    * @param rec_pair a pair of original delta record and its key.
    * @param offset an offset to the bottom of free space.
+   * @param r_node a split-right node for switching.
    * @return an offset to the copied record.
    */
   template <class T>
@@ -606,7 +611,7 @@ class Node
       const auto rec_len = key_len + sizeof(Payload);
       const auto total_len = rec_len + kMetaLen;
 
-      // check whether the node has sufficent space
+      // check whether the node has sufficient space
       node_size += total_len;
       if (node_size > kNodeCapacityForBulkLoading) break;
 
@@ -822,7 +827,6 @@ class Node
   /**
    * @brief Parse an entry of bulkload according to key's type.
    *
-   * @tparam Payload a payload type.
    * @tparam Entry std::pair or std::tuple for containing entries.
    * @param entry a bulkload entry.
    * @retval 1st: a target key.
