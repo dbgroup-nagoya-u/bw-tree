@@ -291,7 +291,7 @@ class BwTree
   {
     // create an empty Bw-tree
     auto *root_node = new (GetNodePage()) Node_t{};
-    auto *root_lid = mapping_table_.GetNewLogicalID();
+    auto *root_lid = mapping_table_.GetNewPageID();
     root_lid->Store(root_node);
     root_.store(root_lid, std::memory_order_relaxed);
 
@@ -1490,7 +1490,7 @@ class BwTree
       std::vector<LogicalPtr *> &stack)
   {
     // install the split nodes
-    auto *r_lid = mapping_table_.GetNewLogicalID();
+    auto *r_lid = mapping_table_.GetNewPageID();
     r_lid->Store(r_node);
     l_node->SetNext(r_lid);
     auto *l_lid = stack.back();
@@ -1551,7 +1551,7 @@ class BwTree
     // create a new root node
     const auto *entry_delta_n = reinterpret_cast<const Node_t *>(entry_d);
     auto *new_root = new (GetNodePage()) Node_t{entry_delta_n, old_lid};
-    auto *new_lid = mapping_table_.GetNewLogicalID();
+    auto *new_lid = mapping_table_.GetNewPageID();
     new_lid->Store(new_root);
 
     // install a new root page
@@ -1765,7 +1765,7 @@ class BwTree
     const auto &iter_end = iter + n;
     for (Node_t *prev_node = nullptr; iter < iter_end;) {
       auto *node = new (GetNodePage()) Node_t{kIsInner};
-      auto *lid = mapping_table_.GetNewLogicalID();
+      auto *lid = mapping_table_.GetNewPageID();
       lid->Store(node);
       node->template Bulkload<Entry>(iter, iter_end, prev_node, lid, nodes);
       prev_node = node;

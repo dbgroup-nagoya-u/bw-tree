@@ -112,6 +112,9 @@ Log2(const size_t val)  //
 /// The default page size of each node.
 constexpr size_t kPageSize = BW_TREE_PAGE_SIZE;
 
+/// The page size of virtual memory addresses.
+constexpr size_t kVMPageSize = 4096;
+
 /// The number of delta records for invoking consolidation.
 constexpr size_t kDeltaRecordThreshold = BW_TREE_DELTA_RECORD_NUM_THRESHOLD;
 
@@ -134,7 +137,7 @@ constexpr size_t kWordSize = 8;
 constexpr size_t kCacheLineSize = 64;
 
 /// A sleep time for preventing busy loops [us].
-static constexpr auto kShortSleep = std::chrono::microseconds{BW_TREE_SLEEP_TIME};
+constexpr auto kShortSleep = std::chrono::microseconds{BW_TREE_SLEEP_TIME};
 
 /// a flag for indicating optimized page layouts for fixed-length data.
 constexpr bool kOptimizeForFixLenData = false;

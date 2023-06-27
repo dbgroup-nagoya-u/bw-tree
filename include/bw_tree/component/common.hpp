@@ -92,9 +92,6 @@ constexpr std::align_val_t kCacheAlignVal = static_cast<std::align_val_t>(kCache
 /// the NULL value for uintptr_t
 constexpr uintptr_t kNullPtr = 0;
 
-/// the capacity of each mapping table.
-constexpr size_t kMappingTableCapacity = (kPageSize - kWordSize) / kWordSize;
-
 /// leave free space for later modifications.
 constexpr size_t kNodeCapacityForBulkLoading = kPageSize * 0.9;
 
@@ -111,6 +108,33 @@ inline void
 DeleteAlignedPtr(void *ptr)
 {
   ::operator delete(ptr, kCacheAlignVal);
+}
+
+/**
+ * @brief Allocate a memory region with virtual memory page alignments.
+ *
+ * @param size the expected page size.
+ * @return the address of an allocated page.
+ */
+template <class T>
+auto
+AllocVMAlignedPage(const size_t size)  //
+    -> T
+{
+  constexpr auto kVMPageAlign = static_cast<std::align_val_t>(kVMPageSize);
+  return reinterpret_cast<T>(::operator new(size, kVMPageAlign));
+}
+
+/**
+ * @brief A deleter function to release pages aligned for virtual memory addresses.
+ *
+ * @param page the address of pages to be released.
+ */
+inline void
+ReleaseVMAlignedPage(void *page)
+{
+  constexpr auto kVMPageAlign = static_cast<std::align_val_t>(kVMPageSize);
+  ::operator delete(page, kVMPageAlign);
 }
 
 /**

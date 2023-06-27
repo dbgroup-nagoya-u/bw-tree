@@ -35,7 +35,8 @@ namespace dbgroup::index::bw_tree::component::test
  * Global constants
  *####################################################################################*/
 
-constexpr size_t kMultipleTableCapacity = kMappingTableCapacity * 10;
+constexpr size_t kMappingArrayCapacity = kVMPageSize / kWordSize;
+constexpr size_t kMultipleTableCapacity = kMappingArrayCapacity * kMappingArrayCapacity * 1.1;
 constexpr size_t kThreadNum = DBGROUP_TEST_THREAD_NUM;
 
 /*######################################################################################
@@ -83,7 +84,10 @@ class MappingTableFixture : public testing::Test
     ids.reserve(id_num);
 
     for (size_t i = 0; i < id_num; ++i) {
-      ids.emplace_back(table_->GetNewLogicalID());
+      const auto page_id = table_->GetNewPageID();
+      auto *lid = table_->GetLogicalPtr(page_id);
+      lid->Store(kNullPtr);
+      ids.emplace_back(lid);
     }
 
     return ids;
@@ -149,7 +153,7 @@ class MappingTableFixture : public testing::Test
 
 TEST_F(MappingTableFixture, GetNewLogicalIDWithAFewIDsGetUniqueIDs)
 {
-  auto &&ids = GetLogicalIDs(kMappingTableCapacity - 1);
+  auto &&ids = GetLogicalIDs(kMappingArrayCapacity - 1);
   VerifyLogicalIDs(ids);
 }
 
@@ -161,7 +165,7 @@ TEST_F(MappingTableFixture, GetNewLogicalIDWithManyIDsGetUniqueIDs)
 
 TEST_F(MappingTableFixture, GetNewLogicalIDWithAFewIDsByMultiThreadsGetUniqueIDs)
 {
-  auto &&ids = GetLogicalIDsWithMultiThreads((kMappingTableCapacity / kThreadNum) - 1);
+  auto &&ids = GetLogicalIDsWithMultiThreads((kMappingArrayCapacity / kThreadNum) - 1);
   VerifyLogicalIDs(ids);
 }
 
