@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "bw_tree/component/logical_id.hpp"
+#include "bw_tree/component/logical_ptr.hpp"
 
 // external sources
 #include "gtest/gtest.h"
@@ -53,7 +53,7 @@ class LogicalIDFixture : public testing::Test
    * Internal member variables
    *##################################################################################*/
 
-  LogicalID lid_{};
+  LogicalPtr lid_{};
 };
 
 /*######################################################################################

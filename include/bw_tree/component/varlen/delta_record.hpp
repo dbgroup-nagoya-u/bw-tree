@@ -24,7 +24,7 @@
 #include <vector>
 
 // local sources
-#include "bw_tree/component/logical_id.hpp"
+#include "bw_tree/component/logical_ptr.hpp"
 #include "bw_tree/component/varlen/metadata.hpp"
 
 namespace dbgroup::index::bw_tree::component::varlen
@@ -136,7 +136,7 @@ class DeltaRecord
 
     // set a sibling node
     offset += low_key_len;
-    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(ShiftAddr(this, offset));
+    auto *payload = reinterpret_cast<std::atomic<LogicalPtr *> *>(ShiftAddr(this, offset));
     payload->store(nullptr, std::memory_order_relaxed);
     offset += kPtrLen;
 
@@ -454,9 +454,9 @@ class DeltaRecord
    * @param left_lid the LID of a mereged-left child node.
    */
   void
-  SetSiblingLID(LogicalID *left_lid)
+  SetSiblingLID(LogicalPtr *left_lid)
   {
-    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(GetPayloadAddr());
+    auto *payload = reinterpret_cast<std::atomic<LogicalPtr *> *>(GetPayloadAddr());
     payload->store(left_lid, std::memory_order_relaxed);
   }
 
@@ -514,7 +514,7 @@ class DeltaRecord
   static constexpr size_t kKeyLen = sizeof(Key);
 
   /// the length of child pointers.
-  static constexpr size_t kPtrLen = sizeof(LogicalID *);
+  static constexpr size_t kPtrLen = sizeof(LogicalPtr *);
 
   /// the length of record metadata.
   static constexpr size_t kMetaLen = sizeof(Metadata);

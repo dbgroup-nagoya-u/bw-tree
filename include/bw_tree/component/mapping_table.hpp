@@ -24,7 +24,7 @@
 #include <vector>
 
 // local sources
-#include "bw_tree/component/logical_id.hpp"
+#include "bw_tree/component/logical_ptr.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {
@@ -85,7 +85,7 @@ class MappingTable
    */
   auto
   GetNewLogicalID()  //
-      -> LogicalID *
+      -> LogicalPtr *
   {
     auto *current_table = table_.load(std::memory_order_relaxed);
     auto *new_id = current_table->ReserveNewID();
@@ -203,7 +203,7 @@ class MappingTable
      */
     auto
     ReserveNewID()  //
-        -> LogicalID *
+        -> LogicalPtr *
     {
       const auto current_id = head_pos_.fetch_add(1, std::memory_order_relaxed);
 
@@ -219,7 +219,7 @@ class MappingTable
         -> size_t
     {
       const auto reserved_num = head_pos_.load(std::memory_order_relaxed);
-      return sizeof(std::atomic_size_t) + (reserved_num * sizeof(LogicalID));
+      return sizeof(std::atomic_size_t) + (reserved_num * sizeof(LogicalPtr));
     }
 
    private:
@@ -231,7 +231,7 @@ class MappingTable
     std::atomic_size_t head_pos_{0};
 
     /// an actual mapping table.
-    std::array<LogicalID, kMappingTableCapacity> logical_ids_{};
+    std::array<LogicalPtr, kMappingTableCapacity> logical_ids_{};
   };
 
   /*####################################################################################

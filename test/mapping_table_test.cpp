@@ -53,7 +53,7 @@ class MappingTableFixture : public testing::Test
   using Node_t = varlen::Node<Key, std::less<>>;
   using Delta_t = varlen::DeltaRecord<Key, std::less<>>;
   using MappingTable_t = MappingTable<Node_t, Delta_t>;
-  using IDContainer = std::vector<LogicalID *>;
+  using IDContainer = std::vector<LogicalPtr *>;
 
  protected:
   /*####################################################################################

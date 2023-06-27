@@ -24,7 +24,7 @@
 
 // local sources
 #include "bw_tree/component/common.hpp"
-#include "bw_tree/component/logical_id.hpp"
+#include "bw_tree/component/logical_ptr.hpp"
 
 namespace dbgroup::index::bw_tree::component::fixlen
 {
@@ -47,7 +47,7 @@ class Node
   using ConsolidateInfo = std::pair<const void *, const void *>;
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
-  using NodeEntry = std::tuple<Key, LogicalID *, size_t>;
+  using NodeEntry = std::tuple<Key, LogicalPtr *, size_t>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -73,7 +73,7 @@ class Node
    */
   Node(  //
       const Node *split_d,
-      const LogicalID *left_lid)
+      const LogicalPtr *left_lid)
       : is_inner_{kInner},
         delta_type_{kNotDelta},
         has_low_key_{0},
@@ -219,7 +219,7 @@ class Node
    * @param lid the logical node ID to be set.
    */
   void
-  SetNext(const LogicalID *lid)
+  SetNext(const LogicalPtr *lid)
   {
     next_ = reinterpret_cast<uintptr_t>(lid);
   }
@@ -278,7 +278,7 @@ class Node
    */
   [[nodiscard]] auto
   GetLeftmostChild() const  //
-      -> LogicalID *
+      -> LogicalPtr *
   {
     const auto *cur = this;
     for (; cur->delta_type_ != kNotDelta; cur = cur->template GetNext<const Node *>()) {
@@ -286,7 +286,7 @@ class Node
     }
 
     // get a leftmost node
-    return cur->template GetPayload<LogicalID *>(0);
+    return cur->template GetPayload<LogicalPtr *>(0);
   }
 
   /*####################################################################################
@@ -342,7 +342,7 @@ class Node
   SearchChild(  //
       const Key &key,
       const bool closed) const  //
-      -> LogicalID *
+      -> LogicalPtr *
   {
     int64_t begin_pos = 1;
     int64_t end_pos = rec_count_ - 1;
@@ -360,7 +360,7 @@ class Node
       }
     }
 
-    return GetPayload<LogicalID *>(begin_pos - 1);
+    return GetPayload<LogicalPtr *>(begin_pos - 1);
   }
 
   /**
@@ -571,7 +571,7 @@ class Node
       BulkIter<Entry> &iter,
       const BulkIter<Entry> &iter_end,
       Node *prev_node,
-      LogicalID *this_lid,
+      LogicalPtr *this_lid,
       std::vector<NodeEntry> &nodes)
   {
     using Payload = std::tuple_element_t<1, Entry>;
@@ -611,8 +611,8 @@ class Node
    */
   static void
   LinkVerticalBorderNodes(  //
-      const LogicalID *left_lid,
-      const LogicalID *right_lid)
+      const LogicalPtr *left_lid,
+      const LogicalPtr *right_lid)
   {
     if (left_lid == nullptr) return;
 
@@ -624,8 +624,8 @@ class Node
 
       // go down to the lower level
       const auto *right_node = right_lid->Load<Node *>();
-      right_lid = right_node->template GetPayload<LogicalID *>(0);
-      left_lid = left_node->template GetPayload<LogicalID *>(left_node->rec_count_ - 1);
+      right_lid = right_node->template GetPayload<LogicalPtr *>(0);
+      left_lid = left_node->template GetPayload<LogicalPtr *>(left_node->rec_count_ - 1);
     }
   }
 
@@ -635,7 +635,7 @@ class Node
    * @param lid the logical ID of a root node.
    */
   static void
-  RemoveLeftmostKeys(const LogicalID *lid)
+  RemoveLeftmostKeys(const LogicalPtr *lid)
   {
     while (true) {
       // remove the lowest key
@@ -644,7 +644,7 @@ class Node
       if (node->is_inner_ == kLeaf) return;
 
       // go down to the lower level
-      lid = node->template GetPayload<LogicalID *>(0);
+      lid = node->template GetPayload<LogicalPtr *>(0);
     }
   }
 
@@ -660,7 +660,7 @@ class Node
   static constexpr size_t kKeyLen = sizeof(Key);
 
   /// the length of child pointers.
-  static constexpr size_t kPtrLen = sizeof(LogicalID *);
+  static constexpr size_t kPtrLen = sizeof(LogicalPtr *);
 
   /*####################################################################################
    * Internal getters/setters
@@ -751,7 +751,7 @@ class Node
    * @param right_lid the logical ID of a right sibling node.
    */
   void
-  LinkNext(const LogicalID *right_lid)
+  LinkNext(const LogicalPtr *right_lid)
   {
     // set a sibling link
     next_ = reinterpret_cast<uintptr_t>(right_lid);

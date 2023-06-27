@@ -25,7 +25,7 @@
 
 // local sources
 #include "bw_tree/component/common.hpp"
-#include "bw_tree/component/logical_id.hpp"
+#include "bw_tree/component/logical_ptr.hpp"
 
 namespace dbgroup::index::bw_tree::component::fixlen
 {
@@ -124,7 +124,7 @@ class DeltaRecord
         high_key_{removed_node->high_key_}
   {
     // set a sibling node
-    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(ShiftAddr(this, kPayOffset));
+    auto *payload = reinterpret_cast<std::atomic<LogicalPtr *> *>(ShiftAddr(this, kPayOffset));
     payload->store(nullptr, std::memory_order_relaxed);
   }
 
@@ -422,9 +422,9 @@ class DeltaRecord
    * @param left_lid the LID of a mereged-left child node.
    */
   void
-  SetSiblingLID(LogicalID *left_lid)
+  SetSiblingLID(LogicalPtr *left_lid)
   {
-    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(ShiftAddr(this, kPayOffset));
+    auto *payload = reinterpret_cast<std::atomic<LogicalPtr *> *>(ShiftAddr(this, kPayOffset));
     payload->store(left_lid, std::memory_order_relaxed);
   }
 
@@ -486,7 +486,7 @@ class DeltaRecord
   static constexpr size_t kKeyLen = sizeof(Key);
 
   /// the length of child pointers.
-  static constexpr size_t kPtrLen = sizeof(LogicalID *);
+  static constexpr size_t kPtrLen = sizeof(LogicalPtr *);
 
   /// an offset value for atomic operations.
   static constexpr size_t kPayOffset = (kHeaderLen + kWordAlign) & ~kWordAlign;
