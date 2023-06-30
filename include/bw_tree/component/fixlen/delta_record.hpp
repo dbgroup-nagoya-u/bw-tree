@@ -25,7 +25,7 @@
 
 // local sources
 #include "bw_tree/component/common.hpp"
-#include "bw_tree/component/logical_id.hpp"
+#include "bw_tree/component/logical_ptr.hpp"
 
 namespace dbgroup::index::bw_tree::component::fixlen
 {
@@ -93,12 +93,12 @@ class DeltaRecord
    *
    * @param d_type a split or merge delta.
    * @param r_node a split/merged right node.
-   * @param r_addr the address of a split/merged right node.
+   * @param r_pid the page ID of a split/merged right node.
    */
   DeltaRecord(  //
       const DeltaType d_type,
       const DeltaRecord *r_node,
-      const void *r_addr)
+      const PageID r_pid)
       : is_inner_{d_type == kInsert ? static_cast<uint16_t>(kInner) : r_node->is_inner_},
         delta_type_{d_type},
         has_low_key_{1},
@@ -107,7 +107,7 @@ class DeltaRecord
         high_key_{r_node->high_key_}
   {
     // set a sibling node
-    SetPayload(r_addr);
+    SetPayload(r_pid);
   }
 
   /**
@@ -124,8 +124,8 @@ class DeltaRecord
         high_key_{removed_node->high_key_}
   {
     // set a sibling node
-    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(ShiftAddr(this, kPayOffset));
-    payload->store(nullptr, std::memory_order_relaxed);
+    auto *payload = reinterpret_cast<std::atomic<PageID> *>(ShiftAddr(this, kPayOffset));
+    payload->store(kNullPtr, std::memory_order_relaxed);
   }
 
   /**
@@ -419,13 +419,13 @@ class DeltaRecord
   /**
    * @brief Set a merged-left child node to complete deleting an index-entry.
    *
-   * @param left_lid the LID of a mereged-left child node.
+   * @param left_pid the page ID of a mereged-left child node.
    */
   void
-  SetSiblingLID(LogicalID *left_lid)
+  SetSiblingPID(const PageID left_pid)
   {
-    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(ShiftAddr(this, kPayOffset));
-    payload->store(left_lid, std::memory_order_relaxed);
+    auto *payload = reinterpret_cast<std::atomic<PageID> *>(ShiftAddr(this, kPayOffset));
+    payload->store(left_pid, std::memory_order_relaxed);
   }
 
   /*####################################################################################
@@ -486,7 +486,7 @@ class DeltaRecord
   static constexpr size_t kKeyLen = sizeof(Key);
 
   /// the length of child pointers.
-  static constexpr size_t kPtrLen = sizeof(LogicalID *);
+  static constexpr size_t kPtrLen = sizeof(PageID);
 
   /// an offset value for atomic operations.
   static constexpr size_t kPayOffset = (kHeaderLen + kWordAlign) & ~kWordAlign;

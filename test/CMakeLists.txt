@@ -65,7 +65,7 @@ function(ADD_DBGROUP_TEST DBGROUP_TEST_TARGET)
 endfunction()
 
 # add unit tests to build targets
-ADD_DBGROUP_TEST("logical_id_test")
+ADD_DBGROUP_TEST("logical_ptr_test")
 ADD_DBGROUP_TEST("mapping_table_test")
 ADD_DBGROUP_TEST("metadata_test")
 ADD_DBGROUP_TEST("delta_record_test")

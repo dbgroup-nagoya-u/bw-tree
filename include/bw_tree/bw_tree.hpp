@@ -32,7 +32,7 @@
 #include "bw_tree/component/delta_chain.hpp"
 #include "bw_tree/component/fixlen/delta_record.hpp"
 #include "bw_tree/component/fixlen/node.hpp"
-#include "bw_tree/component/logical_id.hpp"
+#include "bw_tree/component/logical_ptr.hpp"
 #include "bw_tree/component/mapping_table.hpp"
 #include "bw_tree/component/varlen/delta_record.hpp"
 #include "bw_tree/component/varlen/node.hpp"
@@ -58,11 +58,12 @@ class BwTree
    * Type aliases
    *##################################################################################*/
 
+  using PageID = uint64_t;
   using NodePage = component::NodePage;
   using DeltaPage = component::DeltaPage;
   using DeltaRC = component::DeltaRC;
   using DeltaType = component::DeltaType;
-  using LogicalID = component::LogicalID;
+  using LogicalPtr = component::LogicalPtr;
   using NodeVarLen_t = component::varlen::Node<Key, Comp>;
   using NodeFixLen_t = component::fixlen::Node<Key, Comp>;
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
@@ -78,7 +79,7 @@ class BwTree
 
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
-  using NodeEntry = std::tuple<Key, LogicalID *, size_t>;
+  using NodeEntry = std::tuple<Key, PageID, size_t>;
   using BulkResult = std::pair<size_t, std::vector<NodeEntry>>;
   using BulkPromise = std::promise<BulkResult>;
   using BulkFuture = std::future<BulkResult>;
@@ -220,8 +221,8 @@ class BwTree
 
         // go to the next sibling node and continue scanning
         const auto &next_key = node_->GetHighKey();
-        auto *sib_page = node_->template GetNext<LogicalID *>();
-        *this = bw_tree_->SiblingScan(sib_page, node_, next_key, end_key_);
+        const auto sib_pid = node_->template GetNext<PageID>();
+        *this = bw_tree_->SiblingScan(sib_pid, node_, next_key, end_key_);
 
         if constexpr (kIsVarLen && IsVarLenData<Key>()) {
           // release a dynamically allocated key
@@ -291,9 +292,10 @@ class BwTree
   {
     // create an empty Bw-tree
     auto *root_node = new (GetNodePage()) Node_t{};
-    auto *root_lid = mapping_table_.GetNewLogicalID();
-    root_lid->Store(root_node);
-    root_.store(root_lid, std::memory_order_relaxed);
+    auto root_id = mapping_table_.GetNewPageID();
+    auto *root_ptr = mapping_table_.GetLogicalPtr(root_id);
+    root_ptr->Store(root_node);
+    root_.store(root_id, std::memory_order_relaxed);
 
     gc_.StartGC();
   }
@@ -339,7 +341,8 @@ class BwTree
 
     for (Payload payload{}; true;) {
       // check whether the node is active and has a target key
-      const auto *head = stack.back()->template Load<Delta_t *>();
+      const auto *lptr = mapping_table_.GetLogicalPtr(stack.back());
+      const auto *head = lptr->template Load<Delta_t *>();
 
       uintptr_t out_ptr{};
       auto rc = DC::SearchRecord(head, key, out_ptr);
@@ -353,7 +356,7 @@ class BwTree
 
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
-          stack.back() = reinterpret_cast<LogicalID *>(out_ptr);
+          stack.back() = out_ptr;
           continue;
 
         case DeltaRC::kNodeRemoved:
@@ -409,7 +412,8 @@ class BwTree
       // traverse to the leftmost leaf node directly
       auto &&stack = SearchLeftmostLeaf();
       while (true) {
-        const auto *head = stack.back()->template Load<Delta_t *>();
+        const auto *lptr = mapping_table_.GetLogicalPtr(stack.back());
+        const auto *head = lptr->template Load<Delta_t *>();
         if (head->GetDeltaType() == DeltaType::kRemoveNode) continue;
         TryConsolidate(head, node, dummy_node, kIsScan);
         break;
@@ -465,7 +469,8 @@ class BwTree
       }
 
       // try to insert the delta record
-      if (stack.back()->CASWeak(head, write_d)) break;
+      auto *lptr = mapping_table_.GetLogicalPtr(stack.back());
+      if (lptr->CASWeak(head, write_d)) break;
     }
 
     if (write_d->NeedConsolidation()) {
@@ -514,7 +519,8 @@ class BwTree
 
       // try to insert the delta record
       insert_d->SetNext(head, rec_len);
-      if (stack.back()->CASWeak(head, insert_d)) {
+      auto *lptr = mapping_table_.GetLogicalPtr(stack.back());
+      if (lptr->CASWeak(head, insert_d)) {
         if (insert_d->NeedConsolidation()) {
           TrySMOs(insert_d, stack);
         }
@@ -564,7 +570,8 @@ class BwTree
 
       // try to insert the delta record
       modify_d->SetNext(head, 0);
-      if (stack.back()->CASWeak(head, modify_d)) {
+      auto *lptr = mapping_table_.GetLogicalPtr(stack.back());
+      if (lptr->CASWeak(head, modify_d)) {
         if (modify_d->NeedConsolidation()) {
           TrySMOs(modify_d, stack);
         }
@@ -612,7 +619,8 @@ class BwTree
 
       // try to insert the delta record
       delete_d->SetNext(head, -rec_len);
-      if (stack.back()->CASWeak(head, delete_d)) {
+      auto *lptr = mapping_table_.GetLogicalPtr(stack.back());
+      if (lptr->CASWeak(head, delete_d)) {
         if (delete_d->NeedConsolidation()) {
           TrySMOs(delete_d, stack);
         }
@@ -689,31 +697,32 @@ class BwTree
 
       // align the height of partial trees
       nodes.reserve(kInnerNodeCap * thread_num);
-      const LogicalID *prev_lid = nullptr;
+      PageID prev_pid = kNullPtr;
       for (auto &&[p_height, p_nodes] : partial_trees) {
         while (p_height < height) {  // NOLINT
-          p_nodes = ConstructSingleLayer<NodeEntry>(p_nodes.cbegin(), p_nodes.size());
+          p_nodes = ConstructSingleLayer<NodeEntry>(p_nodes.cbegin(), p_nodes.size(), kIsInner);
           ++p_height;
         }
         nodes.insert(nodes.end(), p_nodes.begin(), p_nodes.end());
 
         // link partial trees
-        Node_t::LinkVerticalBorderNodes(prev_lid, std::get<1>(p_nodes.front()));
-        prev_lid = std::get<1>(p_nodes.back());
+        Node_t::LinkVerticalBorderNodes(prev_pid, std::get<1>(p_nodes.front()), mapping_table_);
+        prev_pid = std::get<1>(p_nodes.back());
       }
     }
 
     // create upper layers until a root node is created
     while (nodes.size() > 1) {
-      nodes = ConstructSingleLayer<NodeEntry>(nodes.cbegin(), nodes.size());
+      nodes = ConstructSingleLayer<NodeEntry>(nodes.cbegin(), nodes.size(), kIsInner);
     }
-    auto *new_root = std::get<1>(nodes.front());
-    Node_t::RemoveLeftmostKeys(new_root);
+    const auto new_pid = std::get<1>(nodes.front());
+    Node_t::RemoveLeftmostKeys(new_pid, mapping_table_);
 
     // set a new root
-    auto *old_root = root_.exchange(new_root, std::memory_order_release);
-    gc_.AddGarbage<NodePage>(old_root->template Load<Delta_t *>());
-    old_root->Clear();
+    const auto old_pid = root_.exchange(new_pid, std::memory_order_release);
+    auto *old_lptr = mapping_table_.GetLogicalPtr(old_pid);
+    gc_.AddGarbage<NodePage>(old_lptr->template Load<Delta_t *>());
+    old_lptr->Clear();
 
     return ReturnCode::kSuccess;
   }
@@ -734,9 +743,9 @@ class BwTree
       -> std::vector<std::tuple<size_t, size_t, size_t>>
   {
     std::vector<std::tuple<size_t, size_t, size_t>> stat_data{};
-    auto *lid = root_.load(std::memory_order_acquire);
+    const auto pid = root_.load(std::memory_order_acquire);
 
-    CollectStatisticalData(lid, 0, stat_data);
+    CollectStatisticalData(pid, 0, stat_data);
     stat_data.emplace_back(mapping_table_.CollectStatisticalData());
 
     return stat_data;
@@ -750,6 +759,9 @@ class BwTree
   /// an expected maximum height of a tree.
   static constexpr size_t kExpectedTreeHeight = 8;
 
+  /// the NULL value for uintptr_t
+  static constexpr uintptr_t kNullPtr = 0;
+
   /// the maximum length of keys.
   static constexpr size_t kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
 
@@ -757,7 +769,7 @@ class BwTree
   static constexpr size_t kPayLen = sizeof(Payload);
 
   /// the length of child pointers.
-  static constexpr size_t kPtrLen = sizeof(LogicalID *);
+  static constexpr size_t kPtrLen = sizeof(PageID);
 
   /// the length of record metadata.
   static constexpr size_t kMetaLen = (kIsVarLen) ? sizeof(component::varlen::Metadata) : 0;
@@ -791,7 +803,8 @@ class BwTree
   /// a flag for indicating leaf nodes.
   static constexpr bool kIsLeaf = false;
 
-  static constexpr auto kIsSMO = true;
+  /// a flag for indicating inner nodes.
+  static constexpr auto kIsInner = true;
 
   /**
    * @brief An internal enum for distinguishing a partial SMO status.
@@ -815,10 +828,13 @@ class BwTree
    */
   [[nodiscard]] auto
   GetNodePage()  //
-      -> void *
+      -> Node_t *
   {
     auto *page = gc_.template GetPageIfPossible<NodePage>();
-    return (page == nullptr) ? (::operator new(kPageSize, component::kCacheAlignVal)) : page;
+    if (page == nullptr) {
+      page = ::operator new(kPageSize, component::kCacheAlignVal);
+    }
+    return static_cast<Node_t *>(page);
   }
 
   /**
@@ -875,13 +891,13 @@ class BwTree
   /**
    * @brief Collect statistical data recursively.
    *
-   * @param lid a target node.
+   * @param pid the page ID of a target node.
    * @param level the current level in the tree.
    * @param stat_data an output statistical data.
    */
   void
   CollectStatisticalData(  //
-      const LogicalID *lid,
+      const PageID pid,
       const size_t level,
       std::vector<std::tuple<size_t, size_t, size_t>> &stat_data)
   {
@@ -891,9 +907,9 @@ class BwTree
     }
 
     // get the head of the current logical ID
-    const auto *head = LoadValidHead(lid);
+    const auto *head = LoadValidHead(pid);
     while (head->GetDeltaType() == DeltaType::kRemoveNode) {
-      head = LoadValidHead(lid);
+      head = LoadValidHead(pid);
     }
 
     // add statistical data of this node
@@ -913,8 +929,8 @@ class BwTree
       TryConsolidate(head, consolidated, dummy_node, kIsScan);
 
       for (size_t i = 0; i < consolidated->GetRecordCount(); ++i) {
-        const auto *child = consolidated->template GetPayload<LogicalID *>(i);
-        CollectStatisticalData(child, level + 1, stat_data);
+        const auto child_pid = consolidated->template GetPayload<PageID>(i);
+        CollectStatisticalData(child_pid, level + 1, stat_data);
       }
 
       ::operator delete(consolidated, component::kCacheAlignVal);
@@ -927,7 +943,7 @@ class BwTree
    * @param key a search key.
    * @param closed a flag for indicating closed/open-interval.
    * @param stack a stack of traversed nodes.
-   * @param target_lid an optional node to prevent this function from searching a child.
+   * @param target_pid an optional node to prevent this function from searching a child.
    * @retval true if the search for the target node is successful.
    * @retval false otherwise.
    */
@@ -935,22 +951,22 @@ class BwTree
   SearchChildNode(  //
       const Key &key,
       const bool closed,
-      std::vector<LogicalID *> &stack,
-      const LogicalID *target_lid = nullptr) const  //
+      std::vector<PageID> &stack,
+      const PageID target_pid = kNullPtr) const  //
       -> bool
   {
     for (uintptr_t out_ptr{}; true;) {
-      const auto *head = stack.back()->template Load<Delta_t *>();
+      const auto *lptr = mapping_table_.GetLogicalPtr(stack.back());
+      const auto *head = lptr->template Load<Delta_t *>();
       switch (DC::SearchChildNode(head, key, closed, out_ptr)) {
         case DeltaRC::kRecordFound:
-          stack.emplace_back(reinterpret_cast<LogicalID *>(out_ptr));
+          stack.emplace_back(out_ptr);
           break;
 
         case DeltaRC::kKeyIsInSibling: {
           // swap a current node in a stack and retry
-          auto *sib_lid = reinterpret_cast<LogicalID *>(out_ptr);
-          if (sib_lid == target_lid) return true;
-          stack.back() = sib_lid;
+          if (out_ptr == target_pid) return true;
+          stack.back() = out_ptr;
           continue;
         }
 
@@ -958,10 +974,10 @@ class BwTree
           // retry from the parent node
           stack.pop_back();
           if (stack.empty()) {
-            if (target_lid != nullptr) return false;
+            if (target_pid != kNullPtr) return false;
             stack.emplace_back(root_.load(std::memory_order_relaxed));
           } else {
-            if (SearchChildNode(key, closed, stack, target_lid)) return true;
+            if (SearchChildNode(key, closed, stack, target_pid)) return true;
             if (stack.empty()) return false;  // the tree structure has modified
           }
           continue;
@@ -990,15 +1006,16 @@ class BwTree
   SearchLeafNode(  //
       const Key &key,
       const bool closed) const  //
-      -> std::vector<LogicalID *>
+      -> std::vector<PageID>
   {
-    std::vector<LogicalID *> stack{};
+    std::vector<PageID> stack{};
     stack.reserve(kExpectedTreeHeight);
     stack.emplace_back(root_.load(std::memory_order_relaxed));
 
     // traverse a Bw-tree
     while (true) {
-      const auto *node = stack.back()->template Load<Node_t *>();
+      const auto *lptr = mapping_table_.GetLogicalPtr(stack.back());
+      const auto *node = lptr->template Load<Node_t *>();
       if (node->IsLeaf()) return stack;
       SearchChildNode(key, closed, stack);
     }
@@ -1011,15 +1028,16 @@ class BwTree
    */
   [[nodiscard]] auto
   SearchLeftmostLeaf() const  //
-      -> std::vector<LogicalID *>
+      -> std::vector<PageID>
   {
-    std::vector<LogicalID *> stack{};
+    std::vector<PageID> stack{};
     stack.reserve(kExpectedTreeHeight);
     stack.emplace_back(root_.load(std::memory_order_relaxed));
 
     // traverse a Bw-tree
     while (true) {
-      const auto *node = stack.back()->template Load<Node_t *>();
+      const auto *lptr = mapping_table_.GetLogicalPtr(stack.back());
+      const auto *node = lptr->template Load<Node_t *>();
       if (node->IsLeaf()) break;
       stack.emplace_back(node->GetLeftmostChild());
     }
@@ -1032,28 +1050,27 @@ class BwTree
    *
    * @param stack a stack of traversed nodes.
    * @param key a search key.
-   * @param target_lid the logical ID of a target node.
+   * @param target_pid the page ID of a target node.
    */
   void
   SearchTargetNode(  //
-      std::vector<LogicalID *> &stack,
+      std::vector<PageID> &stack,
       const Key &key,
-      const LogicalID *target_lid)
+      const PageID target_pid)
   {
-    while (true) {
-      auto *cur_lid = root_.load(std::memory_order_relaxed);
-      const auto *cur_node = cur_lid->template Load<Node_t *>();
-      stack.emplace_back(cur_lid);
+    do {
+      auto pid = root_.load(std::memory_order_relaxed);
+      const auto *lptr = mapping_table_.GetLogicalPtr(pid);
+      const auto *node = lptr->template Load<Node_t *>();
+      stack.emplace_back(pid);
 
-      while (!cur_node->IsLeaf()) {
-        if (SearchChildNode(key, kClosed, stack, target_lid)) return;
+      while (!node->IsLeaf()) {
+        if (SearchChildNode(key, kClosed, stack, target_pid)) return;
         if (stack.empty()) break;
-        cur_node = stack.back()->template Load<Node_t *>();
+        lptr = mapping_table_.GetLogicalPtr(stack.back());
+        node = lptr->template Load<Node_t *>();
       }
-
-      if (stack.empty()) continue;
-      return;
-    }
+    } while (stack.empty());
   }
 
   /**
@@ -1061,16 +1078,17 @@ class BwTree
    *
    * This function waits for other threads if the given logical node in SMOs.
    *
-   * @param lid a logical node ID.
+   * @param pid the page ID of a target node.
    * @return a head of a delta chain.
    */
   auto
-  LoadValidHead(const LogicalID *lid)  //
+  LoadValidHead(const PageID pid)  //
       -> const Delta_t *
   {
+    const auto *lptr = mapping_table_.GetLogicalPtr(pid);
     while (true) {
       for (size_t i = 1; true; ++i) {
-        const auto *head = lid->template Load<Delta_t *>();
+        const auto *head = lptr->template Load<Delta_t *>();
         if (!head->NeedWaitSMOs()) return head;
         if (i >= kRetryNum) break;
         BW_TREE_SPINLOCK_HINT
@@ -1085,15 +1103,15 @@ class BwTree
    * @param key a search key.
    * @param closed a flag for indicating closed/open-interval.
    * @param stack a stack of traversed nodes.
-   * @param target_lid an optional node to prevent this function from searching a head.
+   * @param target_pid an optional node to prevent this function from searching a head.
    * @return the head of this logical node.
    */
   auto
   GetHead(  //
       const Key &key,
       const bool closed,
-      std::vector<LogicalID *> &stack,
-      const LogicalID *target_lid = nullptr)  //
+      std::vector<PageID> &stack,
+      const PageID target_pid = kNullPtr)  //
       -> const Delta_t *
   {
     for (uintptr_t out_ptr{}; true;) {
@@ -1102,9 +1120,8 @@ class BwTree
       switch (DC::Validate(head, key, closed, out_ptr)) {
         case DeltaRC::kKeyIsInSibling: {
           // swap a current node in a stack and retry
-          auto *sib_lid = reinterpret_cast<LogicalID *>(out_ptr);
-          if (sib_lid == target_lid) return head;
-          stack.back() = sib_lid;
+          if (out_ptr == target_pid) return head;
+          stack.back() = out_ptr;
           continue;
         }
 
@@ -1112,10 +1129,10 @@ class BwTree
           // retry from the parent node
           stack.pop_back();
           if (stack.empty()) {
-            if (target_lid != nullptr) return nullptr;
+            if (target_pid != kNullPtr) return nullptr;
             stack = SearchLeafNode(key, closed);
           } else {
-            SearchChildNode(key, closed, stack, target_lid);
+            SearchChildNode(key, closed, stack, target_pid);
             if (stack.empty()) return nullptr;
           }
           continue;
@@ -1140,7 +1157,7 @@ class BwTree
   auto
   GetHeadWithKeyCheck(  //
       const Key &key,
-      std::vector<LogicalID *> &stack)  //
+      std::vector<PageID> &stack)  //
       -> std::pair<const Delta_t *, DeltaRC>
   {
     for (uintptr_t out_ptr{}; true;) {
@@ -1154,7 +1171,7 @@ class BwTree
 
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
-          stack.back() = reinterpret_cast<LogicalID *>(out_ptr);
+          stack.back() = out_ptr;
           continue;
 
         case DeltaRC::kNodeRemoved:
@@ -1192,7 +1209,7 @@ class BwTree
   GetHeadForMerge(  //
       const Key &key,
       const std::optional<Key> &sib_key,
-      std::vector<LogicalID *> &stack)  //
+      std::vector<PageID> &stack)  //
       -> std::pair<const Delta_t *, DeltaRC>
   {
     for (uintptr_t out_ptr{}; true;) {
@@ -1208,7 +1225,7 @@ class BwTree
 
         case DeltaRC::kKeyIsInSibling:
           // swap a current node in a stack and retry
-          stack.back() = reinterpret_cast<LogicalID *>(out_ptr);
+          stack.back() = out_ptr;
           continue;
 
         case DeltaRC::kNodeRemoved:
@@ -1257,7 +1274,7 @@ class BwTree
       Node_t *&node,
       const Key &begin_key,
       const bool closed,
-      std::vector<LogicalID *> &stack)  //
+      std::vector<PageID> &stack)  //
       -> size_t
   {
     Node_t *dummy_node = nullptr;
@@ -1278,7 +1295,7 @@ class BwTree
   /**
    * @brief Perform scanning with a given sibling node.
    *
-   * @param sib_lid the logical ID of a sibling node.
+   * @param sib_pid the page ID of a sibling node.
    * @param node a node page to store records.
    * @param begin_key a begin key (i.e., the highest key of the previous node).
    * @param end_key an optional end key for scanning.
@@ -1286,14 +1303,14 @@ class BwTree
    */
   auto
   SiblingScan(  //
-      LogicalID *sib_lid,
+      const PageID sib_pid,
       Node_t *node,
       const Key &begin_key,
       const ScanKey &end_key)  //
       -> RecordIterator
   {
     // consolidate a sibling node
-    std::vector<LogicalID *> stack{sib_lid};
+    std::vector<PageID> stack{sib_pid};
     stack.reserve(kExpectedTreeHeight);
     const auto begin_pos = ConsolidateForScan(node, begin_key, kClosed, stack);
 
@@ -1318,17 +1335,18 @@ class BwTree
   void
   TrySMOs(  //
       Delta_t *head,
-      std::vector<LogicalID *> &stack)
+      std::vector<PageID> &stack)
   {
-    thread_local std::unique_ptr<void, std::function<void(void *)>>  //
+    thread_local std::unique_ptr<Node_t, std::function<void(void *)>>  //
         tls_node{nullptr, std::function<void(void *)>{component::DeleteAlignedPtr}};
     Node_t *r_node = nullptr;
 
     // recheck other threads have modifed this delta chain
-    if (head != stack.back()->template Load<Delta_t *>()) return;
+    auto *lptr = mapping_table_.GetLogicalPtr(stack.back());
+    if (head != lptr->template Load<Delta_t *>()) return;
 
     // prepare a consolidated node
-    auto *new_node = reinterpret_cast<Node_t *>((tls_node) ? tls_node.release() : GetNodePage());
+    auto *new_node = (tls_node) ? tls_node.release() : GetNodePage();
     switch (TryConsolidate(head, new_node, r_node)) {
       case kTrySplit:
         // we use fixed-length pages, and so splitting a node must succeed
@@ -1345,7 +1363,7 @@ class BwTree
       case kConsolidate:
       default:
         // install a consolidated node
-        if (!stack.back()->CASStrong(head, new_node)) {
+        if (!lptr->CASStrong(head, new_node)) {
           tls_node.reset(new_node);
           return;
         }
@@ -1392,7 +1410,7 @@ class BwTree
       r_node = new (GetNodePage()) Node_t{is_inner};
     }
     if (is_inner) {
-      Consolidate<LogicalID *>(new_node, r_node, nodes, records, is_scan);
+      Consolidate<PageID>(new_node, r_node, nodes, records, is_scan);
     } else {
       Consolidate<Payload>(new_node, r_node, nodes, records, is_scan);
     }
@@ -1487,42 +1505,45 @@ class BwTree
   Split(  //
       Node_t *l_node,
       const Node_t *r_node,
-      std::vector<LogicalID *> &stack)
+      std::vector<PageID> &stack)
   {
     // install the split nodes
-    auto *r_lid = mapping_table_.GetNewLogicalID();
-    r_lid->Store(r_node);
-    l_node->SetNext(r_lid);
-    auto *l_lid = stack.back();
-    l_lid->Store(l_node);
+    const auto r_pid = mapping_table_.GetNewPageID();
+    auto *r_lptr = mapping_table_.GetLogicalPtr(r_pid);
+    r_lptr->Store(r_node);
+    l_node->SetNext(r_pid);
+    const auto l_pid = stack.back();
+    auto *l_lptr = mapping_table_.GetLogicalPtr(l_pid);
+    l_lptr->Store(l_node);
     stack.pop_back();  // remove the split child node to modify its parent node
 
     // create an index-entry delta record to complete split
     const auto *r_node_d = reinterpret_cast<const Delta_t *>(r_node);
-    auto *entry_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, r_node_d, r_lid};
+    auto *entry_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, r_node_d, r_pid};
     const auto &key = r_node_d->GetKey();
     const auto rec_len = r_node_d->GetKeyLength() + kPtrLen + kMetaLen;
 
     while (true) {
       // check the current node is a root node
       if (stack.empty()) {
-        if (TryRootSplit(entry_d, l_lid)) {
+        if (TryRootSplit(entry_d, l_pid)) {
           tls_delta_page_.reset(entry_d);
           return;
         }
-        SearchTargetNode(stack, key, r_lid);
+        SearchTargetNode(stack, key, r_pid);
         stack.pop_back();  // remove the split node
         continue;
       }
 
       // insert the delta record into a parent node
       while (true) {
-        const auto *head = GetHead(key, kClosed, stack, r_lid);
+        const auto *head = GetHead(key, kClosed, stack, r_pid);
         if (head == nullptr) break;  // the tree structure has modified, so retry
 
         // try to insert the index-entry delta record
         entry_d->SetNext(head, rec_len);
-        if (stack.back()->CASWeak(head, entry_d)) {
+        auto *lptr = mapping_table_.GetLogicalPtr(stack.back());
+        if (lptr->CASWeak(head, entry_d)) {
           if (entry_d->NeedConsolidation()) {
             TrySMOs(entry_d, stack);
           }
@@ -1536,26 +1557,26 @@ class BwTree
    * @brief Perform splitting a root node.
    *
    * @param entry_d a insert-entry delta record.
-   * @param old_lid a logical node ID of an old root node.
+   * @param old_pid a logical node ID of an old root node.
    * @retval true if splitting succeeds.
    * @retval false otherwise.
    */
   auto
   TryRootSplit(  //
       const Delta_t *entry_d,
-      const LogicalID *old_lid)  //
+      const PageID old_pid)  //
       -> bool
   {
-    if (root_.load(std::memory_order_relaxed) != old_lid) return false;
+    if (root_.load(std::memory_order_relaxed) != old_pid) return false;
 
     // create a new root node
     const auto *entry_delta_n = reinterpret_cast<const Node_t *>(entry_d);
-    auto *new_root = new (GetNodePage()) Node_t{entry_delta_n, old_lid};
-    auto *new_lid = mapping_table_.GetNewLogicalID();
-    new_lid->Store(new_root);
+    auto *new_root = new (GetNodePage()) Node_t{entry_delta_n, old_pid};
+    const auto new_pid = mapping_table_.GetNewPageID();
+    mapping_table_.GetLogicalPtr(new_pid)->Store(new_root);
 
     // install a new root page
-    root_.store(new_lid, std::memory_order_relaxed);
+    root_.store(new_pid, std::memory_order_relaxed);
     return true;
   }
 
@@ -1572,15 +1593,16 @@ class BwTree
   TryMerge(  //
       const Delta_t *head,
       Node_t *removed_node,
-      std::vector<LogicalID *> &stack)  //
+      std::vector<PageID> &stack)  //
       -> bool
   {
     auto *removed_node_d = reinterpret_cast<Delta_t *>(removed_node);
 
     // insert a remove-node delta to prevent other threads from modifying this node
     auto *remove_d = new (GetRecPage()) Delta_t{removed_node->IsLeaf()};
-    auto *removed_lid = stack.back();
-    if (!removed_lid->CASStrong(head, remove_d)) {
+    const auto rem_pid = stack.back();
+    auto *rem_lptr = mapping_table_.GetLogicalPtr(rem_pid);
+    if (!rem_lptr->CASStrong(head, remove_d)) {
       tls_delta_page_.reset(remove_d);
       return false;
     }
@@ -1591,35 +1613,37 @@ class BwTree
     auto *delete_d = TryDeleteIndexEntry(removed_node_d, low_key, stack);
     if (delete_d == nullptr) {
       // check this tree should be shrinked
-      if (!TryRemoveRoot(removed_node, removed_lid, stack)) {
+      if (!TryRemoveRoot(removed_node, rem_pid, stack)) {
         // merging has failed, but consolidation succeeds
-        removed_lid->Store(removed_node);
+        rem_lptr->Store(removed_node);
         AddToGC(remove_d);
       }
       return true;
     }
 
     // insert a merge delta into the left sibling node
-    auto *merge_d = new (GetRecPage()) Delta_t{DeltaType::kMerge, removed_node_d, removed_node};
+    const auto rem_uintptr = reinterpret_cast<uintptr_t>(removed_node);
+    auto *merge_d = new (GetRecPage()) Delta_t{DeltaType::kMerge, removed_node_d, rem_uintptr};
     const auto diff = removed_node->GetNodeDiff();
     const auto &sep_key = *low_key;
     while (true) {
       if (stack.empty()) {
         // concurrent SMOs have modified the tree structure, so reconstruct a stack
-        SearchTargetNode(stack, sep_key, removed_lid);
+        SearchTargetNode(stack, sep_key, rem_pid);
       } else {
-        SearchChildNode(sep_key, kOpen, stack, removed_lid);
+        SearchChildNode(sep_key, kOpen, stack, rem_pid);
         if (stack.empty()) continue;
       }
 
       while (true) {  // continue until insertion succeeds
-        const auto *sib_head = GetHead(sep_key, kOpen, stack, removed_lid);
+        const auto *sib_head = GetHead(sep_key, kOpen, stack, rem_pid);
         if (sib_head == nullptr) break;  // retry from searching the left sibling node
 
         // try to insert the merge-delta record
         merge_d->SetNext(sib_head, diff);
-        if (stack.back()->CASWeak(sib_head, merge_d)) {
-          delete_d->SetSiblingLID(stack.back());  // set a shortcut
+        auto *lptr = mapping_table_.GetLogicalPtr(stack.back());
+        if (lptr->CASWeak(sib_head, merge_d)) {
+          delete_d->SetSiblingPID(stack.back());  // set a shortcut
           if (merge_d->NeedConsolidation()) {
             TrySMOs(merge_d, stack);
           }
@@ -1642,7 +1666,7 @@ class BwTree
   TryDeleteIndexEntry(  //
       const Delta_t *removed_node,
       const std::optional<Key> &low_key,
-      std::vector<LogicalID *> stack)  //
+      std::vector<PageID> stack)  //
       -> Delta_t *
   {
     // check a current node can be merged
@@ -1665,7 +1689,8 @@ class BwTree
 
       // try to insert the index-delete delta record
       delete_d->SetNext(head, -rec_len);
-      if (stack.back()->CASWeak(head, delete_d)) break;
+      auto *lptr = mapping_table_.GetLogicalPtr(stack.back());
+      if (lptr->CASWeak(head, delete_d)) break;
     }
 
     if (delete_d->NeedConsolidation()) {
@@ -1678,7 +1703,7 @@ class BwTree
    * @brief Remove a root node and shrink a tree.
    *
    * @param root an old root node to be removed.
-   * @param old_lid a logical node ID of an old root node.
+   * @param old_pid the page ID of an old root node.
    * @param stack a stack of ancestor nodes.
    * @retval true if a root node is removed.
    * @return false otherwise.
@@ -1686,17 +1711,18 @@ class BwTree
   auto
   TryRemoveRoot(  //
       const Node_t *root,
-      LogicalID *old_lid,
-      std::vector<LogicalID *> &stack)  //
+      PageID old_pid,
+      std::vector<PageID> &stack)  //
       -> bool
   {
     // check a given node can be shrinked
     if (!stack.empty() || root->GetRecordCount() > 1 || root->IsLeaf()) return false;
 
     // shrink the tree by removing a useless root node
-    auto *new_lid = root->GetLeftmostChild();
-    if (new_lid->template Load<Node_t *>()->IsLeaf()
-        || !root_.compare_exchange_strong(old_lid, new_lid, std::memory_order_relaxed)) {
+    const auto new_pid = root->GetLeftmostChild();
+    auto *new_lptr = mapping_table_.GetLogicalPtr(new_pid);
+    if (new_lptr->template Load<Node_t *>()->IsLeaf()
+        || !root_.compare_exchange_strong(old_pid, new_pid, std::memory_order_relaxed)) {
       return false;
     }
     AddToGC(root);
@@ -1727,13 +1753,13 @@ class BwTree
       -> BulkResult
   {
     // construct a data layer (leaf nodes)
-    auto &&nodes = ConstructSingleLayer<Entry>(iter, n);
+    auto &&nodes = ConstructSingleLayer<Entry>(iter, n, kIsLeaf);
 
     // construct index layers (inner nodes)
     size_t height = 1;
     for (auto n = nodes.size(); n > kInnerNodeCap; n = nodes.size(), ++height) {
       // continue until the number of inner nodes is sufficiently small
-      nodes = ConstructSingleLayer<NodeEntry>(nodes.cbegin(), n);
+      nodes = ConstructSingleLayer<NodeEntry>(nodes.cbegin(), n, kIsInner);
     }
 
     return {height, std::move(nodes)};
@@ -1745,29 +1771,29 @@ class BwTree
    * @tparam Entry a container of a key/payload pair.
    * @param iter the begin position of target records.
    * @param n the number of entries to be bulkloaded.
+   * @param is_inner a flag for indicating inner nodes.
    * @return constructed nodes.
    */
   template <class Entry>
   auto
   ConstructSingleLayer(  //
       BulkIter<Entry> iter,
-      const size_t n)  //
+      const size_t n,
+      const bool is_inner)  //
       -> std::vector<NodeEntry>
   {
-    using T = std::tuple_element_t<1, Entry>;
-    constexpr auto kIsInner = std::is_same_v<T, LogicalID *>;
-
     // reserve space for nodes in the upper layer
     std::vector<NodeEntry> nodes{};
-    nodes.reserve((n / (kIsInner ? kInnerNodeCap : kLeafNodeCap)) + 1);
+    nodes.reserve((n / (is_inner ? kInnerNodeCap : kLeafNodeCap)) + 1);
 
     // load child nodes into parent nodes
     const auto &iter_end = iter + n;
     for (Node_t *prev_node = nullptr; iter < iter_end;) {
-      auto *node = new (GetNodePage()) Node_t{kIsInner};
-      auto *lid = mapping_table_.GetNewLogicalID();
-      lid->Store(node);
-      node->template Bulkload<Entry>(iter, iter_end, prev_node, lid, nodes);
+      auto *node = new (GetNodePage()) Node_t{is_inner};
+      const auto pid = mapping_table_.GetNewPageID();
+      auto *lptr = mapping_table_.GetLogicalPtr(pid);
+      lptr->Store(node);
+      node->template Bulkload<Entry>(iter, iter_end, prev_node, pid, nodes, is_inner);
       prev_node = node;
     }
 
@@ -1812,7 +1838,7 @@ class BwTree
    *##################################################################################*/
 
   /// a root node of this Bw-tree.
-  std::atomic<LogicalID *> root_{nullptr};
+  std::atomic_uint64_t root_{};
 
   /// a table to map logical IDs with physical pointers.
   MappingTable_t mapping_table_{};

@@ -23,7 +23,7 @@
 #include <vector>
 
 // local sources
-#include "bw_tree/component/logical_id.hpp"
+#include "bw_tree/component/logical_ptr.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {

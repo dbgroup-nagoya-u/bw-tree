@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef BW_TREE_COMPONENT_LOGICAL_ID_HPP
-#define BW_TREE_COMPONENT_LOGICAL_ID_HPP
+#ifndef BW_TREE_COMPONENT_LOGICAL_PTR_HPP
+#define BW_TREE_COMPONENT_LOGICAL_PTR_HPP
 
 // C++ standard libraries
 #include <atomic>
@@ -29,26 +29,26 @@ namespace dbgroup::index::bw_tree::component
  * @brief A class for wrapping physical pointers in logical ones.
  *
  */
-class LogicalID
+class LogicalPtr
 {
  public:
   /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/
 
-  constexpr LogicalID() = default;
+  constexpr LogicalPtr() = default;
 
-  LogicalID(const LogicalID &) = delete;
-  LogicalID(LogicalID &&) = delete;
+  LogicalPtr(const LogicalPtr &) = delete;
+  LogicalPtr(LogicalPtr &&) = delete;
 
-  auto operator=(const LogicalID &) -> LogicalID & = delete;
-  auto operator=(LogicalID &&) -> LogicalID & = delete;
+  auto operator=(const LogicalPtr &) -> LogicalPtr & = delete;
+  auto operator=(LogicalPtr &&) -> LogicalPtr & = delete;
 
   /*####################################################################################
    * Public destructors
    *##################################################################################*/
 
-  ~LogicalID() = default;
+  ~LogicalPtr() = default;
 
   /*####################################################################################
    * Public utility functions
@@ -191,4 +191,4 @@ class LogicalID
 
 }  // namespace dbgroup::index::bw_tree::component
 
-#endif  // BW_TREE_COMPONENT_LOGICAL_ID_HPP
+#endif  // BW_TREE_COMPONENT_LOGICAL_PTR_HPP

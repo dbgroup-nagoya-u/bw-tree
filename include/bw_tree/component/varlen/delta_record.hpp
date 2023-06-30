@@ -24,7 +24,7 @@
 #include <vector>
 
 // local sources
-#include "bw_tree/component/logical_id.hpp"
+#include "bw_tree/component/logical_ptr.hpp"
 #include "bw_tree/component/varlen/metadata.hpp"
 
 namespace dbgroup::index::bw_tree::component::varlen
@@ -97,12 +97,12 @@ class DeltaRecord
    *
    * @param d_type a insert-entry or merge delta.
    * @param r_node a split/merged right node.
-   * @param r_addr the address of a split/merged right node.
+   * @param r_pid the page ID of a split/merged right node.
    */
   DeltaRecord(  //
       const DeltaType d_type,
       const DeltaRecord *r_node,
-      const void *r_addr)
+      const PageID r_pid)
       : is_inner_{d_type == kInsert ? static_cast<uint16_t>(kInner) : r_node->is_inner_},
         delta_type_{d_type}
   {
@@ -112,7 +112,7 @@ class DeltaRecord
     memcpy(&data_block_, r_node->GetKeyAddr(r_node->meta_), key_len);
 
     // set a sibling node
-    const auto offset = SetPayload(kHeaderLen + key_len, r_addr);
+    const auto offset = SetPayload(kHeaderLen + key_len, r_pid);
 
     // copy a highest key
     key_len = r_node->high_key_meta_.key_len;
@@ -136,8 +136,8 @@ class DeltaRecord
 
     // set a sibling node
     offset += low_key_len;
-    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(ShiftAddr(this, offset));
-    payload->store(nullptr, std::memory_order_relaxed);
+    auto *payload = reinterpret_cast<std::atomic<PageID> *>(ShiftAddr(this, offset));
+    payload->store(kNullPtr, std::memory_order_relaxed);
     offset += kPtrLen;
 
     // copy a highest key
@@ -451,13 +451,13 @@ class DeltaRecord
   /**
    * @brief Set a merged-left child node to complete deleting an index-entry.
    *
-   * @param left_lid the LID of a mereged-left child node.
+   * @param left_pid the page ID of a mereged-left child node.
    */
   void
-  SetSiblingLID(LogicalID *left_lid)
+  SetSiblingPID(const PageID left_pid)
   {
-    auto *payload = reinterpret_cast<std::atomic<LogicalID *> *>(GetPayloadAddr());
-    payload->store(left_lid, std::memory_order_relaxed);
+    auto *payload = reinterpret_cast<std::atomic<PageID> *>(GetPayloadAddr());
+    payload->store(left_pid, std::memory_order_relaxed);
   }
 
   /*####################################################################################
@@ -514,7 +514,7 @@ class DeltaRecord
   static constexpr size_t kKeyLen = sizeof(Key);
 
   /// the length of child pointers.
-  static constexpr size_t kPtrLen = sizeof(LogicalID *);
+  static constexpr size_t kPtrLen = sizeof(PageID);
 
   /// the length of record metadata.
   static constexpr size_t kMetaLen = sizeof(Metadata);

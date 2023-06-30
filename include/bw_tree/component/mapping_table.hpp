@@ -24,7 +24,7 @@
 #include <vector>
 
 // local sources
-#include "bw_tree/component/logical_id.hpp"
+#include "bw_tree/component/logical_ptr.hpp"
 
 namespace dbgroup::index::bw_tree::component
 {
@@ -35,9 +35,16 @@ namespace dbgroup::index::bw_tree::component
  * @tparam Delta a class for representing delta records.
  */
 template <class Node, class Delta>
-class MappingTable
+class alignas(kVMPageSize) MappingTable
 {
  public:
+  /*####################################################################################
+   * Type aliases
+   *##################################################################################*/
+
+  using Row = LogicalPtr *;
+  using Table = std::atomic<Row> *;
+
   /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/
@@ -46,10 +53,12 @@ class MappingTable
    * @brief Construct a new MappingTable object.
    *
    */
-  MappingTable() : table_{new BufferedMap{}}
+  MappingTable()
   {
-    tables_.reserve(kDefaultTableNum);
-    tables_.emplace_back(table_.load(std::memory_order_relaxed));
+    auto *row = AllocVMAlignedPage<Row>(kVMPageSize);
+    auto *table = AllocVMAlignedPage<Table>(kVMPageSize);
+    table[0].store(row, std::memory_order_relaxed);
+    tables_[0].store(table, std::memory_order_relaxed);
   }
 
   MappingTable(const MappingTable &) = delete;
@@ -69,8 +78,22 @@ class MappingTable
    */
   ~MappingTable()
   {
-    for (auto &&table : tables_) {
-      delete table;
+    const auto cur_id = cnt_.load(std::memory_order_relaxed);
+    const auto table_id = (cur_id >> kTabShift) & kIDMask;
+    for (size_t i = 0; i < table_id; ++i) {
+      const auto is_last = (i + 1) == table_id;
+      const auto row_num = is_last ? ((cur_id >> kRowShift) & kIDMask) : kArrayCapacity;
+      const auto col_num = is_last ? (cur_id & kIDMask) : kArrayCapacity;
+
+      auto *table = tables_[i].load(std::memory_order_relaxed);
+      for (size_t j = 0; j < row_num; ++j) {
+        auto *row = table[j].load(std::memory_order_relaxed);
+        for (size_t k = 0; k < col_num; ++k) {
+          ReleaseLogicalPtr(row[k]);
+        }
+        ReleaseVMAlignedPage(row);
+      }
+      ReleaseVMAlignedPage(table);
     }
   }
 
@@ -79,32 +102,64 @@ class MappingTable
    *##################################################################################*/
 
   /**
-   * @brief Get a new logical ID.
+   * @brief Get a new page ID.
    *
-   * @return a reserved logical ID.
+   * @return a reserved page ID.
    */
   auto
-  GetNewLogicalID()  //
-      -> LogicalID *
+  GetNewPageID()  //
+      -> uint64_t
   {
-    auto *current_table = table_.load(std::memory_order_relaxed);
-    auto *new_id = current_table->ReserveNewID();
-    while (new_id == nullptr) {
-      std::unique_lock guard{full_tables_mtx_, std::defer_lock};
-      if (guard.try_lock()) {
-        auto *new_table = new BufferedMap{};
-        table_.store(new_table, std::memory_order_relaxed);
-        new_id = new_table->ReserveNewID();
+    while (true) {
+      auto cur_id = cnt_.load(std::memory_order_relaxed);
+      assert(((cur_id >> kTabShift) & kIDMask) < kArrayCapacity);
 
-        // retain the new table to release nodes in it
-        tables_.emplace_back(new_table);
-      } else {
-        // since another thread may install a new mapping table, recheck a current table
-        current_table = table_.load(std::memory_order_relaxed);
-        new_id = current_table->ReserveNewID();
+      if ((cur_id & kIDMask) < kArrayCapacity) {
+        // try reserving a new ID
+        auto new_id = cur_id + kColIDUnit;
+        if (cnt_.compare_exchange_weak(cur_id, new_id, std::memory_order_relaxed)) {
+          // check the current row is full
+          if ((new_id & kIDMask) < kArrayCapacity) return cur_id;
+
+          // check the current table is full
+          new_id += kRowIDUnit;
+          const auto row_id = (new_id >> kRowShift) & kIDMask;
+          if (row_id < kArrayCapacity) {
+            // prepare a new row
+            auto *row = AllocVMAlignedPage<Row>(kVMPageSize);
+            auto *table = tables_[(new_id >> kTabShift) & kIDMask].load(std::memory_order_relaxed);
+            table[row_id].store(row, std::memory_order_relaxed);
+            cnt_.store(new_id & ~kIDMask, std::memory_order_relaxed);
+            return cur_id;
+          }
+
+          // prepare a new table
+          auto *row = AllocVMAlignedPage<Row>(kVMPageSize);
+          auto *table = AllocVMAlignedPage<Table>(kVMPageSize);
+          table[0].store(row, std::memory_order_relaxed);
+          new_id += kTabIDUnit;
+          tables_[(new_id >> kTabShift) & kIDMask].store(table, std::memory_order_relaxed);
+          cnt_.store(new_id & ~(kTabIDUnit - 1UL), std::memory_order_relaxed);
+          return cur_id;
+        }
       }
+
+      // wait for the other thread to prepare a new pointer array
+      BW_TREE_SPINLOCK_HINT;
     }
-    return new_id;
+  }
+
+  /**
+   * @param id a source page ID.
+   * @return an address of a logical pointer.
+   */
+  [[nodiscard]] auto
+  GetLogicalPtr(const uint64_t id) const  //
+      -> LogicalPtr *
+  {
+    const auto *table = tables_[(id >> kTabShift) & kIDMask].load(std::memory_order_relaxed);
+    const auto *row = table[(id >> kRowShift) & kIDMask].load(std::memory_order_relaxed);
+    return const_cast<LogicalPtr *>(&(row[id & kIDMask]));
   }
 
   /*####################################################################################
@@ -122,137 +177,89 @@ class MappingTable
   CollectStatisticalData()  //
       -> std::tuple<size_t, size_t, size_t>
   {
-    const auto *table = table_.load(std::memory_order_acquire);
-    const auto virtual_size = tables_.size() * sizeof(BufferedMap);
-    const auto actual_size = virtual_size - sizeof(BufferedMap) + table->GetPageUsage();
+    const auto id = cnt_.load(std::memory_order_relaxed);
+    const auto tab_id = (id >> kTabShift) & kIDMask;
+    const auto row_id = (id >> kRowShift) & kIDMask;
+    const auto col_id = id & kIDMask;
 
-    return {0, actual_size, virtual_size};
+    const auto reserved = (tab_id * (kArrayCapacity + 1) + row_id + 3) * kVMPageSize;
+    const auto empty_num = 2 * kArrayCapacity + kTableCapacity - col_id - row_id - tab_id - 3;
+    const auto used = reserved - empty_num * kWordSize;
+
+    return {0, used, reserved};
   }
 
  private:
   /*####################################################################################
-   * Internal classes
-   *##################################################################################*/
-
-  /**
-   * @brief An internal class for representing an actual mapping table.
-   *
-   */
-  class BufferedMap
-  {
-   public:
-    /*##################################################################################
-     * Public constructors and assignment operators
-     *################################################################################*/
-
-    /**
-     * @brief Construct a new mapping buffer instance.
-     *
-     */
-    constexpr BufferedMap() = default;
-
-    BufferedMap(const BufferedMap &) = delete;
-    BufferedMap(BufferedMap &&) = delete;
-
-    auto operator=(const BufferedMap &) -> BufferedMap & = delete;
-    auto operator=(BufferedMap &&) -> BufferedMap & = delete;
-
-    /*##################################################################################
-     * Public destructors
-     *################################################################################*/
-
-    /**
-     * @brief Destroy the object.
-     *
-     * This dectructor will delete all the nodes in this table.
-     */
-    ~BufferedMap()
-    {
-      auto size = head_pos_.load(std::memory_order_relaxed);
-      if (size > kMappingTableCapacity) {
-        size = kMappingTableCapacity;
-      }
-
-      for (size_t i = 0; i < size; ++i) {
-        auto *rec = logical_ids_[i].template Load<Delta *>();
-
-        // delete delta records
-        while (rec != nullptr && rec->GetDeltaType() != kNotDelta) {
-          auto *next = rec->GetNext();
-          if (rec->GetDeltaType() == kMerge) {
-            DeleteAlignedPtr(rec->template GetPayload<Node *>());
-          }
-
-          DeleteAlignedPtr(rec);
-          rec = next;
-        }
-        DeleteAlignedPtr(rec);
-      }
-    }
-
-    /*##################################################################################
-     * Public getters/setters
-     *################################################################################*/
-
-    /**
-     * @brief Reserve a new logical ID.
-     *
-     * If this function returns nullptr, it means that this table is full.
-     *
-     * @return a reserved logical ID.
-     */
-    auto
-    ReserveNewID()  //
-        -> LogicalID *
-    {
-      const auto current_id = head_pos_.fetch_add(1, std::memory_order_relaxed);
-
-      if (current_id >= kMappingTableCapacity) return nullptr;
-      return &logical_ids_[current_id];
-    }
-
-    /**
-     * @return the usage of this buffer.
-     */
-    [[nodiscard]] auto
-    GetPageUsage() const  //
-        -> size_t
-    {
-      const auto reserved_num = head_pos_.load(std::memory_order_relaxed);
-      return sizeof(std::atomic_size_t) + (reserved_num * sizeof(LogicalID));
-    }
-
-   private:
-    /*##################################################################################
-     * Internal member variables
-     *################################################################################*/
-
-    /// the current head position of this table (i.e., the total number of reserved IDs).
-    std::atomic_size_t head_pos_{0};
-
-    /// an actual mapping table.
-    std::array<LogicalID, kMappingTableCapacity> logical_ids_{};
-  };
-
-  /*####################################################################################
    * Internal constants
    *##################################################################################*/
 
-  /// the default number of mapping tables.
-  static constexpr size_t kDefaultTableNum = 128;
+  /// the begin bit position of row IDs.
+  static constexpr size_t kRowShift = 16;
+
+  /// the begin bit position of table IDs.
+  static constexpr size_t kTabShift = 32;
+
+  /// the begin bit position for indicating null pointers.
+  static constexpr size_t kMSBShift = 63;
+
+  /// the unit value for incrementing column IDs.
+  static constexpr uint64_t kColIDUnit = 1UL;
+
+  /// the unit value for incrementing row IDs.
+  static constexpr uint64_t kRowIDUnit = 1UL << kRowShift;
+
+  /// the unit value for incrementing table IDs.
+  static constexpr uint64_t kTabIDUnit = 1UL << kTabShift;
+
+  /// a bit mask for extracting IDs.
+  static constexpr uint64_t kIDMask = 0xFFFFUL;
+
+  /// the capacity of each array (rows and columns).
+  static constexpr size_t kArrayCapacity = kVMPageSize / kWordSize;
+
+  /// the capacity of a table.
+  static constexpr size_t kTableCapacity = (kVMPageSize - kCacheLineSize) / kWordSize;
+
+  /*####################################################################################
+   * Internal utilities
+   *##################################################################################*/
+
+  /**
+   * @brief Release delta records and nodes in a given logical pointer.
+   *
+   * @param lid a target logical pointer.
+   */
+  void
+  ReleaseLogicalPtr(LogicalPtr &lid)
+  {
+    auto *rec = lid.template Load<Delta *>();
+
+    // delete delta records
+    while (rec != nullptr && rec->GetDeltaType() != kNotDelta) {
+      auto *next = rec->GetNext();
+      if (rec->GetDeltaType() == kMerge) {
+        DeleteAlignedPtr(rec->template GetPayload<void *>());
+      }
+
+      DeleteAlignedPtr(rec);
+      rec = next;
+    }
+    DeleteAlignedPtr(rec);
+  }
 
   /*####################################################################################
    * Internal member variables
    *##################################################################################*/
 
-  /// a current mapping table.
-  std::atomic<BufferedMap *> table_{};
+  /// an atomic counter for incrementing page IDs.
+  std::atomic_uint64_t cnt_{1UL << kMSBShift};
 
-  /// full mapping tables.
-  std::vector<BufferedMap *> tables_{};
+  /// padding space for the cache line alignment.
+  size_t padding_[(kCacheLineSize - kWordSize) / kWordSize]{};
 
-  /// a mutex object to modify tables_.
-  std::mutex full_tables_mtx_{};
+  /// mapping tables.
+  std::atomic<Table> tables_[kTableCapacity]{};
 };
 
 }  // namespace dbgroup::index::bw_tree::component
