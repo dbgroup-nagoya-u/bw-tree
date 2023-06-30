@@ -182,8 +182,8 @@ class alignas(kVMPageSize) MappingTable
     const auto row_id = (id >> kRowShift) & kIDMask;
     const auto col_id = id & kIDMask;
 
-    const auto reserved = (tab_id * kArrayCapacity + row_id + 2) * kVMPageSize;
-    const auto empty_num = 2 * kArrayCapacity + kTableCapacity - col_id - row_id - tab_id - 2;
+    const auto reserved = (tab_id * (kArrayCapacity + 1) + row_id + 3) * kVMPageSize;
+    const auto empty_num = 2 * kArrayCapacity + kTableCapacity - col_id - row_id - tab_id - 3;
     const auto used = reserved - empty_num * kWordSize;
 
     return {0, used, reserved};
