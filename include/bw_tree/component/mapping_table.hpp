@@ -112,7 +112,7 @@ class alignas(kVMPageSize) MappingTable
   {
     while (true) {
       auto cur_id = cnt_.load(std::memory_order_relaxed);
-      assert(cur_id.table_id < kArrayCapacity);
+      assert(((cur_id >> kTabShift) & kIDMask) < kArrayCapacity);
 
       if ((cur_id & kIDMask) < kArrayCapacity) {
         // try reserving a new ID
@@ -200,6 +200,9 @@ class alignas(kVMPageSize) MappingTable
   /// the begin bit position of table IDs.
   static constexpr size_t kTabShift = 32;
 
+  /// the begin bit position for indicating null pointers.
+  static constexpr size_t kMSBShift = 63;
+
   /// the unit value for incrementing column IDs.
   static constexpr uint64_t kColIDUnit = 1UL;
 
@@ -250,7 +253,7 @@ class alignas(kVMPageSize) MappingTable
    *##################################################################################*/
 
   /// an atomic counter for incrementing page IDs.
-  std::atomic_uint64_t cnt_{0};
+  std::atomic_uint64_t cnt_{1UL << kMSBShift};
 
   /// padding space for the cache line alignment.
   size_t padding_[(kCacheLineSize - kWordSize) / kWordSize]{};

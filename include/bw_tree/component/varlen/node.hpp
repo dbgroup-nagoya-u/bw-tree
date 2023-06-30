@@ -47,7 +47,7 @@ class Node
   using ConsolidateInfo = std::pair<const void *, const void *>;
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
-  using NodeEntry = std::tuple<Key, LogicalPtr *, size_t>;
+  using NodeEntry = std::tuple<Key, PageID, size_t>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -66,22 +66,22 @@ class Node
    * @brief Construct a new root node.
    *
    * @param split_d a split-delta record.
-   * @param left_lid a logical ID of a split-left child.
+   * @param left_pid the page ID of a split-left child.
    */
   Node(  //
       const Node *split_d,
-      const LogicalPtr *left_lid)
+      const PageID left_pid)
       : is_inner_{kInner}, delta_type_{kNotDelta}, rec_count_{2}
   {
     // set a split-left page
-    auto offset = SetPayload(kPageSize, left_lid);
+    auto offset = SetPayload(kPageSize, left_pid);
     meta_array_[0] = Metadata{offset, 0, kPtrLen};
 
     // set a split-right page
     const auto meta = split_d->low_meta_;
     const auto key_len = meta.key_len;
-    const auto *right_lid = split_d->template GetPayload<LogicalPtr *>(meta);
-    offset = SetPayload(offset, right_lid);
+    const auto right_pid = split_d->template GetPayload<PageID>(meta);
+    offset = SetPayload(offset, right_pid);
     offset -= key_len;
     memcpy(ShiftAddr(this, offset), split_d->GetKeyAddr(meta), key_len);
     meta_array_[1] = Metadata{offset, key_len, key_len + kPtrLen};
@@ -230,14 +230,14 @@ class Node
   }
 
   /**
-   * @brief Set the logical node ID.
+   * @brief Set a sibling node.
    *
-   * @param lid the logical node ID to be set.
+   * @param pid the page ID of the sibling node.
    */
   void
-  SetNext(const LogicalPtr *lid)
+  SetNext(const PageID pid)
   {
-    next_ = reinterpret_cast<uintptr_t>(lid);
+    next_ = pid;
   }
 
   /*####################################################################################
@@ -289,11 +289,11 @@ class Node
    * If this object is actually a delta record, this function traverses a delta-chain
    * and returns the left most child from a base node.
    *
-   * @return the logical ID of the leftmost child node.
+   * @return the page ID of the leftmost child node.
    */
   [[nodiscard]] auto
   GetLeftmostChild() const  //
-      -> LogicalPtr *
+      -> PageID
   {
     const auto *cur = this;
     for (; cur->delta_type_ != kNotDelta; cur = cur->template GetNext<const Node *>()) {
@@ -301,7 +301,7 @@ class Node
     }
 
     // get a leftmost node
-    return cur->template GetPayload<LogicalPtr *>(0);
+    return cur->template GetPayload<PageID>(0);
   }
 
   /*####################################################################################
@@ -351,13 +351,13 @@ class Node
    *
    * @param key a target key.
    * @param closed a flag for including the same key.
-   * @return the logical ID of searched child node.
+   * @return the page ID of searched child node.
    */
   [[nodiscard]] auto
   SearchChild(  //
       const Key &key,
       const bool closed) const  //
-      -> LogicalPtr *
+      -> PageID
   {
     int64_t begin_pos = 1;
     int64_t end_pos = rec_count_ - 1;
@@ -375,7 +375,7 @@ class Node
       }
     }
 
-    return GetPayload<LogicalPtr *>(begin_pos - 1);
+    return GetPayload<PageID>(begin_pos - 1);
   }
 
   /**
@@ -586,8 +586,9 @@ class Node
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
    * @param prev_node a left sibling node.
-   * @param this_lid the logical ID of a this node.
+   * @param this_pid the logical ID of a this node.
    * @param nodes the container of construcred nodes.
+   * @param is_inner a flag for indicating inner nodes.
    */
   template <class Entry>
   void
@@ -595,17 +596,18 @@ class Node
       BulkIter<Entry> &iter,
       const BulkIter<Entry> &iter_end,
       Node *prev_node,
-      LogicalPtr *this_lid,
-      std::vector<NodeEntry> &nodes)
+      PageID this_pid,
+      std::vector<NodeEntry> &nodes,
+      const bool is_inner)
   {
     using Payload = std::tuple_element_t<1, Entry>;
 
     constexpr auto kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
-    constexpr auto kIsLeaf = (std::is_same_v<Payload, LogicalPtr *>) ? 0 : 1;
+    const size_t is_leaf = (!is_inner) ? 0 : 1;
 
     // extract and insert entries into this node
     auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
-    auto node_size = kHeaderLen + kMaxKeyLen + kIsLeaf * kMaxKeyLen;
+    auto node_size = kHeaderLen + kMaxKeyLen + is_leaf * kMaxKeyLen;
     for (; iter < iter_end; ++iter) {
       const auto &[key, payload, key_len] = ParseEntry(*iter);
       const auto rec_len = key_len + sizeof(Payload);
@@ -625,52 +627,65 @@ class Node
     // set a lowest key
     low_meta_ = meta_array_[0];
     low_meta_.rec_len = low_meta_.key_len;
-    node_size_ += kIsLeaf * low_meta_.key_len;
+    node_size_ += is_leaf * low_meta_.key_len;
 
     // link the sibling nodes if exist
     if (prev_node != nullptr) {
-      prev_node->LinkNext(this_lid);
+      prev_node->LinkNext(this_pid, this);
     }
 
-    nodes.emplace_back(*GetLowKey(), this_lid, low_meta_.key_len);
+    nodes.emplace_back(*GetLowKey(), this_pid, low_meta_.key_len);
   }
 
   /**
    * @brief Link border nodes between partial trees.
    *
-   * @param left_lid the logical ID of a highest border node in a left tree.
-   * @param right_lid the logical ID of a highest border node in a right tree.
+   * @tparam MappingTable a class for representing mapping tables.
+   * @param left_pid the page ID of a highest border node in a left tree.
+   * @param right_pid the page ID of a highest border node in a right tree.
+   * @param m_table a mapping table to resolve page IDs.
    */
+  template <class MappingTable>
   static void
   LinkVerticalBorderNodes(  //
-      const LogicalPtr *left_lid,
-      const LogicalPtr *right_lid)
+      PageID left_pid,
+      PageID right_pid,
+      const MappingTable &m_table)
   {
-    if (left_lid == nullptr) return;
+    if (left_pid == kNullPtr) return;
 
     while (true) {
-      auto *left_node = left_lid->Load<Node *>();
-      left_node->LinkNext(right_lid);
+      const auto *left_lptr = m_table.GetLogicalPtr(left_pid);
+      auto *left_node = left_lptr->template Load<Node *>();
+      const auto *right_lptr = m_table.GetLogicalPtr(right_pid);
+      auto *right_node = right_lptr->template Load<Node *>();
+
+      left_node->LinkNext(right_pid, right_node);
       if (left_node->is_inner_ == kLeaf) return;  // all the border nodes are linked
 
       // go down to the lower level
-      auto *right_node = right_lid->Load<Node *>();
-      right_lid = right_node->template GetPayload<LogicalPtr *>(0);
-      left_lid = left_node->template GetPayload<LogicalPtr *>(left_node->rec_count_ - 1);
+      right_pid = right_node->template GetPayload<PageID>(0);
+      left_pid = left_node->template GetPayload<PageID>(left_node->rec_count_ - 1);
     }
   }
 
   /**
    * @brief Remove the leftmost keys from the leftmost nodes.
    *
-   * @param lid the logical ID of a root node.
+   * @tparam MappingTable a class for representing mapping tables.
+   * @param pid the logical ID of a root node.
+   * @param m_table a mapping table to resolve page IDs.
    */
+  template <class MappingTable>
   static void
-  RemoveLeftmostKeys(const LogicalPtr *lid)
+  RemoveLeftmostKeys(  //
+      PageID pid,
+      const MappingTable &m_table)
   {
     while (true) {
       // remove the lowest key
-      auto *node = lid->Load<Node *>();
+      const auto *lptr = m_table.GetLogicalPtr(pid);
+      auto *node = lptr->template Load<Node *>();
       node->low_meta_ = Metadata{kPageSize, 0, 0};
       if (node->is_inner_ == kLeaf) return;
 
@@ -681,7 +696,7 @@ class Node
       node->meta_array_[0] = Metadata{meta.offset + key_len, 0, rec_len};
 
       // go down to the lower level
-      lid = node->template GetPayload<LogicalPtr *>(0);
+      pid = node->template GetPayload<PageID>(0);
     }
   }
 
@@ -694,7 +709,7 @@ class Node
   static constexpr size_t kHeaderLen = sizeof(Node);
 
   /// the length of child pointers.
-  static constexpr size_t kPtrLen = sizeof(LogicalPtr *);
+  static constexpr size_t kPtrLen = sizeof(PageID);
 
   /// the length of record metadata.
   static constexpr size_t kMetaLen = sizeof(Metadata);
@@ -852,16 +867,18 @@ class Node
   /**
    * @brief Link this node and a right sibling node.
    *
-   * @param right_lid the logical ID of a right sibling node.
+   * @param right_pid the page ID of a right sibling node.
+   * @param right_node the right sibling node.
    */
   void
-  LinkNext(const LogicalPtr *right_lid)
+  LinkNext(  //
+      const PageID right_pid,
+      Node *right_node)
   {
     // set a sibling link
-    next_ = reinterpret_cast<uintptr_t>(right_lid);
+    next_ = right_pid;
 
     // copy the lowest key in the right node as a highest key in this node
-    auto *right_node = right_lid->Load<Node *>();
     const auto low_meta = right_node->low_meta_;
     const auto key_len = low_meta.key_len;
     const auto offset = kPageSize - key_len;
@@ -890,7 +907,7 @@ class Node
   uint32_t node_size_{kHeaderLen};
 
   /// the pointer to a sibling node.
-  uintptr_t next_{kNullPtr};
+  PageID next_{kNullPtr};
 
   /// metadata of a lowest key or a first record in a delta record.
   Metadata low_meta_{kPageSize, 0, 0};

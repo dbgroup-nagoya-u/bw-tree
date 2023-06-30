@@ -145,10 +145,10 @@ class DeltaRecordFixture : public testing::Test
   CreateSplitMergeDelta(  //
       const DeltaType type,
       const std::unique_ptr<Delta_t> &dummy_d,
-      const LogicalPtr *dummy_lid)  //
+      const PageID dummy_pid)  //
       -> std::unique_ptr<Delta_t>
   {
-    auto *raw_p = new (GetPage()) Delta_t{type, dummy_d.get(), dummy_lid};
+    auto *raw_p = new (GetPage()) Delta_t{type, dummy_d.get(), dummy_pid};
     return std::unique_ptr<Delta_t>{raw_p};
   }
 
@@ -222,13 +222,13 @@ class DeltaRecordFixture : public testing::Test
     const auto &payload = payloads_[0];
     const auto &dummy_d = CreateLeafInsertModifyDelta(kInsert, key, payload);
 
-    LogicalPtr *dummy_lid = nullptr;
-    const auto &delta = CreateSplitMergeDelta(type, dummy_d, dummy_lid);
+    const PageID dummy_pid = kNullPtr;
+    const auto &delta = CreateSplitMergeDelta(type, dummy_d, dummy_pid);
 
     EXPECT_TRUE(delta->IsLeaf());
     EXPECT_EQ(type, delta->GetDeltaType());
     EXPECT_EQ(nullptr, delta->GetNext());
-    EXPECT_EQ(dummy_lid, delta->template GetPayload<LogicalPtr *>());
+    EXPECT_EQ(dummy_pid, delta->template GetPayload<PageID>());
 
     CheckLowKey(delta, key);
     EXPECT_FALSE(delta->GetHighKey());

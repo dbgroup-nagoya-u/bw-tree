@@ -41,6 +41,9 @@ namespace dbgroup::index::bw_tree::component
  * Internal enum and classes
  *####################################################################################*/
 
+/// Alias for representing logical page IDs.
+using PageID = uint64_t;
+
 /**
  * @brief Internal return codes for representing results of delta-chain traversal.
  *
