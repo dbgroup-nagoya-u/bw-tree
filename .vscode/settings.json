@@ -41,11 +41,6 @@
   "markdown.extension.list.indentationSize": "inherit",
   "markdown.extension.tableFormatter.enabled": false,
   "markdown.extension.toc.levels": "2..3",
-  // setings for PlantUML
-  "plantuml.diagramsRoot": "design_doc/figures/src",
-  "plantuml.exportOutDir": "design_doc/figures",
-  "plantuml.exportFormat": "svg",
-  "plantuml.exportSubFolder": false,
   // local dictionary
   "cSpell.words": [
     "alignas",
