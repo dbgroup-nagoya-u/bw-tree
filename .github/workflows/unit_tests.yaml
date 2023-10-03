@@ -13,14 +13,14 @@ env:
 jobs:
   unit_test:
     runs-on: ubuntu-20.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       matrix:
         page-size: [1024, 2048, 4096, 8192]
     steps:
 
     - name: Clone Repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         submodules: recursive
 

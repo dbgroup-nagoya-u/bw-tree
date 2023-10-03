@@ -1,6 +1,6 @@
 # Bw-Tree
 
-![Ubuntu-20.04](https://github.com/dbgroup-nagoya-u/bw-tree/workflows/Ubuntu-20.04/badge.svg?branch=main)
+[![Ubuntu-20.04](https://github.com/dbgroup-nagoya-u/bw-tree/actions/workflows/unit_tests.yaml/badge.svg)](https://github.com/dbgroup-nagoya-u/bw-tree/actions/workflows/unit_tests.yaml)
 
 This repository is an open source implementation of a Bw-tree[^1] for research use. The purpose of this implementation is to reproduce a Bw-tree and measure its performance.
 
