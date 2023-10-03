@@ -190,6 +190,68 @@ ShiftAddr(  //
   return static_cast<std::byte *>(const_cast<void *>(addr)) + offset;
 }
 
+/**
+ * @brief Parse an entry of bulkload according to key's type.
+ *
+ * @tparam Entry std::pair or std::tuple for containing entries.
+ * @param entry a bulkload entry.
+ * @retval 1st: a target key.
+ * @retval 2nd: a target payload.
+ * @retval 3rd: the length of a target key.
+ * @retval 4th: the length of a target payload.
+ */
+template <class Entry>
+constexpr auto
+ParseEntry(const Entry &entry)  //
+    -> std::tuple<std::tuple_element_t<0, Entry>, std::tuple_element_t<1, Entry>, size_t, size_t>
+{
+  using Key = std::tuple_element_t<0, Entry>;
+  using Payload = std::tuple_element_t<1, Entry>;
+
+  constexpr auto kTupleSize = std::tuple_size_v<Entry>;
+  static_assert(2 <= kTupleSize && kTupleSize <= 4);
+
+  if constexpr (kTupleSize == 4) {
+    return entry;
+  } else if constexpr (kTupleSize == 3) {
+    const auto &[key, payload, key_len] = entry;
+    return {key, payload, key_len, sizeof(Payload)};
+  } else {
+    const auto &[key, payload] = entry;
+    return {key, payload, sizeof(Key), sizeof(Payload)};
+  }
+}
+
+/**
+ * @brief Parse an entry of bulkload according to key's type.
+ *
+ * @tparam Entry std::pair or std::tuple for containing entries.
+ * @param entry a bulkload entry.
+ * @retval 1st: a target key.
+ * @retval 2nd: the length of a target key.
+ */
+template <class Entry>
+constexpr auto
+ParseKey(const Entry &entry)  //
+    -> std::pair<std::tuple_element_t<0, Entry>, size_t>
+{
+  using Key = std::tuple_element_t<0, Entry>;
+
+  constexpr auto kTupleSize = std::tuple_size_v<Entry>;
+  static_assert(2 <= kTupleSize && kTupleSize <= 4);
+
+  if constexpr (kTupleSize == 4) {
+    const auto &[key, payload, key_len, pay_len] = entry;
+    return {key, key_len};
+  } else if constexpr (kTupleSize == 3) {
+    const auto &[key, payload, key_len] = entry;
+    return {key, key_len};
+  } else {
+    const auto &[key, payload] = entry;
+    return {key, sizeof(Key)};
+  }
+}
+
 }  // namespace dbgroup::index::bw_tree::component
 
 #endif  // BW_TREE_COMPONENT_COMMON_HPP

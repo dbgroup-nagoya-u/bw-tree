@@ -604,12 +604,13 @@ class Node
 
     constexpr auto kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
     const size_t is_leaf = (!is_inner) ? 0 : 1;
+    const auto &[leftmost_key, leftmost_key_len] = ParseKey(*iter);
 
     // extract and insert entries into this node
     auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
     auto node_size = kHeaderLen + kMaxKeyLen + is_leaf * kMaxKeyLen;
     for (; iter < iter_end; ++iter) {
-      const auto &[key, payload, key_len] = ParseEntry(*iter);
+      const auto &[key, payload, key_len, pay_len] = ParseEntry(*iter);
       const auto rec_len = key_len + sizeof(Payload);
       const auto total_len = rec_len + kMetaLen;
 
@@ -634,7 +635,7 @@ class Node
       prev_node->LinkNext(this_pid, this);
     }
 
-    nodes.emplace_back(*GetLowKey(), this_pid, low_meta_.key_len);
+    nodes.emplace_back(leftmost_key, this_pid, leftmost_key_len);
   }
 
   /**
@@ -838,31 +839,6 @@ class Node
   /*####################################################################################
    * Internal utilities
    *##################################################################################*/
-
-  /**
-   * @brief Parse an entry of bulkload according to key's type.
-   *
-   * @tparam Entry std::pair or std::tuple for containing entries.
-   * @param entry a bulkload entry.
-   * @retval 1st: a target key.
-   * @retval 2nd: a target payload.
-   * @retval 3rd: the length of a target key.
-   */
-  template <class Entry>
-  constexpr auto
-  ParseEntry(const Entry &entry)  //
-      -> std::tuple<Key, std::tuple_element_t<1, Entry>, size_t>
-  {
-    constexpr auto kTupleSize = std::tuple_size_v<Entry>;
-    static_assert(2 <= kTupleSize && kTupleSize <= 3);
-
-    if constexpr (kTupleSize == 3) {
-      return entry;
-    } else {
-      const auto &[key, payload] = entry;
-      return {key, payload, sizeof(Key)};
-    }
-  }
 
   /**
    * @brief Link this node and a right sibling node.

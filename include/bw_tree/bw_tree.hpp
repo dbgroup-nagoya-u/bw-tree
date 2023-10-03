@@ -177,7 +177,11 @@ class BwTree
      * @retval true if this iterator indicates a live record.
      * @retval false otherwise.
      */
-    explicit operator bool() { return HasRecord(); }
+    explicit
+    operator bool()
+    {
+      return HasRecord();
+    }
 
     /**
      * @return a current key and payload pair.
@@ -440,13 +444,15 @@ class BwTree
    * @param key a target key.
    * @param payload a target payload.
    * @param key_len the length of the target key.
+   * @param pay_len the length of the target payload.
    * @return kSuccess.
    */
   auto
   Write(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))  //
+      const size_t key_len = sizeof(Key),
+      [[maybe_unused]] const size_t pay_len = sizeof(Payload))  //
       -> ReturnCode
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
@@ -490,6 +496,7 @@ class BwTree
    * @param key a target key.
    * @param payload a target payload.
    * @param key_len the length of the target key.
+   * @param pay_len the length of the target payload.
    * @retval kSuccess if inserted.
    * @retval kKeyExist otherwise.
    */
@@ -497,7 +504,8 @@ class BwTree
   Insert(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))  //
+      const size_t key_len = sizeof(Key),
+      [[maybe_unused]] const size_t pay_len = sizeof(Payload))  //
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
@@ -542,6 +550,7 @@ class BwTree
    * @param key a target key.
    * @param payload a target payload.
    * @param key_len the length of the target key.
+   * @param pay_len the length of the target payload.
    * @retval kSuccess if updated.
    * @retval kKeyNotExist otherwise.
    */
@@ -549,7 +558,8 @@ class BwTree
   Update(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))  //
+      const size_t key_len = sizeof(Key),
+      [[maybe_unused]] const size_t pay_len = sizeof(Payload))  //
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
