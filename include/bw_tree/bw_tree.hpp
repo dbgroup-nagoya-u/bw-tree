@@ -227,11 +227,6 @@ class BwTree
         const auto &next_key = node_->GetHighKey();
         const auto sib_pid = node_->template GetNext<PageID>();
         *this = bw_tree_->SiblingScan(sib_pid, node_, next_key, end_key_);
-
-        if constexpr (kIsVarLen && IsVarLenData<Key>()) {
-          // release a dynamically allocated key
-          delete next_key;
-        }
       }
     }
 

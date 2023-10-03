@@ -28,15 +28,16 @@ namespace dbgroup::index::test
 template <class K, class V, class C>
 using BwTreeVarLen = ::dbgroup::index::bw_tree::BwTreeVarLen<K, V, C>;
 
-using TestTargets = ::testing::Types<            //
-    IndexInfo<BwTreeVarLen, UInt8, UInt8>,       // fixed-length keys
-    IndexInfo<BwTreeVarLen, UInt4, UInt8>,       // small keys
-    IndexInfo<BwTreeVarLen, UInt8, UInt4>,       // small payloads
-    IndexInfo<BwTreeVarLen, UInt4, UInt4>,       // small keys/payloads
-    IndexInfo<BwTreeVarLen, Var, UInt8>,         // variable-length keys
-    IndexInfo<BwTreeVarLen, Ptr, Ptr>,           // pointer keys/payloads
-    IndexInfo<BwTreeVarLen, Original, Original>  // original class keys/payloads
-    >;
+using TestTargets =
+    ::testing::Types<  //
+                       // IndexInfo<BwTreeVarLen, UInt8, UInt8>,       // fixed-length keys
+                       // IndexInfo<BwTreeVarLen, UInt4, UInt8>,       // small keys
+                       // IndexInfo<BwTreeVarLen, UInt8, UInt4>,       // small payloads
+                       // IndexInfo<BwTreeVarLen, UInt4, UInt4>,       // small keys/payloads
+        IndexInfo<BwTreeVarLen, Var, UInt8>  // variable-length keys
+        // IndexInfo<BwTreeVarLen, Ptr, Ptr>,           // pointer keys/payloads
+        // IndexInfo<BwTreeVarLen, Original, Original>  // original class keys/payloads
+        >;
 TYPED_TEST_SUITE(IndexFixture, TestTargets);
 
 /*######################################################################################

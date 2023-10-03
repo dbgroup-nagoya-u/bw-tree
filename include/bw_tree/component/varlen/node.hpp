@@ -42,6 +42,7 @@ class Node
    * Type aliases
    *##################################################################################*/
 
+  using KeyWOPtr = std::remove_pointer_t<Key>;
   using Record = std::pair<Key, const void *>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using ConsolidateInfo = std::pair<const void *, const void *>;
@@ -190,7 +191,19 @@ class Node
       -> std::optional<Key>
   {
     if (low_meta_.key_len == 0) return std::nullopt;
-    return GetKey(low_meta_);
+
+    Key key;
+    if constexpr (IsVarLenData<Key>()) {
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      key = tls_key.get();
+      memcpy(key, GetKeyAddr(low_meta_), low_meta_.key_len);
+    } else {
+      memcpy(&key, GetKeyAddr(low_meta_), sizeof(Key));
+    }
+    return key;
   }
 
   /**
@@ -206,17 +219,18 @@ class Node
   GetHighKey() const  //
       -> Key
   {
-    const auto key_len = high_meta_.key_len;
-
-    Key high_key{};
+    Key key;
     if constexpr (IsVarLenData<Key>()) {
-      high_key = reinterpret_cast<Key>(::operator new(key_len));
-      memcpy(high_key, GetKeyAddr(high_meta_), key_len);
-    } else {
-      memcpy(&high_key, GetKeyAddr(high_meta_), key_len);
-    }
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
 
-    return high_key;
+      key = tls_key.get();
+      memcpy(key, GetKeyAddr(high_meta_), high_meta_.key_len);
+    } else {
+      memcpy(&key, GetKeyAddr(high_meta_), sizeof(Key));
+    }
+    return key;
   }
 
   /**
@@ -755,13 +769,18 @@ class Node
   GetKey(const Metadata meta) const  //
       -> Key
   {
+    Key key;
     if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(meta));
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      key = tls_key.get();
+      memcpy(key, GetKeyAddr(meta), meta.key_len);
     } else {
-      Key key{};
       memcpy(&key, GetKeyAddr(meta), sizeof(Key));
-      return key;
     }
+    return key;
   }
 
   /**
