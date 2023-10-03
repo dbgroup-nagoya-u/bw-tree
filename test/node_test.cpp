@@ -108,7 +108,7 @@ class NodeFixture : public testing::Test
     EXPECT_TRUE(node->IsLeaf());
     EXPECT_EQ(0, node->GetRecordCount());
     EXPECT_EQ(nullptr, node->GetNext());
-    EXPECT_FALSE(node->GetLowKey());
+    EXPECT_EQ(0, node->GetLowKeyLen());
   }
 
   /*####################################################################################

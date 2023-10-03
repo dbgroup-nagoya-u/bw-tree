@@ -180,6 +180,16 @@ class Node
   }
 
   /**
+   * @return The length of a lowest key.
+   */
+  [[nodiscard]] constexpr auto
+  GetLowKeyLen() const  //
+      -> size_t
+  {
+    return low_meta_.key_len;
+  }
+
+  /**
    * @brief Get the lowest key in this node.
    *
    * If this node is the leftmost node in its level, this returns std::nullopt.
@@ -188,10 +198,8 @@ class Node
    */
   [[nodiscard]] auto
   GetLowKey() const  //
-      -> std::optional<Key>
+      -> Key
   {
-    if (low_meta_.key_len == 0) return std::nullopt;
-
     Key key;
     if constexpr (IsVarLenData<Key>()) {
       thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //

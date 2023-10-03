@@ -175,6 +175,16 @@ class Node
   }
 
   /**
+   * @return The length of a lowest key.
+   */
+  [[nodiscard]] constexpr auto
+  GetLowKeyLen() const  //
+      -> size_t
+  {
+    return sizeof(Key) * has_low_key_;
+  }
+
+  /**
    * @brief Get the lowest key in this node.
    *
    * If this node is the leftmost node in its level, this returns std::nullopt.
@@ -183,9 +193,8 @@ class Node
    */
   [[nodiscard]] auto
   GetLowKey() const  //
-      -> std::optional<Key>
+      -> Key
   {
-    if (!has_low_key_) return std::nullopt;
     return low_key_;
   }
 

@@ -208,6 +208,22 @@ ParseKey(const Entry &entry)  //
   }
 }
 
+template <class T>
+inline auto
+DeepCopy(  //
+    const T &obj,
+    [[maybe_unused]] const size_t len)  //
+    -> T
+{
+  if constexpr (IsVarLenData<T>()) {
+    auto *ptr = ::dbgroup::memory::Allocate<std::remove_pointer_t<T>>(kMaxVarDataSize);
+    memcpy(ptr, obj, len);
+    return ptr;
+  } else {
+    return T{obj};
+  }
+}
+
 }  // namespace dbgroup::index::bw_tree::component
 
 #endif  // BW_TREE_COMPONENT_COMMON_HPP

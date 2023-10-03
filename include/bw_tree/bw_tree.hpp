@@ -59,6 +59,7 @@ class BwTree
    * Type aliases
    *##################################################################################*/
 
+  using KeyWOPtr = std::remove_pointer_t<Key>;
   using PageID = uint64_t;
   using NodePage = component::NodePage;
   using DeltaPage = component::DeltaPage;
@@ -1338,8 +1339,8 @@ class BwTree
     // create an index-entry delta record to complete split
     const auto *r_node_d = reinterpret_cast<const Delta_t *>(r_node);
     auto *entry_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, r_node_d, r_pid};
-    const auto &key = r_node_d->GetKey();
-    const auto rec_len = r_node_d->GetKeyLength() + kPtrLen + kMetaLen;
+    const auto &key = r_node->GetLowKey();
+    const auto rec_len = r_node->GetLowKeyLen() + kPtrLen + kMetaLen;
 
     while (true) {
       // check the current node is a root node
@@ -1427,14 +1428,18 @@ class BwTree
     stack.pop_back();  // remove the child node
 
     // remove the index entry before merging
-    const auto &low_key = removed_node->GetLowKey();
-    auto *delete_d = TryDeleteIndexEntry(removed_node_d, low_key, stack);
+    const auto del_key_len = removed_node->GetLowKeyLen();
+    const auto &del_key = component::DeepCopy<Key>(removed_node->GetLowKey(), del_key_len);
+    auto *delete_d = TryDeleteIndexEntry(removed_node_d, del_key, del_key_len, stack);
     if (delete_d == nullptr) {
       // check this tree should be shrinked
       if (!TryRemoveRoot(removed_node, rem_pid, stack)) {
         // merging has failed, but consolidation succeeds
         rem_lptr->Store(removed_node);
         AddToGC(remove_d);
+      }
+      if constexpr (IsVarLenData<Key>()) {
+        ::dbgroup::memory::Release<KeyWOPtr>(del_key);
       }
       return true;
     }
@@ -1443,18 +1448,17 @@ class BwTree
     const auto rem_uintptr = reinterpret_cast<uintptr_t>(removed_node);
     auto *merge_d = new (GetRecPage()) Delta_t{DeltaType::kMerge, removed_node_d, rem_uintptr};
     const auto diff = removed_node->GetNodeDiff();
-    const auto &sep_key = *low_key;
     while (true) {
       if (stack.empty()) {
         // concurrent SMOs have modified the tree structure, so reconstruct a stack
-        SearchTargetNode(stack, sep_key, rem_pid);
+        SearchTargetNode(stack, del_key, rem_pid);
       } else {
-        SearchChildNode(sep_key, kOpen, stack, rem_pid);
+        SearchChildNode(del_key, kOpen, stack, rem_pid);
         if (stack.empty()) continue;
       }
 
       while (true) {  // continue until insertion succeeds
-        const auto *sib_head = GetHead(sep_key, kOpen, stack, rem_pid);
+        const auto *sib_head = GetHead(del_key, kOpen, stack, rem_pid);
         if (sib_head == nullptr) break;  // retry from searching the left sibling node
 
         // try to insert the merge-delta record
@@ -1464,6 +1468,9 @@ class BwTree
           delete_d->SetSiblingPID(stack.back());  // set a shortcut
           if (merge_d->NeedConsolidation()) {
             TrySMOs(merge_d, stack);
+          }
+          if constexpr (IsVarLenData<Key>()) {
+            ::dbgroup::memory::Release<KeyWOPtr>(del_key);
           }
           return true;
         }
@@ -1475,7 +1482,8 @@ class BwTree
    * @brief Complete partial merging by deleting index-entry from this tree.
    *
    * @param removed_node a consolidated node to be removed.
-   * @param low_key a lowest key of a removed node.
+   * @param del_key a lowest key of a removed node.
+   * @param del_key_len the length of the lowest key.
    * @param stack a copied stack of traversed nodes.
    * @retval the delete-delta record if successful.
    * @retval nullptr otherwise.
@@ -1483,22 +1491,22 @@ class BwTree
   auto
   TryDeleteIndexEntry(  //
       const Delta_t *removed_node,
-      const std::optional<Key> &low_key,
+      const Key &del_key,
+      const size_t del_key_len,
       std::vector<PageID> stack)  //
       -> Delta_t *
   {
     // check a current node can be merged
-    if (stack.empty()) return nullptr;  // a root node cannot be merged
-    if (!low_key) return nullptr;       // the leftmost nodes cannot be merged
+    if (stack.empty()) return nullptr;     // a root node cannot be merged
+    if (del_key_len == 0) return nullptr;  // the leftmost nodes cannot be merged
 
     // insert the delta record into a parent node
     auto *delete_d = new (GetRecPage()) Delta_t{removed_node};
     const auto rec_len = delete_d->GetKeyLength() + kPtrLen + kMetaLen;
-    const auto &key = *low_key;
     const auto &sib_key = removed_node->GetHighKey();
     while (true) {
       // check the removed node is not leftmost in its parent node
-      auto [head, rc] = GetHeadForMerge(key, sib_key, stack);
+      auto [head, rc] = GetHeadForMerge(del_key, sib_key, stack);
       if (rc == DeltaRC::kAbortMerge) {
         // the leftmost nodes cannot be merged
         tls_delta_page_.reset(delete_d);
