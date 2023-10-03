@@ -25,6 +25,9 @@
 #include <xmmintrin.h>
 #endif
 
+// external sources
+#include "memory/utility.hpp"
+
 // local sources
 #include "bw_tree/utility.hpp"
 
@@ -89,85 +92,38 @@ constexpr size_t kWordAlign = kWordSize - 1;
 /// bits for cache line alignments.
 constexpr size_t kCacheAlign = kCacheLineSize - 1;
 
-/// the chacheline size for memory alignment.
-constexpr std::align_val_t kCacheAlignVal = static_cast<std::align_val_t>(kCacheLineSize);
-
 /// the NULL value for uintptr_t
 constexpr uintptr_t kNullPtr = 0;
 
 /// leave free space for later modifications.
 constexpr size_t kNodeCapacityForBulkLoading = kPageSize * 0.9;
 
+/// The alignment size for internal pages.
+constexpr size_t kPageAlign = kPageSize < kVMPageSize ? kPageSize : kVMPageSize;
+
 /*######################################################################################
  * Internal utility classes
  *####################################################################################*/
 
 /**
- * @brief A deleter function to release aligned pages.
- *
- * @param ptr the address of pages to be released.
- */
-inline void
-DeleteAlignedPtr(void *ptr)
-{
-  ::operator delete(ptr, kCacheAlignVal);
-}
-
-/**
- * @brief Allocate a memory region with virtual memory page alignments.
- *
- * @param size the expected page size.
- * @return the address of an allocated page.
- */
-template <class T>
-auto
-AllocVMAlignedPage(const size_t size)  //
-    -> T
-{
-  constexpr auto kVMPageAlign = static_cast<std::align_val_t>(kVMPageSize);
-  return reinterpret_cast<T>(::operator new(size, kVMPageAlign));
-}
-
-/**
- * @brief A deleter function to release pages aligned for virtual memory addresses.
- *
- * @param page the address of pages to be released.
- */
-inline void
-ReleaseVMAlignedPage(void *page)
-{
-  constexpr auto kVMPageAlign = static_cast<std::align_val_t>(kVMPageSize);
-  ::operator delete(page, kVMPageAlign);
-}
-
-/**
- * @brief A struct for representing GG node pages.
+ * @brief A dummy struct for representing internal pages.
  *
  */
-struct NodePage {
-  // do not call destructor
-  using T = void;
-
+struct alignas(kPageAlign) NodePage : public ::dbgroup::memory::DefaultTarget {
   // reuse pages
   static constexpr bool kReusePages = true;
 
-  // use the standard delete function to release garbage
-  static const inline std::function<void(void *)> deleter{DeleteAlignedPtr};
+  /// @brief A dummy member variable to ensure the page size.
+  uint8_t dummy[kPageSize];
 };
 
 /**
  * @brief A struct for representing GC delta pages.
  *
  */
-struct DeltaPage {
-  // do not call destructor
-  using T = void;
-
+struct alignas(kCacheLineSize) DeltaPage : public ::dbgroup::memory::DefaultTarget {
   // reuse pages
   static constexpr bool kReusePages = true;
-
-  // use the standard delete function to release garbage
-  static const inline std::function<void(void *)> deleter{DeleteAlignedPtr};
 };
 
 /*######################################################################################

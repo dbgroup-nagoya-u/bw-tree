@@ -42,8 +42,23 @@ class alignas(kVMPageSize) MappingTable
    * Type aliases
    *##################################################################################*/
 
-  using Row = LogicalPtr *;
-  using Table = std::atomic<Row> *;
+  template <class T>
+  class alignas(kVMPageSize) Arr
+  {
+   public:
+    auto
+    Get(const size_t pos)  //
+        -> T &
+    {
+      return elements_[pos];
+    }
+
+   private:
+    T elements_[0];
+  };
+
+  using Row = Arr<LogicalPtr>;
+  using Table = Arr<std::atomic<Row *>>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -55,9 +70,9 @@ class alignas(kVMPageSize) MappingTable
    */
   MappingTable()
   {
-    auto *row = AllocVMAlignedPage<Row>(kVMPageSize);
-    auto *table = AllocVMAlignedPage<Table>(kVMPageSize);
-    table[0].store(row, std::memory_order_relaxed);
+    auto *row = ::dbgroup::memory::Allocate<Row>(kVMPageSize);
+    auto *table = ::dbgroup::memory::Allocate<Table>(kVMPageSize);
+    table->Get(0).store(row, std::memory_order_relaxed);
     tables_[0].store(table, std::memory_order_relaxed);
   }
 
@@ -87,13 +102,13 @@ class alignas(kVMPageSize) MappingTable
 
       auto *table = tables_[i].load(std::memory_order_relaxed);
       for (size_t j = 0; j < row_num; ++j) {
-        auto *row = table[j].load(std::memory_order_relaxed);
+        auto *row = table->Get(j).load(std::memory_order_relaxed);
         for (size_t k = 0; k < col_num; ++k) {
-          ReleaseLogicalPtr(row[k]);
+          ReleaseLogicalPtr(row->Get(k));
         }
-        ReleaseVMAlignedPage(row);
+        ::dbgroup::memory::Release<Row>(row);
       }
-      ReleaseVMAlignedPage(table);
+      ::dbgroup::memory::Release<Table>(table);
     }
   }
 
@@ -126,17 +141,17 @@ class alignas(kVMPageSize) MappingTable
           const auto row_id = (new_id >> kRowShift) & kIDMask;
           if (row_id < kArrayCapacity) {
             // prepare a new row
-            auto *row = AllocVMAlignedPage<Row>(kVMPageSize);
+            auto *row = ::dbgroup::memory::Allocate<Row>(kVMPageSize);
             auto *table = tables_[(new_id >> kTabShift) & kIDMask].load(std::memory_order_relaxed);
-            table[row_id].store(row, std::memory_order_relaxed);
+            table->Get(row_id).store(row, std::memory_order_relaxed);
             cnt_.store(new_id & ~kIDMask, std::memory_order_relaxed);
             return cur_id;
           }
 
           // prepare a new table
-          auto *row = AllocVMAlignedPage<Row>(kVMPageSize);
-          auto *table = AllocVMAlignedPage<Table>(kVMPageSize);
-          table[0].store(row, std::memory_order_relaxed);
+          auto *row = ::dbgroup::memory::Allocate<Row>(kVMPageSize);
+          auto *table = ::dbgroup::memory::Allocate<Table>(kVMPageSize);
+          table->Get(0).store(row, std::memory_order_relaxed);
           new_id += kTabIDUnit;
           tables_[(new_id >> kTabShift) & kIDMask].store(table, std::memory_order_relaxed);
           cnt_.store(new_id & ~(kTabIDUnit - 1UL), std::memory_order_relaxed);
@@ -157,9 +172,9 @@ class alignas(kVMPageSize) MappingTable
   GetLogicalPtr(const uint64_t id) const  //
       -> LogicalPtr *
   {
-    const auto *table = tables_[(id >> kTabShift) & kIDMask].load(std::memory_order_relaxed);
-    const auto *row = table[(id >> kRowShift) & kIDMask].load(std::memory_order_relaxed);
-    return const_cast<LogicalPtr *>(&(row[id & kIDMask]));
+    auto *table = tables_[(id >> kTabShift) & kIDMask].load(std::memory_order_relaxed);
+    auto *row = table->Get((id >> kRowShift) & kIDMask).load(std::memory_order_relaxed);
+    return const_cast<LogicalPtr *>(&(row->Get(id & kIDMask)));
   }
 
   /*####################################################################################
@@ -190,6 +205,10 @@ class alignas(kVMPageSize) MappingTable
   }
 
  private:
+  /*####################################################################################
+   * Internal classes
+   *##################################################################################*/
+
   /*####################################################################################
    * Internal constants
    *##################################################################################*/
@@ -239,13 +258,13 @@ class alignas(kVMPageSize) MappingTable
     while (rec != nullptr && rec->GetDeltaType() != kNotDelta) {
       auto *next = rec->GetNext();
       if (rec->GetDeltaType() == kMerge) {
-        DeleteAlignedPtr(rec->template GetPayload<void *>());
+        ::dbgroup::memory::Release<NodePage>(rec->template GetPayload<void *>());
       }
 
-      DeleteAlignedPtr(rec);
+      ::dbgroup::memory::Release<DeltaPage>(rec);
       rec = next;
     }
-    DeleteAlignedPtr(rec);
+    ::dbgroup::memory::Release<NodePage>(rec);
   }
 
   /*####################################################################################
@@ -259,7 +278,7 @@ class alignas(kVMPageSize) MappingTable
   size_t padding_[(kCacheLineSize - kWordSize) / kWordSize]{};
 
   /// mapping tables.
-  std::atomic<Table> tables_[kTableCapacity]{};
+  std::atomic<Table *> tables_[kTableCapacity]{};
 };
 
 }  // namespace dbgroup::index::bw_tree::component

@@ -92,7 +92,7 @@ class NodeFixture : public testing::Test
   GetPage()  //
       -> void *
   {
-    return ::operator new(kPageSize);
+    return ::dbgroup::memory::Allocate<NodePage>();
   }
 
   /*####################################################################################
