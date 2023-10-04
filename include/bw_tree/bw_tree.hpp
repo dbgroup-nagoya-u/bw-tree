@@ -18,6 +18,7 @@
 #define BW_TREE_BW_TREE_HPP
 
 // C++ standard libraries
+#include <array>
 #include <functional>
 #include <future>
 #include <memory>
@@ -34,6 +35,7 @@
 #include "bw_tree/component/fixlen/node.hpp"
 #include "bw_tree/component/logical_ptr.hpp"
 #include "bw_tree/component/mapping_table.hpp"
+#include "bw_tree/component/record_iterator.hpp"
 #include "bw_tree/component/varlen/delta_record.hpp"
 #include "bw_tree/component/varlen/node.hpp"
 
@@ -58,6 +60,7 @@ class BwTree
    * Type aliases
    *##################################################################################*/
 
+  using KeyWOPtr = std::remove_pointer_t<Key>;
   using PageID = uint64_t;
   using NodePage = component::NodePage;
   using DeltaPage = component::DeltaPage;
@@ -71,6 +74,8 @@ class BwTree
   using DeltaFixLen_t = component::fixlen::DeltaRecord<Key, Comp>;
   using Delta_t = std::conditional_t<kIsVarLen, DeltaVarLen_t, DeltaFixLen_t>;
   using Record = typename Delta_t::Record;
+  using RecordIterator_t = component::RecordIterator<Key, Payload, Comp, kIsVarLen>;
+  friend RecordIterator_t;  // call sibling scan from iterators
   using MappingTable_t = component::MappingTable<Node_t, Delta_t>;
   using DC = component::DeltaChain<Delta_t>;
   using ConsolidateInfo = std::pair<const void *, const void *>;
@@ -83,197 +88,6 @@ class BwTree
   using BulkResult = std::pair<size_t, std::vector<NodeEntry>>;
   using BulkPromise = std::promise<BulkResult>;
   using BulkFuture = std::future<BulkResult>;
-
-  /*####################################################################################
-   * Public sub -classes
-   *##################################################################################*/
-
-  /**
-   * @brief A class for representing an iterator of scan results.
-   *
-   */
-  class RecordIterator
-  {
-   public:
-    /*##################################################################################
-     * Public constructors and assignment operators
-     *################################################################################*/
-
-    /**
-     * @brief Construct a new object as an initial iterator.
-     *
-     * @param bw_tree a pointer to an index.
-     * @param node a copied node for scanning results.
-     * @param begin_pos the begin position of a current node.
-     * @param end_pos the end position of a current node.
-     * @param end_key an optional end-point key.
-     * @param is_end a flag for indicating a current node is rightmost in scan-range.
-     */
-    RecordIterator(  //
-        BwTree *bw_tree,
-        Node_t *node,
-        size_t begin_pos,
-        size_t end_pos,
-        const ScanKey end_key,
-        const bool is_end)
-        : bw_tree_{bw_tree},
-          node_{node},
-          rec_count_{end_pos},
-          current_pos_{begin_pos},
-          end_key_{std::move(end_key)},
-          is_end_{is_end}
-    {
-    }
-
-    /**
-     * @brief Construct a new object for sibling scanning.
-     *
-     * @param node a copied node for scanning results.
-     * @param begin_pos the begin position of a current node.
-     * @param end_pos the end position of a current node.
-     * @param is_end a flag for indicating a current node is rightmost in scan-range.
-     */
-    RecordIterator(  //
-        Node_t *node,
-        size_t begin_pos,
-        size_t end_pos,
-        const bool is_end)
-        : node_{node}, rec_count_{end_pos}, current_pos_{begin_pos}, is_end_{is_end}
-    {
-    }
-
-    RecordIterator(const RecordIterator &) = delete;
-    RecordIterator(RecordIterator &&) = delete;
-
-    auto operator=(const RecordIterator &) -> RecordIterator & = delete;
-
-    constexpr auto
-    operator=(RecordIterator &&obj) noexcept  //
-        -> RecordIterator &
-    {
-      node_ = obj.node_;
-      rec_count_ = obj.rec_count_;
-      current_pos_ = obj.current_pos_;
-      is_end_ = obj.is_end_;
-
-      return *this;
-    }
-
-    /*##################################################################################
-     * Public destructors
-     *################################################################################*/
-
-    /**
-     * @brief Destroy the iterator and a retained node if exist.
-     *
-     */
-    ~RecordIterator() = default;
-
-    /*##################################################################################
-     * Public operators for iterators
-     *################################################################################*/
-
-    /**
-     * @retval true if this iterator indicates a live record.
-     * @retval false otherwise.
-     */
-    explicit operator bool() { return HasRecord(); }
-
-    /**
-     * @return a current key and payload pair.
-     */
-    auto
-    operator*() const  //
-        -> std::pair<Key, Payload>
-    {
-      return node_->template GetRecord<Payload>(current_pos_);
-    }
-
-    /**
-     * @brief Forward this iterator.
-     *
-     */
-    constexpr void
-    operator++()
-    {
-      ++current_pos_;
-    }
-
-    /*##################################################################################
-     * Public getters/setters
-     *################################################################################*/
-
-    /**
-     * @brief Check if there are any records left.
-     *
-     * NOTE: this may call a scanning function internally to get a sibling node.
-     *
-     * @retval true if there are any records or next node left.
-     * @retval false otherwise.
-     */
-    [[nodiscard]] auto
-    HasRecord()  //
-        -> bool
-    {
-      while (true) {
-        if (current_pos_ < rec_count_) return true;  // records remain in this node
-        if (is_end_) return false;                   // this node is the end of range-scan
-
-        // go to the next sibling node and continue scanning
-        const auto &next_key = node_->GetHighKey();
-        const auto sib_pid = node_->template GetNext<PageID>();
-        *this = bw_tree_->SiblingScan(sib_pid, node_, next_key, end_key_);
-
-        if constexpr (kIsVarLen && IsVarLenData<Key>()) {
-          // release a dynamically allocated key
-          delete next_key;
-        }
-      }
-    }
-
-    /**
-     * @return a key of a current record
-     */
-    [[nodiscard]] auto
-    GetKey() const  //
-        -> Key
-    {
-      return node_->GetKey(current_pos_);
-    }
-
-    /**
-     * @return a payload of a current record
-     */
-    [[nodiscard]] auto
-    GetPayload() const  //
-        -> Payload
-    {
-      return node_->template GetPayload<Payload>(current_pos_);
-    }
-
-   private:
-    /*##################################################################################
-     * Internal member variables
-     *################################################################################*/
-
-    /// a pointer to a BwTree for sibling scanning.
-    BwTree *bw_tree_{nullptr};
-
-    /// the pointer to a node that includes partial scan results.
-    Node_t *node_{nullptr};
-
-    /// the number of records in this node.
-    size_t rec_count_{0};
-
-    /// the position of a current record.
-    size_t current_pos_{0};
-
-    /// the end key given from a user.
-    ScanKey end_key_{};
-
-    /// a flag for indicating a current node is rightmost in scan-range.
-    bool is_end_{true};
-  };
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -393,12 +207,12 @@ class BwTree
   Scan(  //
       const ScanKey &begin_key = std::nullopt,
       const ScanKey &end_key = std::nullopt)  //
-      -> RecordIterator
+      -> RecordIterator_t
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
     thread_local std::unique_ptr<void, std::function<void(void *)>>  //
-        page{::operator new(2 * kPageSize, component::kCacheAlignVal),
-             std::function<void(void *)>{component::DeleteAlignedPtr}};
+        page{::dbgroup::memory::Allocate<NodePage>(2 * kPageSize),
+             ::dbgroup::memory::Release<NodePage>};
 
     auto *node = new (page.get()) Node_t{};
     size_t begin_pos{};
@@ -424,7 +238,7 @@ class BwTree
     // check the end position of scanning
     const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
 
-    return RecordIterator{this, node, begin_pos, end_pos, end_key, is_end};
+    return RecordIterator_t{this, node, begin_pos, end_pos, end_key, is_end};
   }
 
   /*####################################################################################
@@ -440,13 +254,15 @@ class BwTree
    * @param key a target key.
    * @param payload a target payload.
    * @param key_len the length of the target key.
+   * @param pay_len the length of the target payload.
    * @return kSuccess.
    */
   auto
   Write(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))  //
+      const size_t key_len = sizeof(Key),
+      [[maybe_unused]] const size_t pay_len = sizeof(Payload))  //
       -> ReturnCode
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
@@ -490,6 +306,7 @@ class BwTree
    * @param key a target key.
    * @param payload a target payload.
    * @param key_len the length of the target key.
+   * @param pay_len the length of the target payload.
    * @retval kSuccess if inserted.
    * @retval kKeyExist otherwise.
    */
@@ -497,7 +314,8 @@ class BwTree
   Insert(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))  //
+      const size_t key_len = sizeof(Key),
+      [[maybe_unused]] const size_t pay_len = sizeof(Payload))  //
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
@@ -542,6 +360,7 @@ class BwTree
    * @param key a target key.
    * @param payload a target payload.
    * @param key_len the length of the target key.
+   * @param pay_len the length of the target payload.
    * @retval kSuccess if updated.
    * @retval kKeyNotExist otherwise.
    */
@@ -549,7 +368,8 @@ class BwTree
   Update(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))  //
+      const size_t key_len = sizeof(Key),
+      [[maybe_unused]] const size_t pay_len = sizeof(Payload))  //
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
@@ -832,7 +652,7 @@ class BwTree
   {
     auto *page = gc_.template GetPageIfPossible<NodePage>();
     if (page == nullptr) {
-      page = ::operator new(kPageSize, component::kCacheAlignVal);
+      page = ::dbgroup::memory::Allocate<NodePage>();
     }
     return static_cast<Node_t *>(page);
   }
@@ -849,7 +669,7 @@ class BwTree
     if (tls_delta_page_) return tls_delta_page_.release();
 
     auto *page = gc_.template GetPageIfPossible<DeltaPage>();
-    return (page == nullptr) ? (::operator new(kDeltaRecSize, component::kCacheAlignVal)) : page;
+    return (page == nullptr) ? (::dbgroup::memory::Allocate<DeltaPage>(kDeltaRecSize)) : page;
   }
 
   /**
@@ -923,7 +743,7 @@ class BwTree
     // collect data recursively
     if (!head->IsLeaf()) {
       // consolidate the node to traverse child nodes
-      auto *page = ::operator new(2 * kPageSize, component::kCacheAlignVal);
+      auto *page = ::dbgroup::memory::Allocate<NodePage>(2 * kPageSize);
       auto *consolidated = new (page) Node_t{!kIsLeaf};
       Node_t *dummy_node = nullptr;
       TryConsolidate(head, consolidated, dummy_node, kIsScan);
@@ -933,7 +753,7 @@ class BwTree
         CollectStatisticalData(child_pid, level + 1, stat_data);
       }
 
-      ::operator delete(consolidated, component::kCacheAlignVal);
+      ::dbgroup::memory::Release<NodePage>(consolidated);
     }
   }
 
@@ -1307,7 +1127,7 @@ class BwTree
       Node_t *node,
       const Key &begin_key,
       const ScanKey &end_key)  //
-      -> RecordIterator
+      -> RecordIterator_t
   {
     // consolidate a sibling node
     std::vector<PageID> stack{sib_pid};
@@ -1317,12 +1137,35 @@ class BwTree
     // check the end position of scanning
     const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
 
-    return RecordIterator{node, begin_pos, end_pos, is_end};
+    return RecordIterator_t{node, begin_pos, end_pos, is_end};
   }
 
   /*####################################################################################
    * Internal structure modifications
    *##################################################################################*/
+
+  /**
+   * @brief Create a temporary array for sorting delta records.
+   *
+   */
+  static auto
+  CreateTempRecords()
+  {
+    thread_local std::array<Record, kMaxDeltaRecordNum> arr{};
+
+    if constexpr (IsVarLenData<Key>()) {
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //
+          page{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarDataSize * kMaxDeltaRecordNum),
+               ::dbgroup::memory::Release<KeyWOPtr>};
+
+      const auto *top_addr = page.get();
+      for (size_t i = 0; i < kMaxDeltaRecordNum; ++i) {
+        arr[i].key = reinterpret_cast<Key>(component::ShiftAddr(top_addr, i * kMaxVarDataSize));
+      }
+    }
+
+    return arr;
+  }
 
   /**
    * @brief Try consolidation of a given node.
@@ -1338,7 +1181,7 @@ class BwTree
       std::vector<PageID> &stack)
   {
     thread_local std::unique_ptr<Node_t, std::function<void(void *)>>  //
-        tls_node{nullptr, std::function<void(void *)>{component::DeleteAlignedPtr}};
+        tls_node{nullptr, ::dbgroup::memory::Release<NodePage>};
     Node_t *r_node = nullptr;
 
     // recheck other threads have modifed this delta chain
@@ -1389,15 +1232,13 @@ class BwTree
       const bool is_scan = false)  //
       -> SMOsRC
   {
-    thread_local std::vector<Record> records{};
     thread_local std::vector<const void *> nodes{};
-    records.reserve(kMaxDeltaRecordNum);
     nodes.reserve(kDeltaRecordThreshold);
-    records.clear();
     nodes.clear();
+    auto &&records = CreateTempRecords();
 
     // sort delta records
-    DC::Sort(head, records, nodes);
+    const auto rec_num = DC::Sort(head, records, nodes);
 
     // check whether splitting is needed
     const auto node_size = head->GetNodeSize();
@@ -1410,9 +1251,9 @@ class BwTree
       r_node = new (GetNodePage()) Node_t{is_inner};
     }
     if (is_inner) {
-      Consolidate<PageID>(new_node, r_node, nodes, records, is_scan);
+      Consolidate<PageID>(new_node, r_node, nodes, records, rec_num, is_scan);
     } else {
-      Consolidate<Payload>(new_node, r_node, nodes, records, is_scan);
+      Consolidate<Payload>(new_node, r_node, nodes, records, rec_num, is_scan);
     }
 
     if (do_split) return kTrySplit;
@@ -1427,7 +1268,8 @@ class BwTree
    * @param new_node a node page to store consolidated records.
    * @param r_node a node page to store split-right records.
    * @param nodes the set of leaf nodes to be consolidated.
-   * @param records insert/modify/delete-delta records.
+   * @param arr insert/modify/delete-delta records.
+   * @param rec_num The number of delta records.
    * @param is_scan a flag to prevent a split-operation.
    */
   template <class T>
@@ -1436,11 +1278,11 @@ class BwTree
       Node_t *new_node,
       Node_t *r_node,
       const std::vector<const void *> &nodes,
-      const std::vector<Record> &records,
+      const std::array<Record, kMaxDeltaRecordNum> &arr,
+      const size_t new_rec_num,
       const bool is_scan)
   {
     constexpr auto kIsSplitLeft = true;
-    const auto new_rec_num = records.size();
     auto *l_node = (r_node != nullptr) ? new_node : nullptr;
 
     // perform merge-sort to consolidate a node
@@ -1458,13 +1300,13 @@ class BwTree
       for (; i < node_rec_num; ++i) {
         // copy new records
         const auto &node_key = node->GetKey(i);
-        for (; j < new_rec_num && Node_t::LT(records[j], node_key); ++j) {
-          offset = Node_t::template CopyRecordFrom<T>(new_node, records[j], offset, r_node);
+        for (; j < new_rec_num && Comp{}(arr[j].key, node_key); ++j) {
+          offset = Node_t::template CopyRecordFrom<T>(new_node, arr[j].ptr, offset, r_node);
         }
 
         // check a new record is updated one
-        if (j < new_rec_num && Node_t::LE(records[j], node_key)) {
-          offset = Node_t::template CopyRecordFrom<T>(new_node, records[j++], offset, r_node);
+        if (j < new_rec_num && !Comp{}(node_key, arr[j].key)) {
+          offset = Node_t::template CopyRecordFrom<T>(new_node, arr[j++].ptr, offset, r_node);
         } else {
           offset = Node_t::template CopyRecordFrom<T>(new_node, node, i, offset, r_node);
         }
@@ -1473,7 +1315,7 @@ class BwTree
 
     // copy remaining new records
     for (; j < new_rec_num; ++j) {
-      offset = Node_t::template CopyRecordFrom<T>(new_node, records[j], offset, r_node);
+      offset = Node_t::template CopyRecordFrom<T>(new_node, arr[j].ptr, offset, r_node);
     }
 
     // copy the lowest/highest keys
@@ -1520,8 +1362,8 @@ class BwTree
     // create an index-entry delta record to complete split
     const auto *r_node_d = reinterpret_cast<const Delta_t *>(r_node);
     auto *entry_d = new (GetRecPage()) Delta_t{DeltaType::kInsert, r_node_d, r_pid};
-    const auto &key = r_node_d->GetKey();
-    const auto rec_len = r_node_d->GetKeyLength() + kPtrLen + kMetaLen;
+    const auto &key = r_node->GetLowKey();
+    const auto rec_len = r_node->GetLowKeyLen() + kPtrLen + kMetaLen;
 
     while (true) {
       // check the current node is a root node
@@ -1609,14 +1451,18 @@ class BwTree
     stack.pop_back();  // remove the child node
 
     // remove the index entry before merging
-    const auto &low_key = removed_node->GetLowKey();
-    auto *delete_d = TryDeleteIndexEntry(removed_node_d, low_key, stack);
+    const auto del_key_len = removed_node->GetLowKeyLen();
+    const auto &del_key = component::DeepCopy<Key>(removed_node->GetLowKey(), del_key_len);
+    auto *delete_d = TryDeleteIndexEntry(removed_node_d, del_key, del_key_len, stack);
     if (delete_d == nullptr) {
       // check this tree should be shrinked
       if (!TryRemoveRoot(removed_node, rem_pid, stack)) {
         // merging has failed, but consolidation succeeds
         rem_lptr->Store(removed_node);
         AddToGC(remove_d);
+      }
+      if constexpr (IsVarLenData<Key>()) {
+        ::dbgroup::memory::Release<KeyWOPtr>(del_key);
       }
       return true;
     }
@@ -1625,18 +1471,17 @@ class BwTree
     const auto rem_uintptr = reinterpret_cast<uintptr_t>(removed_node);
     auto *merge_d = new (GetRecPage()) Delta_t{DeltaType::kMerge, removed_node_d, rem_uintptr};
     const auto diff = removed_node->GetNodeDiff();
-    const auto &sep_key = *low_key;
     while (true) {
       if (stack.empty()) {
         // concurrent SMOs have modified the tree structure, so reconstruct a stack
-        SearchTargetNode(stack, sep_key, rem_pid);
+        SearchTargetNode(stack, del_key, rem_pid);
       } else {
-        SearchChildNode(sep_key, kOpen, stack, rem_pid);
+        SearchChildNode(del_key, kOpen, stack, rem_pid);
         if (stack.empty()) continue;
       }
 
       while (true) {  // continue until insertion succeeds
-        const auto *sib_head = GetHead(sep_key, kOpen, stack, rem_pid);
+        const auto *sib_head = GetHead(del_key, kOpen, stack, rem_pid);
         if (sib_head == nullptr) break;  // retry from searching the left sibling node
 
         // try to insert the merge-delta record
@@ -1646,6 +1491,9 @@ class BwTree
           delete_d->SetSiblingPID(stack.back());  // set a shortcut
           if (merge_d->NeedConsolidation()) {
             TrySMOs(merge_d, stack);
+          }
+          if constexpr (IsVarLenData<Key>()) {
+            ::dbgroup::memory::Release<KeyWOPtr>(del_key);
           }
           return true;
         }
@@ -1657,7 +1505,8 @@ class BwTree
    * @brief Complete partial merging by deleting index-entry from this tree.
    *
    * @param removed_node a consolidated node to be removed.
-   * @param low_key a lowest key of a removed node.
+   * @param del_key a lowest key of a removed node.
+   * @param del_key_len the length of the lowest key.
    * @param stack a copied stack of traversed nodes.
    * @retval the delete-delta record if successful.
    * @retval nullptr otherwise.
@@ -1665,22 +1514,22 @@ class BwTree
   auto
   TryDeleteIndexEntry(  //
       const Delta_t *removed_node,
-      const std::optional<Key> &low_key,
+      const Key &del_key,
+      const size_t del_key_len,
       std::vector<PageID> stack)  //
       -> Delta_t *
   {
     // check a current node can be merged
-    if (stack.empty()) return nullptr;  // a root node cannot be merged
-    if (!low_key) return nullptr;       // the leftmost nodes cannot be merged
+    if (stack.empty()) return nullptr;     // a root node cannot be merged
+    if (del_key_len == 0) return nullptr;  // the leftmost nodes cannot be merged
 
     // insert the delta record into a parent node
     auto *delete_d = new (GetRecPage()) Delta_t{removed_node};
     const auto rec_len = delete_d->GetKeyLength() + kPtrLen + kMetaLen;
-    const auto &key = *low_key;
     const auto &sib_key = removed_node->GetHighKey();
     while (true) {
       // check the removed node is not leftmost in its parent node
-      auto [head, rc] = GetHeadForMerge(key, sib_key, stack);
+      auto [head, rc] = GetHeadForMerge(del_key, sib_key, stack);
       if (rc == DeltaRC::kAbortMerge) {
         // the leftmost nodes cannot be merged
         tls_delta_page_.reset(delete_d);
@@ -1847,8 +1696,8 @@ class BwTree
   NodeGC_t gc_{};
 
   /// a thread-local delta-record page to reuse
-  inline static thread_local std::unique_ptr<void, std::function<void(void *)>>            //
-      tls_delta_page_{nullptr, std::function<void(void *)>{component::DeleteAlignedPtr}};  // NOLINT
+  inline static thread_local std::unique_ptr<void, std::function<void(void *)>>  //
+      tls_delta_page_{nullptr, ::dbgroup::memory::Release<DeltaPage>};           // NOLINT
 };
 
 /*######################################################################################

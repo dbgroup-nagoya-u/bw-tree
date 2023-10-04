@@ -18,6 +18,7 @@
 #define BW_TREE_COMPONENT_DELTA_CHAIN_HPP
 
 // C++ standard libraries
+#include <array>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -48,23 +49,6 @@ class DeltaChain
   /*####################################################################################
    * Public utilities
    *##################################################################################*/
-
-  /**
-   * @brief Get a lowest key of this logical node.
-   *
-   * @param delta the head record in a delta-chain.
-   * @return a lowest key.
-   */
-  [[nodiscard]] static auto
-  TraverseToGetLowKey(const DeltaRecord *delta)  //
-      -> std::optional<Key>
-  {
-    // traverse to a base node
-    while (delta->GetDeltaType() != kNotDelta) {
-      delta = delta->GetNext();
-    }
-    return delta->GetLowKey();
-  }
 
   /**
    * @brief Traverse a delta-chain to search a child node with a given key.
@@ -355,22 +339,25 @@ class DeltaChain
    * @brief Sort delta records for consolidation.
    *
    * @param delta the head record in a delta-chain.
-   * @param records a vector for storing sorted records.
+   * @param arr a vector for storing sorted records.
    * @param nodes a vector for storing base nodes and corresponding separator keys.
+   * @return The number of delta records.
    */
-  static void
+  static auto
   Sort(  //
       const DeltaRecord *delta,
-      std::vector<Record> &records,
-      std::vector<const void *> &nodes)
+      std::array<Record, kMaxDeltaRecordNum> &arr,
+      std::vector<const void *> &nodes)  //
+      -> size_t
   {
     // traverse and sort a delta chain
+    size_t rec_num = 0;
     for (; true; delta = delta->GetNext()) {
       switch (delta->GetDeltaType()) {
         case kInsert:
         case kModify:
         case kDelete:
-          delta->AddByInsertionSortTo(records);
+          delta->AddByInsertionSortTo(arr, rec_num);
           break;
 
         case kMerge: {
@@ -382,7 +369,7 @@ class DeltaChain
         case kNotDelta:
         default:
           nodes.emplace_back(delta);
-          return;
+          return rec_num;
       }
     }
   }

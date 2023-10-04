@@ -80,6 +80,7 @@ class DeltaRecordFixture : public testing::Test
   // define type aliases for simplicity
   using Delta_t = typename Target::Delta;
   using Record = typename Delta_t::Record;
+  using KeyWOPtr = std::remove_pointer_t<Key>;
 
  protected:
   /*####################################################################################
@@ -159,25 +160,25 @@ class DeltaRecordFixture : public testing::Test
   {
     EXPECT_TRUE(delta->HasSameKey(key));
     EXPECT_TRUE(::dbgroup::index::test::IsEqual<KeyComp>(key, delta->GetKey()));
-
-    const auto &low_key = delta->GetLowKey();
-    EXPECT_TRUE(low_key);
-    EXPECT_TRUE(::dbgroup::index::test::IsEqual<KeyComp>(key, *low_key));
   }
 
   static auto
-  LessThan(  //
-      const Record &rec_a,
-      const Record &rec_b)  //
-      -> bool
+  CreateTempRecords()
   {
-    if constexpr (kUseVarLen) {
-      return KeyComp{}(rec_a.first, rec_b.first);
-    } else {
-      const auto *delta_a = reinterpret_cast<const Delta_t *>(rec_a);
-      const auto *delta_b = reinterpret_cast<const Delta_t *>(rec_b);
-      return KeyComp{}(delta_a->GetKey(), delta_b->GetKey());
+    thread_local std::array<Record, kMaxDeltaRecordNum> arr{};
+
+    if constexpr (IsVarLenData<Key>()) {
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //
+          page{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarDataSize * kMaxDeltaRecordNum),
+               ::dbgroup::memory::Release<KeyWOPtr>};
+
+      const auto *top_addr = page.get();
+      for (size_t i = 0; i < kMaxDeltaRecordNum; ++i) {
+        arr[i].key = reinterpret_cast<Key>(ShiftAddr(top_addr, i * kMaxVarDataSize));
+      }
     }
+
+    return arr;
   }
 
   /*####################################################################################
@@ -198,7 +199,6 @@ class DeltaRecordFixture : public testing::Test
     EXPECT_TRUE(::dbgroup::index::test::IsEqual<PayComp>(payload, act_pay));
 
     CheckLowKey(delta, key);
-    EXPECT_FALSE(delta->GetHighKey());
   }
 
   void
@@ -212,7 +212,6 @@ class DeltaRecordFixture : public testing::Test
     EXPECT_EQ(nullptr, delta->GetNext());
 
     CheckLowKey(delta, key);
-    EXPECT_FALSE(delta->GetHighKey());
   }
 
   void
@@ -231,7 +230,6 @@ class DeltaRecordFixture : public testing::Test
     EXPECT_EQ(dummy_pid, delta->template GetPayload<PageID>());
 
     CheckLowKey(delta, key);
-    EXPECT_FALSE(delta->GetHighKey());
   }
 
   void
@@ -247,30 +245,33 @@ class DeltaRecordFixture : public testing::Test
   void
   VerifyAddByInsertionSortTo()
   {
+    constexpr auto kHalfDeltaNum = kMaxDeltaRecordNum / 2;
+
     std::vector<size_t> ids{};
     std::vector<std::unique_ptr<Delta_t>> entities{};
-    std::vector<Record> records{};
     std::mt19937_64 rand{kRandomSeed};
+    auto &&records = CreateTempRecords();
 
-    for (size_t i = 0; i < kKeyNumForTest; ++i) {
+    for (size_t i = 0; i < kHalfDeltaNum; ++i) {
       ids.emplace_back(i);
     }
     std::shuffle(ids.begin(), ids.end(), rand);
 
+    size_t count = 0;
     for (const auto &id : ids) {
       auto &&delta = CreateLeafInsertModifyDelta(kDelete, keys_[id], payloads_[id]);
-      delta->AddByInsertionSortTo(records);
+      delta->AddByInsertionSortTo(records, count);
       entities.emplace_back(std::move(delta));
     }
     for (const auto &id : ids) {
       auto &&delta = CreateLeafInsertModifyDelta(kInsert, keys_[id], payloads_[id]);
-      delta->AddByInsertionSortTo(records);
+      delta->AddByInsertionSortTo(records, count);
       entities.emplace_back(std::move(delta));
     }
 
-    ASSERT_EQ(kKeyNumForTest, records.size());
-    for (size_t i = 0; i < kKeyNumForTest - 1; ++i) {
-      EXPECT_TRUE(LessThan(records.at(i), records.at(i + 1)));
+    ASSERT_EQ(kHalfDeltaNum, count);
+    for (size_t i = 0; i < kHalfDeltaNum - 1; ++i) {
+      EXPECT_TRUE(KeyComp{}(records.at(i).key, records.at(i + 1).key));
     }
   }
 

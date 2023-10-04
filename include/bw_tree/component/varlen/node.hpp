@@ -42,12 +42,25 @@ class Node
    * Type aliases
    *##################################################################################*/
 
-  using Record = std::pair<Key, const void *>;
+  using KeyWOPtr = std::remove_pointer_t<Key>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using ConsolidateInfo = std::pair<const void *, const void *>;
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
   using NodeEntry = std::tuple<Key, PageID, size_t>;
+
+  /*####################################################################################
+   * Public classes
+   *##################################################################################*/
+
+  /**
+   * @brief A class to sort delta records.
+   *
+   */
+  struct Record {
+    Key key;
+    const void *ptr;
+  };
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -179,6 +192,16 @@ class Node
   }
 
   /**
+   * @return The length of a lowest key.
+   */
+  [[nodiscard]] constexpr auto
+  GetLowKeyLen() const  //
+      -> size_t
+  {
+    return low_meta_.key_len;
+  }
+
+  /**
    * @brief Get the lowest key in this node.
    *
    * If this node is the leftmost node in its level, this returns std::nullopt.
@@ -187,10 +210,20 @@ class Node
    */
   [[nodiscard]] auto
   GetLowKey() const  //
-      -> std::optional<Key>
+      -> Key
   {
-    if (low_meta_.key_len == 0) return std::nullopt;
-    return GetKey(low_meta_);
+    Key key;
+    if constexpr (IsVarLenData<Key>()) {
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      key = tls_key.get();
+      memcpy(key, GetKeyAddr(low_meta_), low_meta_.key_len);
+    } else {
+      memcpy(&key, GetKeyAddr(low_meta_), sizeof(Key));
+    }
+    return key;
   }
 
   /**
@@ -206,17 +239,18 @@ class Node
   GetHighKey() const  //
       -> Key
   {
-    const auto key_len = high_meta_.key_len;
-
-    Key high_key{};
+    Key key;
     if constexpr (IsVarLenData<Key>()) {
-      high_key = reinterpret_cast<Key>(::operator new(key_len));
-      memcpy(high_key, GetKeyAddr(high_meta_), key_len);
-    } else {
-      memcpy(&high_key, GetKeyAddr(high_meta_), key_len);
-    }
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
 
-    return high_key;
+      key = tls_key.get();
+      memcpy(key, GetKeyAddr(high_meta_), high_meta_.key_len);
+    } else {
+      memcpy(&key, GetKeyAddr(high_meta_), sizeof(Key));
+    }
+    return key;
   }
 
   /**
@@ -407,36 +441,6 @@ class Node
    *##################################################################################*/
 
   /**
-   * @param rec a target delta record.
-   * @param key a comparison key.
-   * @retval true if delta record's key is less than a given one.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] static auto
-  LT(  //
-      const Record &rec,
-      const Key &key)  //
-      -> bool
-  {
-    return Comp{}(rec.first, key);
-  }
-
-  /**
-   * @param rec a target delta record.
-   * @param key a comparison key.
-   * @retval true if delta record's key is less than or equal to a given one.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] static auto
-  LE(  //
-      const Record &rec,
-      const Key &key)  //
-      -> bool
-  {
-    return !Comp{}(key, rec.first);
-  }
-
-  /**
    * @brief Copy a lowest key for consolidation or set an initial used page size for
    * splitting.
    *
@@ -538,7 +542,7 @@ class Node
    * @brief Copy a record from a delta record in the leaf level.
    *
    * @param node a target base node.
-   * @param rec_pair a pair of original delta record and its key.
+   * @param rec_ptr a pair of original delta record and its key.
    * @param offset an offset to the bottom of free space.
    * @param r_node a split-right node for switching.
    * @return an offset to the copied record.
@@ -547,12 +551,12 @@ class Node
   static auto
   CopyRecordFrom(  //
       Node *&node,
-      const Record &rec_pair,
+      const void *rec_ptr,
       size_t offset,
       Node *&r_node)  //
       -> size_t
   {
-    const auto *rec = reinterpret_cast<const Node *>(rec_pair.second);
+    const auto *rec = reinterpret_cast<const Node *>(rec_ptr);
     if (rec->delta_type_ != kDelete) {
       // the target record is insert/modify delta
       const auto meta = rec->low_meta_;
@@ -604,12 +608,13 @@ class Node
 
     constexpr auto kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarDataSize : sizeof(Key);
     const size_t is_leaf = (!is_inner) ? 0 : 1;
+    const auto &[leftmost_key, leftmost_key_len] = ParseKey(*iter);
 
     // extract and insert entries into this node
     auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
     auto node_size = kHeaderLen + kMaxKeyLen + is_leaf * kMaxKeyLen;
     for (; iter < iter_end; ++iter) {
-      const auto &[key, payload, key_len] = ParseEntry(*iter);
+      const auto &[key, payload, key_len, pay_len] = ParseEntry(*iter);
       const auto rec_len = key_len + sizeof(Payload);
       const auto total_len = rec_len + kMetaLen;
 
@@ -634,7 +639,7 @@ class Node
       prev_node->LinkNext(this_pid, this);
     }
 
-    nodes.emplace_back(*GetLowKey(), this_pid, low_meta_.key_len);
+    nodes.emplace_back(leftmost_key, this_pid, leftmost_key_len);
   }
 
   /**
@@ -754,13 +759,18 @@ class Node
   GetKey(const Metadata meta) const  //
       -> Key
   {
+    Key key;
     if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(meta));
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      key = tls_key.get();
+      memcpy(key, GetKeyAddr(meta), meta.key_len);
     } else {
-      Key key{};
       memcpy(&key, GetKeyAddr(meta), sizeof(Key));
-      return key;
     }
+    return key;
   }
 
   /**
@@ -838,31 +848,6 @@ class Node
   /*####################################################################################
    * Internal utilities
    *##################################################################################*/
-
-  /**
-   * @brief Parse an entry of bulkload according to key's type.
-   *
-   * @tparam Entry std::pair or std::tuple for containing entries.
-   * @param entry a bulkload entry.
-   * @retval 1st: a target key.
-   * @retval 2nd: a target payload.
-   * @retval 3rd: the length of a target key.
-   */
-  template <class Entry>
-  constexpr auto
-  ParseEntry(const Entry &entry)  //
-      -> std::tuple<Key, std::tuple_element_t<1, Entry>, size_t>
-  {
-    constexpr auto kTupleSize = std::tuple_size_v<Entry>;
-    static_assert(2 <= kTupleSize && kTupleSize <= 3);
-
-    if constexpr (kTupleSize == 3) {
-      return entry;
-    } else {
-      const auto &[key, payload] = entry;
-      return {key, payload, sizeof(Key)};
-    }
-  }
 
   /**
    * @brief Link this node and a right sibling node.

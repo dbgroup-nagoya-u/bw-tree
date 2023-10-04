@@ -46,8 +46,21 @@ class DeltaRecord
    *##################################################################################*/
 
   using Key = Key_t;
+  using KeyWOPtr = std::remove_pointer_t<Key>;
   using Comp = Comp_t;
-  using Record = std::pair<Key, const void *>;
+
+  /*####################################################################################
+   * Public classes
+   *##################################################################################*/
+
+  /**
+   * @brief A class to sort delta records.
+   *
+   */
+  struct Record {
+    Key key;
+    const void *ptr;
+  };
 
   /*####################################################################################
    * Public constructors for inserting/deleting records in leaf nodes
@@ -204,7 +217,7 @@ class DeltaRecord
    * @retval true if this record has the same key with a given one.
    * @retval false otherwise.
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]] auto
   HasSameKey(const Key &key) const  //
       -> bool
   {
@@ -218,7 +231,7 @@ class DeltaRecord
    * @retval true if the lowest key is less than or equal to a given key.
    * @retval false otherwise.
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]] auto
   LowKeyIsLE(  //
       const Key &key,
       const bool closed) const  //
@@ -234,7 +247,7 @@ class DeltaRecord
    * @retval true if the highest key is greater than a given key.
    * @retval false otherwise.
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]] auto
   HighKeyIsGE(  //
       const Key &key,
       const bool closed) const  //
@@ -329,33 +342,27 @@ class DeltaRecord
   }
 
   /**
-   * @return a lowest key in a target record if exist.
-   */
-  [[nodiscard]] constexpr auto
-  GetLowKey() const  //
-      -> std::optional<Key>
-  {
-    if (meta_.key_len > 0) return GetKey();
-    return std::nullopt;
-  }
-
-  /**
    * @return a highest key in a target record if exist.
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]] auto
   GetHighKey() const  //
       -> std::optional<Key>
   {
     const auto key_len = high_key_meta_.key_len;
     if (key_len == 0) return std::nullopt;
 
+    Key key;
     if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(high_key_meta_));
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      key = tls_key.get();
+      memcpy(key, GetKeyAddr(high_key_meta_), key_len);
     } else {
-      Key key{};
       memcpy(&key, GetKeyAddr(high_key_meta_), sizeof(Key));
-      return key;
     }
+    return key;
   }
 
   /**
@@ -406,13 +413,18 @@ class DeltaRecord
   GetKey() const  //
       -> Key
   {
+    Key key;
     if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(meta_));
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      key = tls_key.get();
+      memcpy(key, GetKeyAddr(meta_), meta_.key_len);
     } else {
-      Key key{};
       memcpy(&key, GetKeyAddr(meta_), sizeof(Key));
-      return key;
     }
+    return key;
   }
 
   /**
@@ -483,23 +495,39 @@ class DeltaRecord
   /**
    * @brief Insert this delta record to a given container.
    *
-   * @param records a set of records to be inserted this delta record.
+   * @param arr a set of records to be inserted this delta record.
+   * @param[in,out] count The number of delta records.
    */
   void
-  AddByInsertionSortTo(std::vector<Record> &records) const
+  AddByInsertionSortTo(  //
+      std::array<Record, kMaxDeltaRecordNum> &arr,
+      size_t &count) const
   {
-    // check uniqueness
-    const auto &rec_key = GetKey();
-    auto it = records.cbegin();
-    const auto it_end = records.cend();
-    for (; it != it_end &&Comp{}(it->first, rec_key); ++it) {
-      // skip smaller keys
+    // copy a current key
+    Record cur{Key{}, this};
+    if constexpr (IsVarLenData<Key>()) {
+      cur.key = arr[count].key;
+      memcpy(cur.key, GetKeyAddr(meta_), meta_.key_len);
+    } else {
+      cur.key = GetKey();
     }
-    if (it == it_end) {
-      records.emplace_back(std::move(rec_key), this);
-    } else if (Comp{}(rec_key, it->first)) {
-      records.insert(it, std::make_pair(std::move(rec_key), this));
+
+    // search an inserting position
+    size_t i = 0;
+    for (; i < count && Comp{}(arr[i].key, cur.key); ++i) {
+      // skip lower keys
     }
+
+    // shift upper records if needed
+    if (i >= count) {  // push back a new record
+      ++count;
+    } else if (Comp{}(cur.key, arr[i].key)) {  // insert a new record
+      memmove(&(arr[i + 1]), &(arr[i]), sizeof(Record) * (count - i));
+      ++count;
+    } else {  // there is the latest record
+      return;
+    }
+    arr[i] = std::move(cur);
   }
 
  private:

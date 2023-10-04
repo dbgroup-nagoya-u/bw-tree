@@ -42,12 +42,24 @@ class Node
    * Type aliases
    *##################################################################################*/
 
-  using Record = const void *;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using ConsolidateInfo = std::pair<const void *, const void *>;
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
   using NodeEntry = std::tuple<Key, PageID, size_t>;
+
+  /*####################################################################################
+   * Public classes
+   *##################################################################################*/
+
+  /**
+   * @brief A class to sort delta records.
+   *
+   */
+  struct Record {
+    Key key;
+    const void *ptr;
+  };
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -175,6 +187,16 @@ class Node
   }
 
   /**
+   * @return The length of a lowest key.
+   */
+  [[nodiscard]] constexpr auto
+  GetLowKeyLen() const  //
+      -> size_t
+  {
+    return sizeof(Key) * has_low_key_;
+  }
+
+  /**
    * @brief Get the lowest key in this node.
    *
    * If this node is the leftmost node in its level, this returns std::nullopt.
@@ -183,9 +205,8 @@ class Node
    */
   [[nodiscard]] auto
   GetLowKey() const  //
-      -> std::optional<Key>
+      -> Key
   {
-    if (!has_low_key_) return std::nullopt;
     return low_key_;
   }
 
@@ -392,38 +413,6 @@ class Node
    *##################################################################################*/
 
   /**
-   * @param rec a target delta record.
-   * @param key a comparison key.
-   * @retval true if delta record's key is less than a given one.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] static auto
-  LT(  //
-      const Record rec,
-      const Key &key)  //
-      -> bool
-  {
-    const auto *delta = reinterpret_cast<const Node *>(rec);
-    return Comp{}(delta->low_key_, key);
-  }
-
-  /**
-   * @param rec a target delta record.
-   * @param key a comparison key.
-   * @retval true if delta record's key is less than or equal to a given one.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] static auto
-  LE(  //
-      const Record rec,
-      const Key &key)  //
-      -> bool
-  {
-    const auto *delta = reinterpret_cast<const Node *>(rec);
-    return !Comp{}(key, delta->low_key_);
-  }
-
-  /**
    * @brief Copy a lowest key for consolidation or set an initial used page size for
    * splitting.
    *
@@ -525,7 +514,7 @@ class Node
   static auto
   CopyRecordFrom(  //
       Node *&node,
-      const Record &rec_ptr,
+      const void *rec_ptr,
       size_t offset,
       Node *&r_node)  //
       -> size_t
@@ -588,7 +577,7 @@ class Node
       node_size_ += kRecLen;
 
       // insert an entry into this node
-      const auto &[key, payload, key_len] = ParseEntry(*iter);
+      const auto &[key, payload, key_len, pay_len] = ParseEntry(*iter);
       offset = SetPayload(offset, payload);
       keys_[rec_count_++] = key;
     }
@@ -733,31 +722,6 @@ class Node
   /*####################################################################################
    * Internal utilities
    *##################################################################################*/
-
-  /**
-   * @brief Parse an entry of bulkload according to key's type.
-   *
-   * @tparam Entry std::pair or std::tuple for containing entries.
-   * @param entry a bulkload entry.
-   * @retval 1st: a target key.
-   * @retval 2nd: a target payload.
-   * @retval 3rd: the length of a target key.
-   */
-  template <class Entry>
-  constexpr auto
-  ParseEntry(const Entry &entry)  //
-      -> std::tuple<Key, std::tuple_element_t<1, Entry>, size_t>
-  {
-    constexpr auto kTupleSize = std::tuple_size_v<Entry>;
-    static_assert(2 <= kTupleSize && kTupleSize <= 3);
-
-    if constexpr (kTupleSize == 3) {
-      return entry;
-    } else {
-      const auto &[key, payload] = entry;
-      return {key, payload, sizeof(Key)};
-    }
-  }
 
   /**
    * @brief Link this node to a right sibling node.
