@@ -43,12 +43,24 @@ class Node
    *##################################################################################*/
 
   using KeyWOPtr = std::remove_pointer_t<Key>;
-  using Record = std::pair<Key, const void *>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using ConsolidateInfo = std::pair<const void *, const void *>;
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
   using NodeEntry = std::tuple<Key, PageID, size_t>;
+
+  /*####################################################################################
+   * Public classes
+   *##################################################################################*/
+
+  /**
+   * @brief A class to sort delta records.
+   *
+   */
+  struct Record {
+    Key key;
+    const void *ptr;
+  };
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -429,36 +441,6 @@ class Node
    *##################################################################################*/
 
   /**
-   * @param rec a target delta record.
-   * @param key a comparison key.
-   * @retval true if delta record's key is less than a given one.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] static auto
-  LT(  //
-      const Record &rec,
-      const Key &key)  //
-      -> bool
-  {
-    return Comp{}(rec.first, key);
-  }
-
-  /**
-   * @param rec a target delta record.
-   * @param key a comparison key.
-   * @retval true if delta record's key is less than or equal to a given one.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] static auto
-  LE(  //
-      const Record &rec,
-      const Key &key)  //
-      -> bool
-  {
-    return !Comp{}(key, rec.first);
-  }
-
-  /**
    * @brief Copy a lowest key for consolidation or set an initial used page size for
    * splitting.
    *
@@ -560,7 +542,7 @@ class Node
    * @brief Copy a record from a delta record in the leaf level.
    *
    * @param node a target base node.
-   * @param rec_pair a pair of original delta record and its key.
+   * @param rec_ptr a pair of original delta record and its key.
    * @param offset an offset to the bottom of free space.
    * @param r_node a split-right node for switching.
    * @return an offset to the copied record.
@@ -569,12 +551,12 @@ class Node
   static auto
   CopyRecordFrom(  //
       Node *&node,
-      const Record &rec_pair,
+      const void *rec_ptr,
       size_t offset,
       Node *&r_node)  //
       -> size_t
   {
-    const auto *rec = reinterpret_cast<const Node *>(rec_pair.second);
+    const auto *rec = reinterpret_cast<const Node *>(rec_ptr);
     if (rec->delta_type_ != kDelete) {
       // the target record is insert/modify delta
       const auto meta = rec->low_meta_;

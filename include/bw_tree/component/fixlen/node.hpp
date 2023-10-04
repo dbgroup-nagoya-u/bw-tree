@@ -42,12 +42,24 @@ class Node
    * Type aliases
    *##################################################################################*/
 
-  using Record = const void *;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using ConsolidateInfo = std::pair<const void *, const void *>;
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
   using NodeEntry = std::tuple<Key, PageID, size_t>;
+
+  /*####################################################################################
+   * Public classes
+   *##################################################################################*/
+
+  /**
+   * @brief A class to sort delta records.
+   *
+   */
+  struct Record {
+    Key key;
+    const void *ptr;
+  };
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -401,38 +413,6 @@ class Node
    *##################################################################################*/
 
   /**
-   * @param rec a target delta record.
-   * @param key a comparison key.
-   * @retval true if delta record's key is less than a given one.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] static auto
-  LT(  //
-      const Record rec,
-      const Key &key)  //
-      -> bool
-  {
-    const auto *delta = reinterpret_cast<const Node *>(rec);
-    return Comp{}(delta->low_key_, key);
-  }
-
-  /**
-   * @param rec a target delta record.
-   * @param key a comparison key.
-   * @retval true if delta record's key is less than or equal to a given one.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] static auto
-  LE(  //
-      const Record rec,
-      const Key &key)  //
-      -> bool
-  {
-    const auto *delta = reinterpret_cast<const Node *>(rec);
-    return !Comp{}(key, delta->low_key_);
-  }
-
-  /**
    * @brief Copy a lowest key for consolidation or set an initial used page size for
    * splitting.
    *
@@ -534,7 +514,7 @@ class Node
   static auto
   CopyRecordFrom(  //
       Node *&node,
-      const Record &rec_ptr,
+      const void *rec_ptr,
       size_t offset,
       Node *&r_node)  //
       -> size_t

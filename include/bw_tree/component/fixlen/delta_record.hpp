@@ -45,7 +45,19 @@ class DeltaRecord
 
   using Key = Key_t;
   using Comp = Comp_t;
-  using Record = const void *;
+
+  /*####################################################################################
+   * Public classes
+   *##################################################################################*/
+
+  /**
+   * @brief A class to sort delta records.
+   *
+   */
+  struct Record {
+    Key key;
+    const void *ptr;
+  };
 
   /*####################################################################################
    * Public constructors for inserting/deleting records in leaf nodes
@@ -450,28 +462,33 @@ class DeltaRecord
   /**
    * @brief Insert this delta record to a given container.
    *
-   * @tparam T a class of payloads.
-   * @param sep_key an optional separator key.
    * @param records a set of records to be inserted this delta record.
+   * @param[in,out] count The number of delta records.
    */
   void
-  AddByInsertionSortTo(std::vector<Record> &records) const
+  AddByInsertionSortTo(  //
+      std::array<Record, kMaxDeltaRecordNum> &records,
+      size_t &count) const
   {
-    // check uniqueness
-    auto it = records.cbegin();
-    const auto it_end = records.cend();
-    Key rec_key{};
-    while (it != it_end) {
-      // skip smaller keys
-      rec_key = reinterpret_cast<const DeltaRecord *>(*it)->key_;
-      if (!Comp{}(rec_key, key_)) break;
-      ++it;
+    // copy a current key
+    Record cur{key_, this};
+
+    // search an inserting position
+    size_t i = 0;
+    for (; i < count && Comp{}(records[i].key, cur.key); ++i) {
+      // skip lower keys
     }
-    if (it == it_end) {
-      records.emplace_back(this);
-    } else if (Comp{}(key_, rec_key)) {
-      records.insert(it, this);
+
+    // shift upper records if needed
+    if (i >= count) {  // push back a new record
+      ++count;
+    } else if (Comp{}(cur.key, records[i].key)) {  // insert a new record
+      memmove(&(records[i + 1]), &(records[i]), sizeof(Record) * (count - i));
+      ++count;
+    } else {  // there is the latest record
+      return;
     }
+    records[i] = std::move(cur);
   }
 
  private:

@@ -47,7 +47,19 @@ class DeltaRecord
 
   using Key = Key_t;
   using Comp = Comp_t;
-  using Record = std::pair<Key, const void *>;
+
+  /*####################################################################################
+   * Public classes
+   *##################################################################################*/
+
+  /**
+   * @brief A class to sort delta records.
+   *
+   */
+  struct Record {
+    Key key;
+    const void *ptr;
+  };
 
   /*####################################################################################
    * Public constructors for inserting/deleting records in leaf nodes
@@ -483,23 +495,39 @@ class DeltaRecord
   /**
    * @brief Insert this delta record to a given container.
    *
-   * @param records a set of records to be inserted this delta record.
+   * @param arr a set of records to be inserted this delta record.
+   * @param[in,out] count The number of delta records.
    */
   void
-  AddByInsertionSortTo(std::vector<Record> &records) const
+  AddByInsertionSortTo(  //
+      std::array<Record, kMaxDeltaRecordNum> &arr,
+      size_t &count) const
   {
-    // check uniqueness
-    const auto &rec_key = GetKey();
-    auto it = records.cbegin();
-    const auto it_end = records.cend();
-    for (; it != it_end &&Comp{}(it->first, rec_key); ++it) {
-      // skip smaller keys
+    // copy a current key
+    Record cur{Key{}, this};
+    if constexpr (IsVarLenData<Key>()) {
+      cur.key = arr[count].key;
+      memcpy(cur.key, GetKeyAddr(meta_), meta_.key_len);
+    } else {
+      cur.key = GetKey();
     }
-    if (it == it_end) {
-      records.emplace_back(std::move(rec_key), this);
-    } else if (Comp{}(rec_key, it->first)) {
-      records.insert(it, std::make_pair(std::move(rec_key), this));
+
+    // search an inserting position
+    size_t i = 0;
+    for (; i < count && Comp{}(arr[i].key, cur.key); ++i) {
+      // skip lower keys
     }
+
+    // shift upper records if needed
+    if (i >= count) {  // push back a new record
+      ++count;
+    } else if (Comp{}(cur.key, arr[i].key)) {  // insert a new record
+      memmove(&(arr[i + 1]), &(arr[i]), sizeof(Record) * (count - i));
+      ++count;
+    } else {  // there is the latest record
+      return;
+    }
+    arr[i] = std::move(cur);
   }
 
  private:

@@ -18,6 +18,7 @@
 #define BW_TREE_BW_TREE_HPP
 
 // C++ standard libraries
+#include <array>
 #include <functional>
 #include <future>
 #include <memory>
@@ -1144,6 +1145,29 @@ class BwTree
    *##################################################################################*/
 
   /**
+   * @brief Create a temporary array for sorting delta records.
+   *
+   */
+  static auto
+  CreateTempRecords()
+  {
+    thread_local std::array<Record, kMaxDeltaRecordNum> arr{};
+
+    if constexpr (IsVarLenData<Key>()) {
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //
+          page{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarDataSize * kMaxDeltaRecordNum),
+               ::dbgroup::memory::Release<KeyWOPtr>};
+
+      const auto *top_addr = page.get();
+      for (size_t i = 0; i < kMaxDeltaRecordNum; ++i) {
+        arr[i].key = reinterpret_cast<Key>(component::ShiftAddr(top_addr, i * kMaxVarDataSize));
+      }
+    }
+
+    return arr;
+  }
+
+  /**
    * @brief Try consolidation of a given node.
    *
    * This function will perform splitting/merging if needed.
@@ -1208,15 +1232,13 @@ class BwTree
       const bool is_scan = false)  //
       -> SMOsRC
   {
-    thread_local std::vector<Record> records{};
     thread_local std::vector<const void *> nodes{};
-    records.reserve(kMaxDeltaRecordNum);
     nodes.reserve(kDeltaRecordThreshold);
-    records.clear();
     nodes.clear();
+    auto &&records = CreateTempRecords();
 
     // sort delta records
-    DC::Sort(head, records, nodes);
+    const auto rec_num = DC::Sort(head, records, nodes);
 
     // check whether splitting is needed
     const auto node_size = head->GetNodeSize();
@@ -1229,9 +1251,9 @@ class BwTree
       r_node = new (GetNodePage()) Node_t{is_inner};
     }
     if (is_inner) {
-      Consolidate<PageID>(new_node, r_node, nodes, records, is_scan);
+      Consolidate<PageID>(new_node, r_node, nodes, records, rec_num, is_scan);
     } else {
-      Consolidate<Payload>(new_node, r_node, nodes, records, is_scan);
+      Consolidate<Payload>(new_node, r_node, nodes, records, rec_num, is_scan);
     }
 
     if (do_split) return kTrySplit;
@@ -1246,7 +1268,8 @@ class BwTree
    * @param new_node a node page to store consolidated records.
    * @param r_node a node page to store split-right records.
    * @param nodes the set of leaf nodes to be consolidated.
-   * @param records insert/modify/delete-delta records.
+   * @param arr insert/modify/delete-delta records.
+   * @param rec_num The number of delta records.
    * @param is_scan a flag to prevent a split-operation.
    */
   template <class T>
@@ -1255,11 +1278,11 @@ class BwTree
       Node_t *new_node,
       Node_t *r_node,
       const std::vector<const void *> &nodes,
-      const std::vector<Record> &records,
+      const std::array<Record, kMaxDeltaRecordNum> &arr,
+      const size_t new_rec_num,
       const bool is_scan)
   {
     constexpr auto kIsSplitLeft = true;
-    const auto new_rec_num = records.size();
     auto *l_node = (r_node != nullptr) ? new_node : nullptr;
 
     // perform merge-sort to consolidate a node
@@ -1277,13 +1300,13 @@ class BwTree
       for (; i < node_rec_num; ++i) {
         // copy new records
         const auto &node_key = node->GetKey(i);
-        for (; j < new_rec_num && Node_t::LT(records[j], node_key); ++j) {
-          offset = Node_t::template CopyRecordFrom<T>(new_node, records[j], offset, r_node);
+        for (; j < new_rec_num && Comp{}(arr[j].key, node_key); ++j) {
+          offset = Node_t::template CopyRecordFrom<T>(new_node, arr[j].ptr, offset, r_node);
         }
 
         // check a new record is updated one
-        if (j < new_rec_num && Node_t::LE(records[j], node_key)) {
-          offset = Node_t::template CopyRecordFrom<T>(new_node, records[j++], offset, r_node);
+        if (j < new_rec_num && !Comp{}(node_key, arr[j].key)) {
+          offset = Node_t::template CopyRecordFrom<T>(new_node, arr[j++].ptr, offset, r_node);
         } else {
           offset = Node_t::template CopyRecordFrom<T>(new_node, node, i, offset, r_node);
         }
@@ -1292,7 +1315,7 @@ class BwTree
 
     // copy remaining new records
     for (; j < new_rec_num; ++j) {
-      offset = Node_t::template CopyRecordFrom<T>(new_node, records[j], offset, r_node);
+      offset = Node_t::template CopyRecordFrom<T>(new_node, arr[j].ptr, offset, r_node);
     }
 
     // copy the lowest/highest keys
