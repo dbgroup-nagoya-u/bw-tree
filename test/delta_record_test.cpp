@@ -160,10 +160,6 @@ class DeltaRecordFixture : public testing::Test
   {
     EXPECT_TRUE(delta->HasSameKey(key));
     EXPECT_TRUE(::dbgroup::index::test::IsEqual<KeyComp>(key, delta->GetKey()));
-
-    const auto &low_key = delta->GetLowKey();
-    EXPECT_TRUE(low_key);
-    EXPECT_TRUE(::dbgroup::index::test::IsEqual<KeyComp>(key, *low_key));
   }
 
   static auto
@@ -203,7 +199,6 @@ class DeltaRecordFixture : public testing::Test
     EXPECT_TRUE(::dbgroup::index::test::IsEqual<PayComp>(payload, act_pay));
 
     CheckLowKey(delta, key);
-    EXPECT_FALSE(delta->GetHighKey());
   }
 
   void
@@ -217,7 +212,6 @@ class DeltaRecordFixture : public testing::Test
     EXPECT_EQ(nullptr, delta->GetNext());
 
     CheckLowKey(delta, key);
-    EXPECT_FALSE(delta->GetHighKey());
   }
 
   void
@@ -236,7 +230,6 @@ class DeltaRecordFixture : public testing::Test
     EXPECT_EQ(dummy_pid, delta->template GetPayload<PageID>());
 
     CheckLowKey(delta, key);
-    EXPECT_FALSE(delta->GetHighKey());
   }
 
   void

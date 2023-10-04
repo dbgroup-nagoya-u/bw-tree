@@ -46,6 +46,7 @@ class DeltaRecord
    *##################################################################################*/
 
   using Key = Key_t;
+  using KeyWOPtr = std::remove_pointer_t<Key>;
   using Comp = Comp_t;
 
   /*####################################################################################
@@ -216,7 +217,7 @@ class DeltaRecord
    * @retval true if this record has the same key with a given one.
    * @retval false otherwise.
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]] auto
   HasSameKey(const Key &key) const  //
       -> bool
   {
@@ -230,7 +231,7 @@ class DeltaRecord
    * @retval true if the lowest key is less than or equal to a given key.
    * @retval false otherwise.
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]] auto
   LowKeyIsLE(  //
       const Key &key,
       const bool closed) const  //
@@ -246,7 +247,7 @@ class DeltaRecord
    * @retval true if the highest key is greater than a given key.
    * @retval false otherwise.
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]] auto
   HighKeyIsGE(  //
       const Key &key,
       const bool closed) const  //
@@ -341,33 +342,27 @@ class DeltaRecord
   }
 
   /**
-   * @return a lowest key in a target record if exist.
-   */
-  [[nodiscard]] constexpr auto
-  GetLowKey() const  //
-      -> std::optional<Key>
-  {
-    if (meta_.key_len > 0) return GetKey();
-    return std::nullopt;
-  }
-
-  /**
    * @return a highest key in a target record if exist.
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]] auto
   GetHighKey() const  //
       -> std::optional<Key>
   {
     const auto key_len = high_key_meta_.key_len;
     if (key_len == 0) return std::nullopt;
 
+    Key key;
     if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(high_key_meta_));
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      key = tls_key.get();
+      memcpy(key, GetKeyAddr(high_key_meta_), key_len);
     } else {
-      Key key{};
       memcpy(&key, GetKeyAddr(high_key_meta_), sizeof(Key));
-      return key;
     }
+    return key;
   }
 
   /**
@@ -418,13 +413,18 @@ class DeltaRecord
   GetKey() const  //
       -> Key
   {
+    Key key;
     if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(meta_));
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(void *)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      key = tls_key.get();
+      memcpy(key, GetKeyAddr(meta_), meta_.key_len);
     } else {
-      Key key{};
       memcpy(&key, GetKeyAddr(meta_), sizeof(Key));
-      return key;
     }
+    return key;
   }
 
   /**

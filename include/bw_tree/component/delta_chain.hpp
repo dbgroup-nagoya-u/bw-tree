@@ -51,23 +51,6 @@ class DeltaChain
    *##################################################################################*/
 
   /**
-   * @brief Get a lowest key of this logical node.
-   *
-   * @param delta the head record in a delta-chain.
-   * @return a lowest key.
-   */
-  [[nodiscard]] static auto
-  TraverseToGetLowKey(const DeltaRecord *delta)  //
-      -> std::optional<Key>
-  {
-    // traverse to a base node
-    while (delta->GetDeltaType() != kNotDelta) {
-      delta = delta->GetNext();
-    }
-    return delta->GetLowKey();
-  }
-
-  /**
    * @brief Traverse a delta-chain to search a child node with a given key.
    *
    * @param delta the head record in a delta-chain.

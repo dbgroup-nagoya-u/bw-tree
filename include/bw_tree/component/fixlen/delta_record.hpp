@@ -322,17 +322,6 @@ class DeltaRecord
   }
 
   /**
-   * @return a lowest key in a target record if exist.
-   */
-  [[nodiscard]] constexpr auto
-  GetLowKey() const  //
-      -> std::optional<Key>
-  {
-    if (!has_low_key_) return std::nullopt;
-    return key_;
-  }
-
-  /**
    * @return a highest key in a target record if exist.
    */
   [[nodiscard]] constexpr auto
